@@ -7,6 +7,7 @@ var CLI struct {
 		DataBranch string   `name:"data-branch" default:"_defrost" help:"Branch name where results are stored."`
 		NoPersist  bool     `name:"no-persist" help:"Run tests without persisting results."`
 		NoRemote   bool     `name:"no-remote" help:"Persist locally only — store the data branch in the local repo and do not push."`
+		Dev        bool     `name:"dev" short:"d" help:"Dev mode: write results to <repo-dir>/.defrost-dev (gitignored scratch dir) instead of committing/pushing. For developing defrost itself."`
 	} `cmd:"" help:"Execute test command and persist results."`
 
 	History struct {

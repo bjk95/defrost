@@ -101,6 +101,46 @@ type Options struct {
 	// in the user's repo and is never pushed anywhere. Useful for purely
 	// local flaky-test tracking.
 	NoRemote bool
+
+	// Dev, when true, selects the dev-mode backend: writes the run
+	// record and entry files to <RepoDir>/.defrost-dev/ (a scratch
+	// directory the user gitignores) and skips all git operations.
+	// Intended for developing defrost itself without polluting the
+	// data branch.
+	Dev bool
+}
+
+// DevDir is the subdirectory of RepoDir used when Dev is set.
+const DevDir = ".defrost-dev"
+
+// Backend is the swappable persistence layer. Implementations decide
+// where run records and test entries live (git data branch, scratch dir,
+// SQL database, etc.). All implementations are responsible for atomicity
+// within a single InsertNewTestResults call: either every result lands
+// or none does.
+type Backend interface {
+	// InitialisePersistence prepares storage for first use. Idempotent.
+	// Implementations may be lazy — InsertNewTestResults and
+	// GetTestHistory must work without an explicit prior call.
+	InitialisePersistence() error
+
+	// InsertNewTestResults atomically writes a RunRecord plus one entry
+	// per result. Empty results are a no-op.
+	InsertNewTestResults(run RunRecord, results []models.TestResult) error
+
+	// GetTestHistory returns every persisted entry for the named test,
+	// joined with its RunRecord, oldest first. Returns an empty slice
+	// when the test has no history yet.
+	GetTestHistory(testName string) ([]HistoricalEntry, error)
+}
+
+// New returns the Backend implied by opts. Dev mode selects the local
+// scratch backend; otherwise the git-data-branch backend is used.
+func New(opts Options) Backend {
+	if opts.Dev {
+		return &fileBackend{dir: filepath.Join(opts.RepoDir, DevDir)}
+	}
+	return &gitBackend{opts: opts}
 }
 
 // ErrNoOrigin is returned when the user's repo has no origin remote
@@ -191,16 +231,25 @@ func DetectRun(opts Options, cmd []string) (RunRecord, error) {
 	return run, nil
 }
 
-// Persist writes one RunRecord to runs/<run_id>.json plus one Entry per
-// result to tests/<id>.ndjson, commits, and pushes to origin (or, with
-// NoRemote, into the user's local .git directory).
+// gitBackend stores runs/entries on a dedicated git data branch. Default
+// remote is the user's `origin`; with NoRemote the branch lives only in
+// the user's local .git directory.
 //
-// Concurrent writers are reconciled by retrying push up to maxPushAttempts
-// times. On a non-fast-forward rejection Persist fetches the current tip
-// and rebases — git's three-way merge runs the `merge=union` driver from
-// .gitattributes. RunRecord files have unique filenames per run_id and
-// never conflict.
-func Persist(opts Options, run RunRecord, results []models.TestResult) error {
+// Concurrent writers are reconciled by retrying push up to
+// maxPushAttempts times. On a non-fast-forward rejection the backend
+// fetches the current tip and rebases — git's three-way merge runs the
+// `merge=union` driver from .gitattributes. RunRecord files have unique
+// filenames per run_id and never conflict.
+type gitBackend struct {
+	opts Options
+}
+
+// InitialisePersistence is a no-op: the git backend's storage is the
+// data branch itself, which is created lazily on first write inside
+// InsertNewTestResults (the workdir is per-call and ephemeral).
+func (b *gitBackend) InitialisePersistence() error { return nil }
+
+func (b *gitBackend) InsertNewTestResults(run RunRecord, results []models.TestResult) error {
 	if len(results) == 0 {
 		return nil
 	}
@@ -208,12 +257,12 @@ func Persist(opts Options, run RunRecord, results []models.TestResult) error {
 		return errors.New("persist: empty RunID")
 	}
 
-	branch := opts.DataBranch
+	branch := b.opts.DataBranch
 	if branch == "" {
 		branch = DefaultDataBranch
 	}
 
-	remoteURL, err := resolveTargetURL(opts)
+	remoteURL, err := resolveTargetURL(b.opts)
 	if err != nil {
 		return err
 	}
@@ -249,16 +298,13 @@ func Persist(opts Options, run RunRecord, results []models.TestResult) error {
 	return pushWithRetry(workDir, branch, branchExisted)
 }
 
-// History returns every persisted entry for the named test, joined with
-// its RunRecord, oldest first by entry timestamp. Returns an empty slice
-// if the test has no recorded history yet.
-func History(opts Options, testName string) ([]HistoricalEntry, error) {
-	branch := opts.DataBranch
+func (b *gitBackend) GetTestHistory(testName string) ([]HistoricalEntry, error) {
+	branch := b.opts.DataBranch
 	if branch == "" {
 		branch = DefaultDataBranch
 	}
 
-	remoteURL, err := resolveTargetURL(opts)
+	remoteURL, err := resolveTargetURL(b.opts)
 	if err != nil {
 		return nil, err
 	}
@@ -283,7 +329,56 @@ func History(opts Options, testName string) ([]HistoricalEntry, error) {
 		return nil, fmt.Errorf("clone data branch: %w", err)
 	}
 
-	path := filepath.Join(workDir, "tests", EncodeTestID(testName)+".ndjson")
+	return readHistoryFromDir(workDir, testName)
+}
+
+// fileBackend writes runs and entries to a plain directory on disk and
+// performs no git operations. The directory is reused across runs so the
+// developer can inspect accumulated output; it is the user's
+// responsibility to gitignore it.
+type fileBackend struct {
+	dir string
+}
+
+func (b *fileBackend) InitialisePersistence() error {
+	if err := os.MkdirAll(b.dir, 0o755); err != nil {
+		return fmt.Errorf("mkdir %s: %w", b.dir, err)
+	}
+	return nil
+}
+
+func (b *fileBackend) InsertNewTestResults(run RunRecord, results []models.TestResult) error {
+	if len(results) == 0 {
+		return nil
+	}
+	if run.RunID == "" {
+		return errors.New("persist: empty RunID")
+	}
+	if err := b.InitialisePersistence(); err != nil {
+		return err
+	}
+	if err := writeRunRecord(b.dir, run); err != nil {
+		return err
+	}
+	return appendEntries(b.dir, run, results)
+}
+
+func (b *fileBackend) GetTestHistory(testName string) ([]HistoricalEntry, error) {
+	if _, err := os.Stat(b.dir); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return readHistoryFromDir(b.dir, testName)
+}
+
+// readHistoryFromDir reads tests/<id>.ndjson from a directory laid out
+// like the data branch and joins each entry with its RunRecord from
+// runs/<run_id>.json. Shared by gitBackend (after cloning) and
+// fileBackend.
+func readHistoryFromDir(dir, testName string) ([]HistoricalEntry, error) {
+	path := filepath.Join(dir, "tests", EncodeTestID(testName)+".ndjson")
 	f, err := os.Open(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -304,7 +399,7 @@ func History(opts Options, testName string) ([]HistoricalEntry, error) {
 	for _, e := range entries {
 		rec, ok := runCache[e.RunID]
 		if !ok {
-			rec, _ = readRunRecord(workDir, e.RunID)
+			rec, _ = readRunRecord(dir, e.RunID)
 			runCache[e.RunID] = rec
 		}
 		out = append(out, HistoricalEntry{Test: e, Run: rec})
@@ -396,7 +491,10 @@ func localGitDir(repoDir string) (string, error) {
 	if !filepath.IsAbs(out) {
 		out = filepath.Join(repoDir, out)
 	}
-	return filepath.Clean(out), nil
+	// Must be absolute: this path is used as the origin URL for an
+	// ephemeral workdir elsewhere on disk, so a relative path would
+	// resolve against the wrong cwd and the push would silently no-op.
+	return filepath.Abs(out)
 }
 
 // branchExistsOnRemote returns true iff refs/heads/<branch> is published
