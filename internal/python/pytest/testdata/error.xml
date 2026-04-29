@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<testsuites>
+  <testsuite name="pytest" errors="1" failures="0" skipped="0" tests="1" time="0.003" timestamp="2026-04-29T00:00:00.000000" hostname="x">
+    <testcase classname="tests.test_a" name="test_error" time="0.003">
+      <error message="setup failure" type="ValueError">boom</error>
+    </testcase>
+  </testsuite>
+</testsuites>

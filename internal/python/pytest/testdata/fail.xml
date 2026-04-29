@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<testsuites>
+  <testsuite name="pytest" errors="0" failures="1" skipped="0" tests="1" time="0.002" timestamp="2026-04-29T00:00:00.000000" hostname="x">
+    <testcase classname="tests.test_a" name="test_fail" time="0.002">
+      <failure message="assert 1 == 2" type="AssertionError">Traceback line</failure>
+    </testcase>
+  </testsuite>
+</testsuites>
