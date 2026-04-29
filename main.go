@@ -2,20 +2,28 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/alecthomas/kong"
 )
 
 func main() {
-	fmt.Println("Running tests with defrost")
-	ctx := kong.Parse(&CLI)
-	cmd := ctx.Command()
+	parsed := kong.Parse(&CLI)
+	cmd := parsed.Command()
 
 	switch {
-	case strings.HasPrefix(cmd, "exec "):
-		HandleExecution(CLI.Exec.Cmd)
+	case strings.HasPrefix(cmd, "exec"):
+		os.Exit(HandleExecution(CLI.Exec.Cmd, ExecOpts{
+			RepoDir:    CLI.Exec.RepoDir,
+			DataBranch: CLI.Exec.DataBranch,
+			Persist:    !CLI.Exec.NoPersist,
+			NoRemote:   CLI.Exec.NoRemote,
+		}))
+	case strings.HasPrefix(cmd, "history"):
+		os.Exit(HandleHistory(CLI.History.Test, CLI.History.RepoDir, CLI.History.DataBranch, CLI.History.NoRemote))
 	default:
-		panic(cmd)
+		fmt.Fprintln(os.Stderr, "unknown command:", cmd)
+		os.Exit(2)
 	}
 }

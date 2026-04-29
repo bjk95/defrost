@@ -1,11 +1,15 @@
 package runner
 
+import "github.com/bjk95/defrost/internal/models"
+
 // Adapter wraps a single language/test-framework integration. Implementations
 // inspect a defrost-exec argv and decide whether they handle it (Matches),
-// then run the underlying child command and return its exit code (Run).
+// then run the underlying child command and return the parsed test results
+// plus the child's exit code (Run). The caller is responsible for how to
+// present or persist the results.
 type Adapter interface {
 	Matches(cmd []string) bool
-	Run(cmd []string) int
+	Run(cmd []string) ([]models.TestResult, int)
 }
 
 // Registry holds an ordered list of adapters. The first adapter whose Matches

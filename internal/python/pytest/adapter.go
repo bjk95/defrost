@@ -6,6 +6,8 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
+
+	"github.com/bjk95/defrost/internal/models"
 )
 
 // Adapter implements runner.Adapter for pytest invocations in any of three
@@ -37,16 +39,16 @@ func (Adapter) Matches(cmd []string) bool {
 	return false
 }
 
-func (Adapter) Run(cmd []string) int {
+func (Adapter) Run(cmd []string) ([]models.TestResult, int) {
 	if hasUserJunitxml(cmd) {
 		fmt.Fprintln(os.Stderr, "defrost: pytest adapter requires control of --junitxml; remove your --junitxml flag")
-		return 2
+		return nil, 2
 	}
 
 	f, err := os.CreateTemp("", "defrost-pytest-*.xml")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "defrost:", err)
-		return 1
+		return nil, 1
 	}
 	path := f.Name()
 	f.Close()
@@ -72,20 +74,16 @@ func (Adapter) Run(cmd []string) int {
 		exitCode = e.ExitCode()
 	default:
 		fmt.Fprintln(os.Stderr, "defrost:", runErr)
-		return 1
+		return nil, 1
 	}
 
 	results, parseErr := ParseFile(path)
 	if parseErr != nil {
 		fmt.Fprintln(os.Stderr, "defrost:", parseErr)
-		return 1
+		return nil, 1
 	}
 
-	for _, r := range results {
-		fmt.Printf("%+v\n", r)
-	}
-
-	return exitCode
+	return results, exitCode
 }
 
 func hasUserJunitxml(cmd []string) bool {

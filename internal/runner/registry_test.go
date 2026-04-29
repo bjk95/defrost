@@ -1,6 +1,10 @@
 package runner
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/bjk95/defrost/internal/models"
+)
 
 type fakeAdapter struct {
 	name    string
@@ -12,7 +16,7 @@ func (a fakeAdapter) Matches(cmd []string) bool {
 	return len(cmd) > 0 && cmd[0] == a.matchOn
 }
 
-func (a fakeAdapter) Run(cmd []string) int { return a.exit }
+func (a fakeAdapter) Run(cmd []string) ([]models.TestResult, int) { return nil, a.exit }
 
 func TestFindReturnsNilWhenEmpty(t *testing.T) {
 	r := NewRegistry()
@@ -40,8 +44,8 @@ func TestFindReturnsFirstMatch(t *testing.T) {
 	if got == nil {
 		t.Fatal("expected match, got nil")
 	}
-	if got.Run(nil) != 1 {
-		t.Fatalf("expected first adapter (exit=1), got exit=%d", got.Run(nil))
+	if _, code := got.Run(nil); code != 1 {
+		t.Fatalf("expected first adapter (exit=1), got exit=%d", code)
 	}
 }
 
