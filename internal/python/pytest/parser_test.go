@@ -101,6 +101,9 @@ func TestParse(t *testing.T) {
 				if strings.TrimSpace(got[i].Output) != strings.TrimSpace(tc.want[i].Output) {
 					t.Errorf("[%d] Output: got %q, want %q", i, got[i].Output, tc.want[i].Output)
 				}
+				if !got[i].StartTime.IsZero() {
+					t.Errorf("[%d] StartTime: got %v, want zero", i, got[i].StartTime)
+				}
 			}
 		})
 	}

@@ -71,10 +71,14 @@ func mapCase(c junitCase) models.TestResult {
 
 	var parts []string
 	if c.Failure != nil {
-		parts = append(parts, formatMessage(*c.Failure))
+		if s := formatMessage(*c.Failure); s != "" {
+			parts = append(parts, s)
+		}
 	}
 	if c.Error != nil {
-		parts = append(parts, formatMessage(*c.Error))
+		if s := formatMessage(*c.Error); s != "" {
+			parts = append(parts, s)
+		}
 	}
 	if c.SystemOut != "" {
 		parts = append(parts, c.SystemOut)
