@@ -316,8 +316,8 @@ Expected: success.
 
 - [ ] **Step 3: Smoke-test that the Go path still works**
 
-Run: `go run . exec go test ./internal/runner/...`
-Expected: registry tests run, output includes a `{Id:... Ran:true Passed:true ...}` line per test, exit code 0.
+Run: `go run . exec go test ./internal/runner/... -json`
+Expected: registry tests run, output includes a `{Id:... Ran:true Passed:true ...}` line per test, exit code 0. (`-json` is required because the existing Go parser consumes `go test`'s JSON event stream.)
 
 - [ ] **Step 4: Commit**
 
@@ -992,10 +992,10 @@ Expected: stderr says `defrost: pytest adapter requires control of --junitxml; r
 - [ ] **Step 6: Confirm Go path still works**
 
 ```bash
-go run . exec go test ./...
+go run . exec go test ./... -json
 ```
 
-Expected: defrost still parses and prints Go test results as before.
+Expected: defrost still parses and prints Go test results as before. (`-json` is required for the Go parser to consume the JSON event stream.)
 
 - [ ] **Step 7: Clean up smoke artefacts**
 
