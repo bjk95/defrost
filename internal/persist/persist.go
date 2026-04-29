@@ -102,15 +102,16 @@ type Options struct {
 	// local flaky-test tracking.
 	NoRemote bool
 
-	// NoHistory, when true, writes the run record and entry files to
-	// <RepoDir>/.defrost-dev/ (a scratch directory the user gitignores)
-	// and skips all git operations. Intended for developing defrost
-	// itself without polluting the data branch.
-	NoHistory bool
+	// Dev, when true, selects the dev-mode backend: writes the run
+	// record and entry files to <RepoDir>/.defrost-dev/ (a scratch
+	// directory the user gitignores) and skips all git operations.
+	// Intended for developing defrost itself without polluting the
+	// data branch.
+	Dev bool
 }
 
-// NoHistoryDir is the subdirectory of RepoDir used when NoHistory is set.
-const NoHistoryDir = ".defrost-dev"
+// DevDir is the subdirectory of RepoDir used when Dev is set.
+const DevDir = ".defrost-dev"
 
 // Backend is the swappable persistence layer. Implementations decide
 // where run records and test entries live (git data branch, scratch dir,
@@ -133,11 +134,11 @@ type Backend interface {
 	GetTestHistory(testName string) ([]HistoricalEntry, error)
 }
 
-// New returns the Backend implied by opts. NoHistory selects the local
+// New returns the Backend implied by opts. Dev mode selects the local
 // scratch backend; otherwise the git-data-branch backend is used.
 func New(opts Options) Backend {
-	if opts.NoHistory {
-		return &fileBackend{dir: filepath.Join(opts.RepoDir, NoHistoryDir)}
+	if opts.Dev {
+		return &fileBackend{dir: filepath.Join(opts.RepoDir, DevDir)}
 	}
 	return &gitBackend{opts: opts}
 }

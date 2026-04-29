@@ -15,7 +15,7 @@ type ExecOpts struct {
 	DataBranch string
 	Persist    bool
 	NoRemote   bool
-	NoHistory  bool
+	Dev        bool
 }
 
 func HandleExecution(cmd []string, opts ExecOpts) int {
@@ -61,7 +61,7 @@ func persistResults(opts ExecOpts, cmd []string, results []models.TestResult) er
 		DataBranch: opts.DataBranch,
 		AuthToken:  os.Getenv("GITHUB_TOKEN"),
 		NoRemote:   opts.NoRemote,
-		NoHistory:  opts.NoHistory,
+		Dev:        opts.Dev,
 	}
 	run, err := persist.DetectRun(pOpts, cmd)
 	if err != nil {

@@ -421,7 +421,7 @@ func TestPersist_LocalOnlyNoRemote_RelativeRepoDir(t *testing.T) {
 	}
 }
 
-func TestPersist_NoHistoryWritesScratchDirAndSkipsGit(t *testing.T) {
+func TestPersist_DevModeWritesScratchDirAndSkipsGit(t *testing.T) {
 	requireGit(t)
 	dir := t.TempDir()
 	gitMust(t, "", "init", "-b", "main", dir)
@@ -433,12 +433,12 @@ func TestPersist_NoHistoryWritesScratchDirAndSkipsGit(t *testing.T) {
 		Duration:  1 * time.Millisecond,
 		StartTime: time.Date(2026, 4, 30, 0, 0, 0, 0, time.UTC),
 	}}
-	run := newTestRun("nohist-run", "abc123", "main")
-	if err := New(Options{RepoDir: dir, NoHistory: true}).InsertNewTestResults(run, results); err != nil {
-		t.Fatalf("Persist (no-history): %v", err)
+	run := newTestRun("dev-run", "abc123", "main")
+	if err := New(Options{RepoDir: dir, Dev: true}).InsertNewTestResults(run, results); err != nil {
+		t.Fatalf("Persist (dev): %v", err)
 	}
 
-	scratch := filepath.Join(dir, NoHistoryDir)
+	scratch := filepath.Join(dir, DevDir)
 	runPath := filepath.Join(scratch, "runs", run.RunID+".json")
 	if _, err := os.Stat(runPath); err != nil {
 		t.Errorf("run record not written to scratch dir: %v", err)
