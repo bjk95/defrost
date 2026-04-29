@@ -15,6 +15,7 @@ type ExecOpts struct {
 	DataBranch string
 	Persist    bool
 	NoRemote   bool
+	NoHistory  bool
 }
 
 func HandleExecution(cmd []string, opts ExecOpts) int {
@@ -60,12 +61,13 @@ func persistResults(opts ExecOpts, cmd []string, results []models.TestResult) er
 		DataBranch: opts.DataBranch,
 		AuthToken:  os.Getenv("GITHUB_TOKEN"),
 		NoRemote:   opts.NoRemote,
+		NoHistory:  opts.NoHistory,
 	}
 	run, err := persist.DetectRun(pOpts, cmd)
 	if err != nil {
 		return fmt.Errorf("detect run: %w", err)
 	}
-	if err := persist.Persist(pOpts, run, results); err != nil {
+	if err := persist.New(pOpts).InsertNewTestResults(run, results); err != nil {
 		if errors.Is(err, persist.ErrNoOrigin) {
 			return errors.New("no 'origin' remote configured. Either add one (`git remote add origin ...`) or pass --no-remote to persist locally only")
 		}

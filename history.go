@@ -10,12 +10,12 @@ import (
 )
 
 func HandleHistory(testName, repoDir, dataBranch string, noRemote bool) int {
-	entries, err := persist.History(persist.Options{
+	entries, err := persist.New(persist.Options{
 		RepoDir:    repoDir,
 		DataBranch: dataBranch,
 		AuthToken:  os.Getenv("GITHUB_TOKEN"),
 		NoRemote:   noRemote,
-	}, testName)
+	}).GetTestHistory(testName)
 	if err != nil {
 		if errors.Is(err, persist.ErrNoOrigin) {
 			fmt.Fprintln(os.Stderr, "history: no 'origin' remote configured. Either add one (`git remote add origin ...`) or pass --no-remote to read from the local repo.")
