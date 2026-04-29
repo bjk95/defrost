@@ -19,14 +19,10 @@ type jestDoc struct {
 }
 
 type jestFileResult struct {
-	TestFilePath     string          `json:"testFilePath"`
-	TestExecError    *jestExecError  `json:"testExecError"`
-	AssertionResults []jestAssertion `json:"testResults"`
-}
-
-type jestExecError struct {
-	Message string `json:"message"`
-	Stack   string `json:"stack"`
+	Name             string          `json:"name"`
+	Status           string          `json:"status"`
+	Message          string          `json:"message"`
+	AssertionResults []jestAssertion `json:"assertionResults"`
 }
 
 type jestAssertion struct {
@@ -35,7 +31,6 @@ type jestAssertion struct {
 	AncestorTitles  []string `json:"ancestorTitles"`
 	FailureMessages []string `json:"failureMessages"`
 	Duration        *float64 `json:"duration"`
-	StartAt         *int64   `json:"startAt"`
 }
 
 // Parse reads a jest --json --outputFile document from r and returns one
@@ -48,10 +43,10 @@ func Parse(r io.Reader, cwd string) ([]models.TestResult, error) {
 	}
 	var out []models.TestResult
 	for _, f := range doc.TestResults {
-		rel := relPath(f.TestFilePath, cwd)
+		rel := relPath(f.Name, cwd)
 		if len(f.AssertionResults) == 0 {
-			if f.TestExecError != nil {
-				out = append(out, fileExecError(rel, *f.TestExecError))
+			if f.Status == "failed" && f.Message != "" {
+				out = append(out, fileExecError(rel, f.Message))
 			}
 			continue
 		}
@@ -94,10 +89,6 @@ func mapAssertion(relFile string, a jestAssertion) models.TestResult {
 	if a.Duration != nil {
 		duration = time.Duration(*a.Duration * float64(time.Millisecond))
 	}
-	var startTime time.Time
-	if a.StartAt != nil {
-		startTime = time.UnixMilli(*a.StartAt)
-	}
 
 	output := ""
 	if a.Status == "failed" {
@@ -105,27 +96,19 @@ func mapAssertion(relFile string, a jestAssertion) models.TestResult {
 	}
 
 	return models.TestResult{
-		Id:        id,
-		Ran:       ran,
-		Passed:    passed,
-		StartTime: startTime,
-		Duration:  duration,
-		Output:    output,
+		Id:       id,
+		Ran:      ran,
+		Passed:   passed,
+		Duration: duration,
+		Output:   output,
 	}
 }
 
-func fileExecError(relFile string, e jestExecError) models.TestResult {
-	var parts []string
-	if e.Message != "" {
-		parts = append(parts, e.Message)
-	}
-	if e.Stack != "" {
-		parts = append(parts, e.Stack)
-	}
+func fileExecError(relFile, message string) models.TestResult {
 	return models.TestResult{
 		Id:     relFile + "::<file-error>",
 		Ran:    true,
 		Passed: false,
-		Output: strings.Join(parts, "\n"),
+		Output: message,
 	}
 }

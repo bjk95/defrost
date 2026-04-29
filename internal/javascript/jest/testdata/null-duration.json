@@ -1,15 +1,16 @@
 {
   "testResults": [
     {
-      "testFilePath": "__CWD__/x.test.js",
-      "testResults": [
+      "name": "__CWD__/x.test.js",
+      "status": "passed",
+      "message": "",
+      "assertionResults": [
         {
           "title": "no timing info",
           "status": "passed",
           "ancestorTitles": [],
           "failureMessages": [],
-          "duration": null,
-          "startAt": null
+          "duration": null
         }
       ]
     }

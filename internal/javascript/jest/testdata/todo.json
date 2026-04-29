@@ -1,15 +1,16 @@
 {
   "testResults": [
     {
-      "testFilePath": "__CWD__/skip.test.js",
-      "testResults": [
+      "name": "__CWD__/skip.test.js",
+      "status": "passed",
+      "message": "",
+      "assertionResults": [
         {
           "title": "todo test",
           "status": "todo",
           "ancestorTitles": [],
           "failureMessages": [],
-          "duration": null,
-          "startAt": null
+          "duration": null
         }
       ]
     }
