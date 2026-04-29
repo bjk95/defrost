@@ -1,12 +1,21 @@
 package main
 
 import (
+	"fmt"
+	"os"
+
 	"github.com/bjk95/defrost/internal/golang"
+	"github.com/bjk95/defrost/internal/runner"
 )
 
 func HandleExecution(cmd []string) {
-	switch cmd[0] {
-	case "go":
-		golang.ExecuteGoTest(cmd)
+	reg := runner.NewRegistry()
+	reg.Register(golang.Adapter{})
+
+	a := reg.Find(cmd)
+	if a == nil {
+		fmt.Fprintf(os.Stderr, "defrost: no adapter for %q\n", cmd)
+		os.Exit(2)
 	}
+	os.Exit(a.Run(cmd))
 }
