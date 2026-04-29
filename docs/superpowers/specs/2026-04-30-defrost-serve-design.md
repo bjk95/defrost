@@ -160,7 +160,7 @@ Reads every `runs/<run_id>.json` and every `tests/<test_id>.ndjson` from the dat
 
 #### Stack
 
-Vite + React 18 + TypeScript + React Router v6 + Tailwind + shadcn/ui + recharts (via shadcn's `<Chart>` wrapper) + Vitest + @testing-library/react + jsdom.
+Vite + React 18 + TypeScript + React Router v6 + Tailwind + shadcn/ui + recharts (via shadcn's `<Chart>` wrapper) + TanStack Query v5 (`@tanstack/react-query`) + Vitest + @testing-library/react + jsdom.
 
 #### Routes
 
@@ -170,11 +170,11 @@ Vite + React 18 + TypeScript + React Router v6 + Tailwind + shadcn/ui + recharts
 
 | Component | Role | shadcn primitives |
 |---|---|---|
-| `App` | Router + global `<Toaster />` | — |
-| `Grid` | Fetches `/api/tests`, renders one `TestRow` per test | — |
+| `App` | Wraps router in `<QueryClientProvider>`; mounts global `<Toaster />` | — |
+| `Grid` | `useQuery` against `/api/tests`, renders one `TestRow` per test | — |
 | `TestRow` | Test name on left + `RunCell` strip on right | `Tooltip` on cell hover (timestamp + status) |
 | `RunCell` | Colored 14×14 square. `onClick` updates URL search params | — |
-| `RunDetailSheet` | Reads `?run=&test=` from URL, fetches detail, renders side panel | `Sheet` |
+| `RunDetailSheet` | Reads `?run=&test=` from URL, `useQuery` for detail, renders side panel | `Sheet` |
 | `DurationSparkline` | Line chart of selected test's duration across recent runs; selected run highlighted | shadcn `ChartContainer` + recharts `LineChart` |
 | `StatusBadge` | green/red/yellow status pill | `Badge` |
 
@@ -187,15 +187,35 @@ Vite + React 18 + TypeScript + React Router v6 + Tailwind + shadcn/ui + recharts
 
 #### Data fetching
 
-Plain `fetch` in `useEffect` for v1. Typed wrappers in `web/src/api.ts` (`getTests()`, `getTestRun(tid, rid)`) return `Promise<T>` and surface errors as thrown exceptions for the caller to render via shadcn `Toaster`.
+TanStack Query v5. A single `QueryClient` lives at the root of `App`, configured with conservative defaults that complement the HTTP `Cache-Control` story:
 
-No react-query, no SWR. Adding either later is a one-component swap.
+```ts
+new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 60_000,         // matches /api/tests Cache-Control: max-age=60
+      gcTime: 5 * 60_000,
+      retry: 1,
+      refetchOnWindowFocus: false, // explicit user action only — no surprise refetches
+    },
+  },
+})
+```
+
+Typed fetch wrappers in `web/src/api.ts` (`getTests()`, `getTestRun(tid, rid)`) return `Promise<T>` and throw on non-2xx responses. Components consume them via `useQuery` with explicit query keys:
+
+- `Grid` → `useQuery({ queryKey: ['tests'], queryFn: getTests })`
+- `RunDetailSheet` → `useQuery({ queryKey: ['test', tid, 'run', rid], queryFn: () => getTestRun(tid, rid), enabled: Boolean(tid && rid), staleTime: Infinity })` — `(tid, rid)` is immutable, so once fetched it never goes stale within a session.
+
+`isError` states render an inline message in-place (toast via shadcn `Toaster` for transient fetch failures, retry button calls `refetch()`).
+
+This is a small step up from plain `fetch` (one library, ~13kB gzipped), but pays for itself: automatic dedupe of concurrent fetches (e.g., two cells clicked in quick succession), no manual loading-state plumbing, and a clean `refetch()` if a future "Refresh" button is added.
 
 ## Data flow
 
 1. **Server startup:** `HandleServe` builds the handler and listens. No data is loaded yet.
 2. **Initial page load:** SPA mounts, `Grid` fetches `/api/tests`. Handler calls `serve.Load` → `persist.LoadAll` → sorts and caps → serializes (minus `Output`). Server attaches `Cache-Control: public, max-age=60`.
-3. **Click cell:** `RunCell.onClick` updates `?run=&test=` via `useSearchParams`. `RunDetailSheet` observes the change, fetches `/api/test/:tid/run/:rid`. Handler calls `Load` again, looks up the requested entry, returns it with `Cache-Control: public, max-age=86400`. The browser caches the immutable `(tid, rid)` pair indefinitely from a UX perspective.
+3. **Click cell:** `RunCell.onClick` updates `?run=&test=` via `useSearchParams`. `RunDetailSheet` observes the change; its `useQuery` (with `staleTime: Infinity`) issues `GET /api/test/:tid/run/:rid` if not already cached in TanStack Query's store. Handler calls `Load`, looks up the requested entry, returns it with `Cache-Control: public, max-age=86400`. Repeated clicks on the same cell within a session never re-fetch (TanStack Query cache hit); after navigation, browser HTTP cache also avoids re-hitting the server.
 4. **Seeing new runs:** user reloads the browser tab. If the browser's cached `/api/tests` is fresher than 60s, it serves from cache (no server hit, no git op). Otherwise it re-requests, the handler re-loads from the data branch, and the grid re-renders with whatever is now there. There is no in-process cache, no server-side TTL, no auto-refresh.
 
 ## Repo layout after this work
@@ -233,6 +253,8 @@ defrost/
     │   ├── main.tsx
     │   ├── App.tsx
     │   ├── api.ts
+    │   ├── queryClient.ts     (TanStack Query client config)
+    │   ├── test-utils.tsx     (renderWithProviders helper)
     │   ├── lib/utils.ts
     │   └── components/
     │       ├── Grid.tsx           (+ Grid.test.tsx)
@@ -312,11 +334,13 @@ Per the user's "verification is mandatory; minimal, public-interface only" rule:
 | `internal/persist/persist_test.go` | New cases for `LoadAll`: seeded fixture branch → expected runs and per-test entries. |
 | `internal/serve/data_test.go` | `Load` produces a `Dataset` with the expected shape from a stub `persist.LoadAll` result; sort + cap correctness. |
 | `internal/serve/server_test.go` | `httptest.NewServer(New(...))` with the `loaderFn` seam stubbed — `/api/tests` returns the expected JSON shape and 200 with `Cache-Control: public, max-age=60`; `/api/test/:tid/run/:rid` returns 200 with `Cache-Control: public, max-age=86400` on a known pair and 404 on an unknown one. SPA fallback returns `index.html` for unknown paths. |
-| `web/src/components/Grid.test.tsx` | Mocks `/api/tests`, asserts rows + cells render with correct status classes. |
+| `web/src/components/Grid.test.tsx` | Wraps in `QueryClientProvider`; stubs `getTests`; asserts rows + cells render with correct status classes. |
 | `web/src/components/RunCell.test.tsx` | Status → CSS class mapping; click updates URL search params (uses `MemoryRouter`). |
-| `web/src/components/RunDetailSheet.test.tsx` | When URL has `?run=&test=`, mocks `/api/test/:tid/run/:rid`, asserts output and sparkline render. |
+| `web/src/components/RunDetailSheet.test.tsx` | Wraps in `QueryClientProvider`; stubs `getTestRun`; with URL `?run=&test=`, asserts output and sparkline render. |
 | `web/src/components/DurationSparkline.test.tsx` | Smoke: renders given sample data without throwing. |
-| `web/src/api.test.ts` | Fetch wrappers parse JSON shape; surface errors. |
+| `web/src/api.test.ts` | Fetch wrappers parse JSON shape; throw on non-2xx. |
+
+A small `web/src/test-utils.tsx` exports a `renderWithProviders(ui)` helper that wraps in a fresh `QueryClient` (with `retry: false` and `gcTime: Infinity` for deterministic tests) and `MemoryRouter`. All component tests use it.
 
 The SPA tests exist deliberately — once `defrost exec` gains TypeScript/Vitest support, defrost will display its own test history. Dogfooding hook.
 
