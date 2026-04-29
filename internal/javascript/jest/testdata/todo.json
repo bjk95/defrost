@@ -1,0 +1,17 @@
+{
+  "testResults": [
+    {
+      "testFilePath": "__CWD__/skip.test.js",
+      "testResults": [
+        {
+          "title": "todo test",
+          "status": "todo",
+          "ancestorTitles": [],
+          "failureMessages": [],
+          "duration": null,
+          "startAt": null
+        }
+      ]
+    }
+  ]
+}

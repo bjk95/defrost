@@ -1,0 +1,17 @@
+{
+  "testResults": [
+    {
+      "testFilePath": "__CWD__/basics.test.js",
+      "testResults": [
+        {
+          "title": "adds correctly",
+          "status": "failed",
+          "ancestorTitles": [],
+          "failureMessages": ["Error: expected 2 but got 3", "    at Object.<anonymous>"],
+          "duration": 2.0,
+          "startAt": 1714435200000
+        }
+      ]
+    }
+  ]
+}

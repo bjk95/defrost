@@ -1,0 +1,38 @@
+{
+  "testResults": [
+    {
+      "testFilePath": "__CWD__/a.test.js",
+      "testResults": [
+        {
+          "title": "passes",
+          "status": "passed",
+          "ancestorTitles": [],
+          "failureMessages": [],
+          "duration": 1.0,
+          "startAt": 1714435200000
+        }
+      ]
+    },
+    {
+      "testFilePath": "__CWD__/sub/b.test.js",
+      "testResults": [
+        {
+          "title": "fails",
+          "status": "failed",
+          "ancestorTitles": [],
+          "failureMessages": ["boom"],
+          "duration": 2.0,
+          "startAt": 1714435200000
+        },
+        {
+          "title": "skipped",
+          "status": "pending",
+          "ancestorTitles": [],
+          "failureMessages": [],
+          "duration": null,
+          "startAt": null
+        }
+      ]
+    }
+  ]
+}

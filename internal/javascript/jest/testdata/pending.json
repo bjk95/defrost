@@ -1,0 +1,17 @@
+{
+  "testResults": [
+    {
+      "testFilePath": "__CWD__/skip.test.js",
+      "testResults": [
+        {
+          "title": "skipped test",
+          "status": "pending",
+          "ancestorTitles": [],
+          "failureMessages": [],
+          "duration": null,
+          "startAt": null
+        }
+      ]
+    }
+  ]
+}

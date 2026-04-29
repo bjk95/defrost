@@ -1,0 +1,17 @@
+{
+  "testResults": [
+    {
+      "testFilePath": "__CWD__/x.test.js",
+      "testResults": [
+        {
+          "title": "no timing info",
+          "status": "passed",
+          "ancestorTitles": [],
+          "failureMessages": [],
+          "duration": null,
+          "startAt": null
+        }
+      ]
+    }
+  ]
+}

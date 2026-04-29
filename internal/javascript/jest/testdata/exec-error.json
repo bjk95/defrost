@@ -1,0 +1,12 @@
+{
+  "testResults": [
+    {
+      "testFilePath": "__CWD__/broken.test.js",
+      "testExecError": {
+        "message": "SyntaxError: Unexpected token",
+        "stack": "    at Module._compile"
+      },
+      "testResults": []
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "testResults": [
+    {
+      "testFilePath": "__CWD__/basics.test.js",
+      "testResults": [
+        {
+          "title": "adds correctly",
+          "status": "passed",
+          "ancestorTitles": [],
+          "failureMessages": [],
+          "duration": 1.0,
+          "startAt": 1714435200000
+        }
+      ]
+    }
+  ]
+}
