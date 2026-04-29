@@ -6,16 +6,18 @@ import (
 	"os/exec"
 )
 
-func ExecuteGoTest(cmd []string) {
+func ExecuteGoTest(cmd []string) int {
 	c := exec.Command(cmd[0], cmd[1:]...)
 	stdout, err := c.StdoutPipe()
 	if err != nil {
-		os.Exit(1)
+		fmt.Fprintln(os.Stderr, err)
+		return 1
 	}
 	c.Stderr = os.Stderr
 
 	if err := c.Start(); err != nil {
-		os.Exit(1)
+		fmt.Fprintln(os.Stderr, err)
+		return 1
 	}
 
 	results, parseErr := Parse(stdout)
@@ -29,9 +31,10 @@ func ExecuteGoTest(cmd []string) {
 		fmt.Fprintln(os.Stderr, parseErr)
 	}
 	if e, ok := waitErr.(*exec.ExitError); ok {
-		os.Exit(e.ExitCode())
+		return e.ExitCode()
 	}
 	if waitErr != nil {
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }
