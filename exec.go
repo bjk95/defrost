@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/bjk95/defrost/internal/golang"
+	"github.com/bjk95/defrost/internal/javascript/jest"
 	"github.com/bjk95/defrost/internal/models"
 	"github.com/bjk95/defrost/internal/persist"
 	"github.com/bjk95/defrost/internal/python/pytest"
@@ -28,6 +29,7 @@ func HandleExecution(cmd []string, opts ExecOpts) int {
 	reg := runner.NewRegistry()
 	reg.Register(golang.Adapter{})
 	reg.Register(pytest.Adapter{})
+	reg.Register(&jest.Adapter{})
 
 	a := reg.Find(cmd)
 	if a == nil {
