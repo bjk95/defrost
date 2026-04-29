@@ -20,13 +20,12 @@ defrost serve [--port 6969] [--repo-dir .] [--data-branch _defrost] [--no-remote
 The wrapper:
 
 1. Validates flags and resolves the repo / data-branch options (same semantics as `defrost history`).
-2. Reads the data branch into memory once via the `persist` package.
-3. Starts an `http.Server` bound to `127.0.0.1:<port>` (default 6969).
-4. Prints `→ http://localhost:6969` to stdout and blocks until interrupted.
+2. Starts an `http.Server` bound to `127.0.0.1:<port>` (default 6969). No upfront data load — the data branch is read lazily on the first API request.
+3. Prints `→ http://localhost:6969` to stdout and blocks until interrupted.
 
 The user opens the URL in a browser. The page renders a heatmap grid of recent test runs. Clicking a cell opens a side panel with that run's failure output and metadata. The selection is reflected in the URL (`?run=<rid>&test=<tid>`) so the panel state is deep-linkable and the back button works.
 
-The server does not auto-refresh. The data branch is read once at startup. To see runs recorded after `defrost serve` started, the user restarts the server (`Ctrl-C` then `defrost serve` again). A refresh button or auto-refresh is an explicit v2 follow-up — see "Out of scope".
+**Refresh model:** there is no in-page refresh button. To see new runs recorded by other `defrost exec` invocations, the user reloads the browser tab. Each `/api/tests` request re-reads the data branch — git ops are real work, so the response sets `Cache-Control: public, max-age=60` and the browser throttles repeated fetches. (User-initiated hard reload bypasses cache and forces a fresh git read; that's the intended escape hatch.)
 
 The server binds loopback only — there is no auth. If the data branch is empty the server still starts and the SPA shows an empty state.
 
@@ -35,19 +34,18 @@ The server binds loopback only — there is no auth. If the data branch is empty
 ```
 defrost serve
   │
-  ├─ persist.LoadAll(opts)   # reads runs/ + tests/ from data branch
-  │     └─ in-memory Dataset
-  │
   └─ http.Server :6969
-        ├─ GET /api/tests                  → light grid data (no Output)
-        ├─ GET /api/test/:tid/run/:rid     → full cell detail (with Output)
+        ├─ GET /api/tests                  → calls persist.LoadAll → light grid data (no Output)
+        │                                    Cache-Control: public, max-age=60
+        ├─ GET /api/test/:tid/run/:rid     → calls persist.LoadAll → full cell detail (with Output)
+        │                                    Cache-Control: public, max-age=86400 (the (tid,rid) pair is immutable)
         └─ GET /*                          → SPA assets (embedded), with SPA fallback
 
 Browser
   │
   ├─ initial load: GET /api/tests → render <Grid />
   ├─ click cell: push URL ?run=&test= → GET /api/test/:tid/run/:rid → <RunDetailSheet />
-  └─ restart `defrost serve` to ingest new runs (v1)
+  └─ tab reload re-fetches /api/tests (subject to browser cache throttle)
 ```
 
 Three boundaries:
@@ -79,10 +77,9 @@ Dispatch in `main.go` follows the existing `case strings.HasPrefix(cmd, "serve")
 
 `HandleServe(opts ServeOpts) int`. Owns the lifecycle:
 
-1. Calls `serve.Load(persist.Options{...})` to assemble the in-memory `Dataset`.
-2. Builds the `http.Handler` via `serve.New(dataset, Assets)`.
-3. Starts `http.Server` on `127.0.0.1:<port>`. On `listen` error (e.g., port in use), logs `port <N> already in use; pass --port to override` and returns 1.
-4. Prints the URL and blocks.
+1. Builds the `http.Handler` via `serve.New(persistOpts, Assets)`. The handler closes over `persistOpts` and re-reads the data branch on each API request (no startup load, no in-memory cache).
+2. Starts `http.Server` on `127.0.0.1:<port>`. On `listen` error (e.g., port in use), logs `port <N> already in use; pass --port to override` and returns 1.
+3. Prints the URL and blocks.
 
 #### `assets.go` (top level)
 
@@ -101,7 +98,7 @@ The `internal/serve` package accepts a `fs.FS` parameter so it remains decoupled
 
 #### `internal/serve/data.go`
 
-Defines the in-memory `Dataset` and the loader:
+Defines the request-scoped `Dataset` and the loader:
 
 ```go
 type Dataset struct {
@@ -112,19 +109,19 @@ type Dataset struct {
 func Load(opts persist.Options) (Dataset, error)
 ```
 
-`Load` calls `persist.LoadAll`, sorts runs by `Timestamp` descending, caps `Runs` to 50, then keeps only entries whose `RunID` is in that capped set. Test name comes from `Entry.TestName`. Bounded memory by construction.
+`Load` is called per-request by the HTTP handlers. It calls `persist.LoadAll`, sorts runs by `Timestamp` descending, caps `Runs` to 50, then keeps only entries whose `RunID` is in that capped set. Test name comes from `Entry.TestName`. There is no in-memory cache; throttling lives in HTTP `Cache-Control` headers and the browser HTTP cache.
 
 Grid cell semantics: a cell at `(testID, runID)` is *missing* if that test did not run in that run. Missing cells render as a dimmed empty square — distinct from green/red/yellow.
 
 #### `internal/serve/server.go`
 
 ```go
-func New(d Dataset, assets fs.FS) http.Handler
+func New(opts persist.Options, assets fs.FS) http.Handler
 ```
 
-Wires three handlers on a `http.ServeMux`:
+The handler closes over `opts` and calls `Load(opts)` on each API request. Wires three handlers on a `http.ServeMux`:
 
-- `GET /api/tests` → returns:
+- `GET /api/tests` → calls `Load(opts)`. Sets `Cache-Control: public, max-age=60`. Returns:
   ```json
   {
     "runs": [
@@ -142,10 +139,10 @@ Wires three handlers on a `http.ServeMux`:
   }
   ```
   `cells` does *not* contain entries for runs in which the test did not execute — the SPA joins by `run_id` against `runs` and renders missing intersections as empty cells. `Output` is omitted.
-- `GET /api/test/{tid}/run/{rid}` → returns `{test: Entry, run: RunRecord}` (full, with `Output`). Returns 404 with `{"error":"unknown test or run"}` if either ID is unknown.
+- `GET /api/test/{tid}/run/{rid}` → calls `Load(opts)`. Sets `Cache-Control: public, max-age=86400` (a fixed `(tid, rid)` pair is immutable — once a test has run, that result doesn't change). Returns `{test: Entry, run: RunRecord}` (full, with `Output`). Returns 404 with `{"error":"unknown test or run"}` if either ID is unknown.
 - `GET /*` → serves SPA assets from `assets`. Unknown paths fall back to `index.html` so React Router handles routing.
 
-The handler is a pure function of `(Dataset, fs.FS)` — no global state, easy to test with `httptest`.
+The handler depends only on `(opts, fs.FS)` — opts is value-typed, no global state. For tests, `Load` is replaced via a test-only seam (a package-level `loaderFn` variable defaulting to `Load`, swappable in `_test.go`).
 
 #### `internal/persist/persist.go`
 
@@ -196,10 +193,10 @@ No react-query, no SWR. Adding either later is a one-component swap.
 
 ## Data flow
 
-1. **Server startup:** `HandleServe` calls `serve.Load`, which calls `persist.LoadAll`. The full data branch is read once. Runs are sorted newest-first and capped at 50; per-test entries are filtered to only those whose `RunID` is in that capped set.
-2. **Initial page load:** SPA mounts, `Grid` fetches `/api/tests`. Server serializes the in-memory `Dataset` minus per-entry `Output` fields. Response is one JSON document.
-3. **Click cell:** `RunCell.onClick` updates `?run=&test=` via `useSearchParams`. `RunDetailSheet` observes the change, fetches `/api/test/:tid/run/:rid`, renders the panel.
-4. **Seeing new runs:** the `Dataset` is loaded once at server startup. Page reload re-renders the same data — no new runs appear without restarting `defrost serve`. This keeps v1 server simple (no file-watching, no cache invalidation). A refresh endpoint is an explicit v2 follow-up.
+1. **Server startup:** `HandleServe` builds the handler and listens. No data is loaded yet.
+2. **Initial page load:** SPA mounts, `Grid` fetches `/api/tests`. Handler calls `serve.Load` → `persist.LoadAll` → sorts and caps → serializes (minus `Output`). Server attaches `Cache-Control: public, max-age=60`.
+3. **Click cell:** `RunCell.onClick` updates `?run=&test=` via `useSearchParams`. `RunDetailSheet` observes the change, fetches `/api/test/:tid/run/:rid`. Handler calls `Load` again, looks up the requested entry, returns it with `Cache-Control: public, max-age=86400`. The browser caches the immutable `(tid, rid)` pair indefinitely from a UX perspective.
+4. **Seeing new runs:** user reloads the browser tab. If the browser's cached `/api/tests` is fresher than 60s, it serves from cache (no server hit, no git op). Otherwise it re-requests, the handler re-loads from the data branch, and the grid re-renders with whatever is now there. There is no in-process cache, no server-side TTL, no auto-refresh.
 
 ## Repo layout after this work
 
@@ -213,6 +210,9 @@ defrost/
 ├── assets.go              (new: //go:embed all:web/dist)
 ├── go.mod
 ├── Makefile               (new: `make build` runs npm build then go build)
+├── .github/
+│   └── workflows/
+│       └── web-dist.yml   (new: auto-rebuild web/dist on web/ source changes)
 ├── internal/
 │   ├── serve/             (new package)
 │   │   ├── server.go
@@ -250,7 +250,42 @@ defrost/
 - **Dev:** `cd web && npm run dev` runs Vite on its own port (5173 by default). `vite.config.ts` proxies `/api/*` to `http://127.0.0.1:6969`. The Go server runs separately via `go run . serve`.
 - **Production / install:** `cd web && npm run build` populates `web/dist/`. The directory is committed. `go install github.com/bjk95/defrost@latest` then embeds the prebuilt assets — no Node required for end users.
 - **Convenience:** `Makefile` target `build` chains `npm install`, `npm run build`, then `go build`. `test` target runs `go test ./...` and `npm test`.
-- **Staleness:** documented in README that `web/dist/` must be rebuilt before pushing changes to `web/src/`. No CI guard in v1; easy follow-up.
+
+### CI: rebuild `web/dist/` automatically
+
+A GitHub Action keeps the committed `web/dist/` in sync with `web/src/` (and friends) so contributors don't have to remember to rebuild before pushing.
+
+**Workflow file:** `.github/workflows/web-dist.yml`
+
+**Trigger:**
+
+```yaml
+on:
+  push:
+    paths:
+      - 'web/src/**'
+      - 'web/index.html'
+      - 'web/package.json'
+      - 'web/package-lock.json'
+      - 'web/vite.config.ts'
+      - 'web/tailwind.config.ts'
+      - 'web/tsconfig.json'
+```
+
+Note: `web/dist/**` is *not* in the path filter — that prevents the workflow from re-triggering itself when it pushes the rebuilt dist.
+
+**Steps:**
+
+1. `actions/checkout@v4` (with `token: ${{ secrets.GITHUB_TOKEN }}`).
+2. `actions/setup-node@v4` (Node 20, cache `web/package-lock.json`).
+3. `cd web && npm ci`.
+4. `cd web && npm run build`.
+5. If `git diff --quiet web/dist`, exit 0 (nothing to commit).
+6. Otherwise, configure git as `github-actions[bot]`, `git add web/dist`, commit with message `chore: rebuild web/dist [skip ci]`, push to the same branch.
+
+**Permissions:** the workflow needs `permissions: contents: write` so the default `GITHUB_TOKEN` can push. Pushes made via `GITHUB_TOKEN` do not trigger further workflow runs by default — additional safety against loops on top of the path filter.
+
+**Branch protection:** if `main` requires PRs, the action will fail to push directly to `main`. The action only runs on PR branches in that case (where direct push is allowed). Document this in the README.
 
 `.gitignore` additions:
 
@@ -276,7 +311,7 @@ Per the user's "verification is mandatory; minimal, public-interface only" rule:
 |---|---|
 | `internal/persist/persist_test.go` | New cases for `LoadAll`: seeded fixture branch → expected runs and per-test entries. |
 | `internal/serve/data_test.go` | `Load` produces a `Dataset` with the expected shape from a stub `persist.LoadAll` result; sort + cap correctness. |
-| `internal/serve/server_test.go` | `httptest.NewServer(New(...))` — `/api/tests` returns the expected JSON shape and 200; `/api/test/:tid/run/:rid` returns 200 on a known pair and 404 on an unknown one. SPA fallback returns `index.html` for unknown paths. |
+| `internal/serve/server_test.go` | `httptest.NewServer(New(...))` with the `loaderFn` seam stubbed — `/api/tests` returns the expected JSON shape and 200 with `Cache-Control: public, max-age=60`; `/api/test/:tid/run/:rid` returns 200 with `Cache-Control: public, max-age=86400` on a known pair and 404 on an unknown one. SPA fallback returns `index.html` for unknown paths. |
 | `web/src/components/Grid.test.tsx` | Mocks `/api/tests`, asserts rows + cells render with correct status classes. |
 | `web/src/components/RunCell.test.tsx` | Status → CSS class mapping; click updates URL search params (uses `MemoryRouter`). |
 | `web/src/components/RunDetailSheet.test.tsx` | When URL has `?run=&test=`, mocks `/api/test/:tid/run/:rid`, asserts output and sparkline render. |
@@ -289,7 +324,7 @@ The SPA tests exist deliberately — once `defrost exec` gains TypeScript/Vitest
 
 Documented so they're not accidentally built and so they're easy follow-ups:
 
-- Auto-refresh (polling, SSE, websockets).
+- Auto-refresh without user action (polling on a timer, SSE, websockets). Browser-tab reload is the v1 refresh mechanism.
 - Filters / search / sort.
 - Pagination — fixed cap of last 50 runs.
 - Run-diff view.
