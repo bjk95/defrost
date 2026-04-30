@@ -98,17 +98,30 @@ func parseExecBase(tok string) string {
 	return base
 }
 
-// userOutputPath returns the value of --output / -o / --output=<v> in args,
-// or "" if not present.
-func userOutputPath(args []string) string {
+// userOutputPaths returns every `--output` / `-o` / `--output=<v>` value
+// in args, in order. Promptfoo accepts multiple output flags producing
+// different formats simultaneously (json + html + csv etc.).
+func userOutputPaths(args []string) []string {
+	var paths []string
 	for i, a := range args {
 		switch {
 		case a == "--output" || a == "-o":
 			if i+1 < len(args) {
-				return args[i+1]
+				paths = append(paths, args[i+1])
 			}
 		case strings.HasPrefix(a, "--output="):
-			return strings.TrimPrefix(a, "--output=")
+			paths = append(paths, strings.TrimPrefix(a, "--output="))
+		}
+	}
+	return paths
+}
+
+// userJSONOutput returns the first user-supplied --output value that
+// targets a .json file (case-insensitive), or "" if none.
+func userJSONOutput(args []string) string {
+	for _, p := range userOutputPaths(args) {
+		if strings.HasSuffix(strings.ToLower(p), ".json") {
+			return p
 		}
 	}
 	return ""
@@ -121,7 +134,7 @@ func userOutputPath(args []string) string {
 // dropped because the caller invokes exec.Command(cmd[0], buildArgs(...)).
 func buildArgs(cmd []string, jsonPath string) []string {
 	rest := append([]string{}, cmd[1:]...)
-	if userOutputPath(rest) != "" {
+	if len(userOutputPaths(rest)) > 0 {
 		return rest
 	}
 	return append(rest, "--output", jsonPath)
@@ -145,13 +158,20 @@ func (a *Adapter) Run(cmd []string) ([]models.TestResult, []*metricspb.Metric, i
 	if len(cmd) == 0 {
 		return nil, nil, 2
 	}
-	userPath := userOutputPath(cmd[1:])
-	if userPath != "" && !strings.HasSuffix(strings.ToLower(userPath), ".json") {
+
+	userOutputs := userOutputPaths(cmd[1:])
+	jsonPath := userJSONOutput(cmd[1:])
+
+	if len(userOutputs) > 0 && jsonPath == "" {
+		// User supplied --output flags but none target JSON. Defrost
+		// can't extract per-test results; run passthrough so the user's
+		// command still executes.
 		fmt.Fprintln(os.Stderr,
-			"defrost: promptfoo --output does not target a .json file; running passthrough (no per-test results will be recorded)")
+			"defrost: promptfoo --output flags target non-JSON formats only; running passthrough (no per-test results will be recorded)")
 		return passthroughRun(cmd)
 	}
-	tempPath := userPath
+
+	tempPath := jsonPath
 	if tempPath == "" {
 		f, err := os.CreateTemp("", "defrost-promptfoo-*.json")
 		if err != nil {

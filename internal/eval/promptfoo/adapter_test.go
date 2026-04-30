@@ -80,20 +80,42 @@ func TestBuildArgsRespectsLongFlagWithEquals(t *testing.T) {
 	}
 }
 
-func TestUserOutputPath(t *testing.T) {
+func TestUserOutputPaths(t *testing.T) {
+	cases := []struct {
+		args []string
+		want []string
+	}{
+		{[]string{"eval", "--output", "user.json"}, []string{"user.json"}},
+		{[]string{"eval", "-o", "user.json"}, []string{"user.json"}},
+		{[]string{"eval", "--output=user.json"}, []string{"user.json"}},
+		{[]string{"eval", "-c", "x.yaml"}, nil},
+		{[]string{"eval", "--output", "a.html", "--output", "b.json"}, []string{"a.html", "b.json"}},
+		{[]string{"eval", "-o", "a.csv", "--output=b.json"}, []string{"a.csv", "b.json"}},
+	}
+	for _, tc := range cases {
+		got := userOutputPaths(tc.args)
+		if !equalSlices(got, tc.want) && !(len(got) == 0 && len(tc.want) == 0) {
+			t.Fatalf("userOutputPaths(%v) = %v, want %v", tc.args, got, tc.want)
+		}
+	}
+}
+
+func TestUserJSONOutput(t *testing.T) {
 	cases := []struct {
 		args []string
 		want string
 	}{
 		{[]string{"eval", "--output", "user.json"}, "user.json"},
-		{[]string{"eval", "-o", "user.json"}, "user.json"},
-		{[]string{"eval", "--output=user.json"}, "user.json"},
+		{[]string{"eval", "--output", "report.html"}, ""},
+		{[]string{"eval", "--output", "a.html", "--output", "b.json"}, "b.json"},
+		{[]string{"eval", "--output", "a.json", "--output", "b.html"}, "a.json"},
+		{[]string{"eval", "--output=Report.JSON"}, "Report.JSON"}, // case-insensitive .json
 		{[]string{"eval", "-c", "x.yaml"}, ""},
 	}
 	for _, tc := range cases {
-		got := userOutputPath(tc.args)
+		got := userJSONOutput(tc.args)
 		if got != tc.want {
-			t.Fatalf("userOutputPath(%v) = %q, want %q", tc.args, got, tc.want)
+			t.Fatalf("userJSONOutput(%v) = %q, want %q", tc.args, got, tc.want)
 		}
 	}
 }
@@ -259,5 +281,47 @@ exit 0
 	_, _, code := a.Run([]string{abs, "eval"})
 	if code != 1 {
 		t.Fatalf("expected exit 1 (defrost-internal floor), got %d", code)
+	}
+}
+
+func TestBuildArgsRespectsMultipleUserFlags(t *testing.T) {
+	args := buildArgs([]string{"promptfoo", "eval", "--output", "a.html", "--output", "b.json"}, "/tmp/results.json")
+	want := []string{"eval", "--output", "a.html", "--output", "b.json"}
+	if !equalSlices(args, want) {
+		t.Fatalf("buildArgs = %v, want %v", args, want)
+	}
+}
+
+func TestRunMixedOutputUsesJSON(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake-child shell script is bash-only")
+	}
+	// User supplies both --output report.html (non-JSON) AND --output report.json.
+	// Defrost must pick the JSON one and parse it, not fall through to passthrough.
+	dir := t.TempDir()
+	htmlPath := filepath.Join(dir, "report.html")
+	jsonPath := filepath.Join(dir, "report.json")
+
+	scriptPath := filepath.Join(dir, "fake-promptfoo")
+	fixtureSrc, err := filepath.Abs(filepath.Join("testdata", "single_assertion.json"))
+	if err != nil {
+		t.Fatalf("abs: %v", err)
+	}
+	body := "#!/usr/bin/env bash\nset -e\ncp \"" + fixtureSrc + "\" \"" + jsonPath + "\"\necho '<html/>' > \"" + htmlPath + "\"\n"
+	if err := os.WriteFile(scriptPath, []byte(body), 0o755); err != nil {
+		t.Fatalf("write fake: %v", err)
+	}
+	abs, _ := filepath.Abs(scriptPath)
+
+	a := &Adapter{}
+	tests, metrics, code := a.Run([]string{abs, "eval", "--output", htmlPath, "--output", jsonPath})
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d", code)
+	}
+	if len(tests) != 1 || !tests[0].Passed {
+		t.Fatalf("expected 1 passing test from JSON output, got %v", tests)
+	}
+	if len(metrics) != 1 {
+		t.Fatalf("expected 1 metric, got %d", len(metrics))
 	}
 }
