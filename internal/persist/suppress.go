@@ -47,9 +47,6 @@ func readSuppressionsFile(dir string) ([]string, error) {
 // order.
 func writeSuppressionsFile(dir string, ids []string) error {
 	doc := suppressionsDoc{Schema: suppressionsSchema, TestIDs: sortAndDedupe(ids)}
-	if doc.TestIDs == nil {
-		doc.TestIDs = []string{}
-	}
 	b, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal suppressions: %w", err)
@@ -59,9 +56,6 @@ func writeSuppressionsFile(dir string, ids []string) error {
 }
 
 func sortAndDedupe(in []string) []string {
-	if len(in) == 0 {
-		return []string{}
-	}
 	out := make([]string, 0, len(in))
 	seen := make(map[string]struct{}, len(in))
 	for _, s := range in {
