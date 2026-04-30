@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { getTests, getTestRun } from "@/api";
@@ -618,6 +618,13 @@ function SuppressionAction({
   const [hover, setHover] = useState(false);
   const [confirming, setConfirming] = useState(false);
 
+  // Once the mutation settles and the test is suppressed, reset the
+  // confirm flag so a later un-suppress + re-add starts from the default
+  // Add button rather than landing back inside the confirm UI.
+  useEffect(() => {
+    if (suppressed) setConfirming(false);
+  }, [suppressed]);
+
   if (suppressed) {
     return (
       <button
@@ -645,15 +652,18 @@ function SuppressionAction({
     );
   }
   if (confirming) {
+    // Keep the confirm UI on screen — and both buttons disabled — while
+    // the POST is in flight so a slow backend can't accept duplicate
+    // clicks. The effect above resets `confirming` once the suppressed
+    // state flips, so we never get stuck here.
     return (
       <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-        <span style={{ fontSize: 12, color: "var(--fg-muted)" }}>Suppress this test?</span>
+        <span style={{ fontSize: 12, color: "var(--fg-muted)" }}>
+          {pending ? "Suppressing…" : "Suppress this test?"}
+        </span>
         <button
           disabled={pending}
-          onClick={() => {
-            onAdd();
-            setConfirming(false);
-          }}
+          onClick={onAdd}
           style={{
             padding: "6px 12px",
             fontSize: 12,
@@ -662,12 +672,14 @@ function SuppressionAction({
             color: "var(--bg)",
             border: "1px solid var(--fg)",
             borderRadius: 6,
-            cursor: "pointer",
+            cursor: pending ? "wait" : "pointer",
+            opacity: pending ? 0.6 : 1,
           }}
         >
           Suppress
         </button>
         <button
+          disabled={pending}
           onClick={() => setConfirming(false)}
           style={{
             padding: "6px 10px",
@@ -676,7 +688,8 @@ function SuppressionAction({
             color: "var(--fg-muted)",
             border: "1px solid var(--border)",
             borderRadius: 6,
-            cursor: "pointer",
+            cursor: pending ? "wait" : "pointer",
+            opacity: pending ? 0.6 : 1,
           }}
         >
           Cancel
