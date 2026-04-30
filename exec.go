@@ -56,17 +56,23 @@ func HandleExecution(cmd []string, opts ExecOpts) int {
 		Dev:        opts.Dev,
 	}
 
-	// Even when Persist is off we still build a RunContext so the receiver
-	// can stamp metric data points with a trace_id. Failure here is fatal
-	// only when we're going to persist; otherwise we run without metric
-	// collection.
-	run, runErr := persist.DetectRunContext(pOpts, cmd, defrostVersion)
-	if runErr != nil && opts.Persist {
-		fmt.Fprintln(os.Stderr, "exec: detect run context:", runErr)
-		return 1
+	// When Persist is off the run produces no on-disk artifacts, so the
+	// OTLP receiver and the env-var override that points the child at it
+	// are pointless side effects — and they actively interfere with users
+	// who have OTEL_EXPORTER_OTLP_* set for their own observability.
+	// Skip the whole metrics path in that mode.
+	var run models.RunContext
+	var receiver *otlp.Receiver
+	restoreEnv := func() {}
+	if opts.Persist {
+		var runErr error
+		run, runErr = persist.DetectRunContext(pOpts, cmd, defrostVersion)
+		if runErr != nil {
+			fmt.Fprintln(os.Stderr, "exec: detect run context:", runErr)
+			return 1
+		}
+		receiver, restoreEnv = startReceiver()
 	}
-
-	receiver, restoreEnv := startReceiver()
 	defer restoreEnv()
 
 	results, code := a.Run(cmd)
@@ -83,22 +89,12 @@ func HandleExecution(cmd []string, opts ExecOpts) int {
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "exec: otlp receiver shutdown:", err)
 		}
-		if runErr == nil {
-			for _, req := range buffered {
-				metrics = append(metrics, otlp.MetricsToEntries(req, run)...)
-			}
+		for _, req := range buffered {
+			metrics = append(metrics, otlp.MetricsToEntries(req, run)...)
 		}
 	}
 
 	if !opts.Persist || (len(results) == 0 && len(metrics) == 0) {
-		return code
-	}
-	if runErr != nil {
-		// Persist requested but no run context. Surface the original error.
-		fmt.Fprintln(os.Stderr, "exec: persist skipped, no run context:", runErr)
-		if code == 0 {
-			code = 1
-		}
 		return code
 	}
 

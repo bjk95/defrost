@@ -1,6 +1,8 @@
 package otlp
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"fmt"
 	"io"
@@ -91,13 +93,39 @@ func (r *Receiver) handleMetrics(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "unsupported media type", http.StatusUnsupportedMediaType)
 		return
 	}
-	// Cap inbound payloads at 16 MiB. Defrost's expected workload is one
-	// run's worth of OTLP exports — far below this — so the cap is a
-	// guard against misbehaving clients, not a real ceiling.
+	// Cap raw payloads at 16 MiB and decompressed payloads at 64 MiB.
+	// Defrost's expected workload is one run's worth of OTLP exports —
+	// well below either ceiling — so both caps are guards against
+	// misbehaving clients (zip bombs in particular), not real limits.
 	const maxBody = 16 << 20
-	body, err := io.ReadAll(http.MaxBytesReader(w, req.Body, maxBody))
+	const maxDecompressed = 64 << 20
+	raw, err := io.ReadAll(http.MaxBytesReader(w, req.Body, maxBody))
 	if err != nil {
 		http.Error(w, "read body", http.StatusBadRequest)
+		return
+	}
+	body := raw
+	// OTel SDKs default to gzip in many languages
+	// (OTEL_EXPORTER_OTLP_COMPRESSION=gzip is the recommended default in
+	// the OTLP spec). Honor Content-Encoding so compressed payloads land.
+	if enc := req.Header.Get("Content-Encoding"); enc == "gzip" {
+		gz, err := gzip.NewReader(bytes.NewReader(raw))
+		if err != nil {
+			http.Error(w, "decode gzip", http.StatusBadRequest)
+			return
+		}
+		body, err = io.ReadAll(io.LimitReader(gz, maxDecompressed+1))
+		_ = gz.Close()
+		if err != nil {
+			http.Error(w, "decompress body", http.StatusBadRequest)
+			return
+		}
+		if len(body) > maxDecompressed {
+			http.Error(w, "decompressed body too large", http.StatusRequestEntityTooLarge)
+			return
+		}
+	} else if enc != "" && enc != "identity" {
+		http.Error(w, "unsupported content encoding", http.StatusUnsupportedMediaType)
 		return
 	}
 	msg := &cmetricspb.ExportMetricsServiceRequest{}
