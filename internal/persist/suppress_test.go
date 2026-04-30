@@ -181,12 +181,14 @@ func TestGitBackend_Suppressions_IdempotentAdd(t *testing.T) {
 		t.Fatalf("git log: %v: %s", err, out)
 	}
 	commits := strings.Count(strings.TrimSpace(string(out)), "\n") + 1
-	// Expected: seed commit (initial branch creation) + one suppress commit = 2.
-	// If second add added a commit, we'd see 3.
-	if commits > 2 {
-		t.Errorf("expected at most 2 commits on data branch, got %d:\n%s", commits, out)
+	// Expected: exactly one commit (seed files + suppressions.json land
+	// in the same commit on first write). If the second add produced an
+	// empty/no-op commit, we'd see 2.
+	if commits != 1 {
+		t.Errorf("expected exactly 1 commit on data branch, got %d:\n%s", commits, out)
 	}
 }
+
 
 func TestGitBackend_Suppressions_DevModeUsesScratchDir(t *testing.T) {
 	requireGit(t)

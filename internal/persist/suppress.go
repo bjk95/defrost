@@ -168,9 +168,13 @@ func (b *gitBackend) UpdateSuppressions(mutate func([]string) []string, msg stri
 		return err
 	}
 
-	// Retry-on-conflict: re-run the mutation closure on each retry against
-	// the rebased tip, so two concurrent add calls for different IDs both
-	// land in the final list.
+	// Retry-on-conflict: discard the local commit, fetch the remote tip,
+	// hard-reset to it, re-apply the mutation closure, and re-commit. This
+	// works for suppressions.json (single canonical file, NOT covered by
+	// the merge=union driver in .gitattributes) — a three-way merge of
+	// JSON would corrupt the file, so we replay the user's intent against
+	// the latest tree instead. Two concurrent add calls for different IDs
+	// both land in the final list this way.
 	var lastErr error
 	for attempt := 1; attempt <= maxPushAttempts; attempt++ {
 		err := pushBranch(workDir, branch)
@@ -181,11 +185,12 @@ func (b *gitBackend) UpdateSuppressions(mutate func([]string) []string, msg stri
 		if !branchExisted || !isNonFastForward(err) {
 			return err
 		}
-		if rebErr := pullRebase(workDir, branch); rebErr != nil {
-			return fmt.Errorf("rebase after push conflict (attempt %d): %w", attempt, rebErr)
+		refspec := fmt.Sprintf("+refs/heads/%s:refs/remotes/origin/%s", branch, branch)
+		if _, err := runGit(workDir, "fetch", "--quiet", "origin", refspec); err != nil {
+			return fmt.Errorf("fetch after push conflict (attempt %d): %w", attempt, err)
 		}
-		if _, err := runGit(workDir, "reset", "--soft", "HEAD~1"); err != nil {
-			return fmt.Errorf("reset for retry: %w", err)
+		if _, err := runGit(workDir, "reset", "--hard", "refs/remotes/origin/"+branch); err != nil {
+			return fmt.Errorf("reset to remote tip (attempt %d): %w", attempt, err)
 		}
 		if _, err := apply(); err != nil {
 			return err
