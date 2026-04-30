@@ -133,6 +133,19 @@ type Backend interface {
 	// when the test has no history yet.
 	GetTestHistory(testName string) ([]HistoricalEntry, error)
 
+	// GetSuppressions returns the current list of suppressed test IDs,
+	// or an empty slice if none have been recorded. A missing storage
+	// (no data branch yet, no scratch dir yet) is not an error.
+	GetSuppressions() ([]string, error)
+
+	// UpdateSuppressions reads the current list, applies mutate, and
+	// writes the result. The closure form lets the git backend re-apply
+	// the caller's intent against the latest tip during push retry, so
+	// concurrent add calls for different IDs both end up in the final
+	// list. msg is used as the commit message by backends that commit;
+	// other backends ignore it.
+	UpdateSuppressions(mutate func([]string) []string, msg string) error
+
 	// LoadAll returns every persisted RunRecord and every Entry across
 	// all tests, grouped by encoded test ID. Used by `defrost serve` to
 	// populate the heatmap grid in a single read instead of N. Returns

@@ -106,7 +106,7 @@ func mapAssertion(relFile string, a jestAssertion) models.TestResult {
 
 func fileExecError(relFile, message string) models.TestResult {
 	return models.TestResult{
-		Id:     relFile + "::<file-error>",
+		Id:     relFile + models.FileErrorSuffix,
 		Ran:    true,
 		Passed: false,
 		Output: message,
