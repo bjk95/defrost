@@ -8,62 +8,71 @@ import (
 	"testing"
 	"testing/fstest"
 
+	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
+	resourcepb "go.opentelemetry.io/proto/otlp/resource/v1"
+	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
+
 	"github.com/bjk95/defrost/internal/models"
 	"github.com/bjk95/defrost/internal/persist"
 )
 
 func stubDataset() Dataset {
 	return Dataset{
-		Roots: []models.Span{
+		Roots: []*tracepb.ResourceSpans{
 			{
-				Schema:            models.SchemaV3,
-				Name:              "defrost.run",
-				StartTimeUnixNano: 1735_776_000_000_000_000, // 2026-01-02T00:00:00Z
-				Resource: map[string]any{
-					"defrost.run_id":              "run-2",
-					"vcs.repository.ref.revision": "deadbee",
-					"vcs.repository.ref.name":     "main",
-				},
-			},
-			{
-				Schema:            models.SchemaV3,
-				Name:              "defrost.run",
-				StartTimeUnixNano: 1735_689_600_000_000_000, // 2026-01-01T00:00:00Z
-				Resource: map[string]any{
-					"defrost.run_id":              "run-1",
-					"vcs.repository.ref.revision": "cafebab",
-					"vcs.repository.ref.name":     "main",
-				},
-			},
-		},
-		TestSpans: map[string][]models.Span{
-			"tid-A": {
-				{
-					Schema:            models.SchemaV3,
-					Name:              "pkg.TestA",
-					StartTimeUnixNano: 1735_689_600_000_000_000,
-					EndTimeUnixNano:   1735_689_600_005_000_000,
-					Attributes: map[string]any{
-						"defrost.run_id":          "run-1",
-						"test.case.result.status": "passed",
-					},
-				},
-				{
-					Schema:            models.SchemaV3,
-					Name:              "pkg.TestA",
-					StartTimeUnixNano: 1735_776_000_000_000_000,
-					EndTimeUnixNano:   1735_776_000_009_000_000,
-					Attributes: map[string]any{
-						"defrost.run_id":          "run-2",
-						"test.case.result.status": "failed",
-					},
-					Events: []models.SpanEvent{{
-						Name:       "test.output",
-						Attributes: map[string]any{"body": "BOOM"},
+				Resource: &resourcepb.Resource{Attributes: []*commonpb.KeyValue{
+					models.StringAttr("defrost.run_id", "run-2"),
+					models.StringAttr("vcs.repository.ref.revision", "deadbee"),
+					models.StringAttr("vcs.repository.ref.name", "main"),
+				}},
+				ScopeSpans: []*tracepb.ScopeSpans{{
+					Spans: []*tracepb.Span{{
+						Name:              "defrost.run",
+						StartTimeUnixNano: 1735_776_000_000_000_000, // 2026-01-02T00:00:00Z
 					}},
-				},
+				}},
+			},
+			{
+				Resource: &resourcepb.Resource{Attributes: []*commonpb.KeyValue{
+					models.StringAttr("defrost.run_id", "run-1"),
+					models.StringAttr("vcs.repository.ref.revision", "cafebab"),
+					models.StringAttr("vcs.repository.ref.name", "main"),
+				}},
+				ScopeSpans: []*tracepb.ScopeSpans{{
+					Spans: []*tracepb.Span{{
+						Name:              "defrost.run",
+						StartTimeUnixNano: 1735_689_600_000_000_000, // 2026-01-01T00:00:00Z
+					}},
+				}},
 			},
 		},
+		TestSpans: map[string][]*tracepb.ResourceSpans{
+			"tid-A": {
+				makeTestRS("pkg.TestA", "run-1", "passed", 1735_689_600_000_000_000, 1735_689_600_005_000_000, ""),
+				makeTestRS("pkg.TestA", "run-2", "failed", 1735_776_000_000_000_000, 1735_776_000_009_000_000, "BOOM"),
+			},
+		},
+	}
+}
+
+func makeTestRS(name, runID, status string, startNs, endNs uint64, output string) *tracepb.ResourceSpans {
+	span := &tracepb.Span{
+		Name:              name,
+		StartTimeUnixNano: startNs,
+		EndTimeUnixNano:   endNs,
+		Attributes: []*commonpb.KeyValue{
+			models.StringAttr("defrost.run_id", runID),
+			models.StringAttr("test.case.result.status", status),
+		},
+	}
+	if output != "" {
+		span.Events = []*tracepb.Span_Event{{
+			Name:       "test.output",
+			Attributes: []*commonpb.KeyValue{models.StringAttr("body", output)},
+		}}
+	}
+	return &tracepb.ResourceSpans{
+		ScopeSpans: []*tracepb.ScopeSpans{{Spans: []*tracepb.Span{span}}},
 	}
 }
 
@@ -174,34 +183,18 @@ func TestServer_GetTestRun_404OnUnknown(t *testing.T) {
 }
 
 func TestServer_GetTestRun_HandlesDoubleEncodedTestIDs(t *testing.T) {
-	// Map key is the on-disk single-encoded ID:
 	encodedTID := "github.com%2Fx%2Fp%2FTestA"
 	ds := Dataset{
-		Roots: []models.Span{
-			{
-				Schema:            models.SchemaV3,
-				Name:              "defrost.run",
-				StartTimeUnixNano: 1735_689_600_000_000_000,
-				Resource:          map[string]any{"defrost.run_id": "run-1"},
-			},
-		},
-		TestSpans: map[string][]models.Span{
-			encodedTID: {
-				{
-					Schema:            models.SchemaV3,
-					Name:              "github.com/x/p/TestA",
-					StartTimeUnixNano: 1735_689_600_000_000_000,
-					EndTimeUnixNano:   1735_689_600_004_000_000,
-					Attributes: map[string]any{
-						"defrost.run_id":          "run-1",
-						"test.case.result.status": "passed",
-					},
-					Events: []models.SpanEvent{{
-						Name:       "test.output",
-						Attributes: map[string]any{"body": "ok"},
-					}},
-				},
-			},
+		Roots: []*tracepb.ResourceSpans{{
+			Resource: &resourcepb.Resource{Attributes: []*commonpb.KeyValue{
+				models.StringAttr("defrost.run_id", "run-1"),
+			}},
+			ScopeSpans: []*tracepb.ScopeSpans{{
+				Spans: []*tracepb.Span{{Name: "defrost.run", StartTimeUnixNano: 1}},
+			}},
+		}},
+		TestSpans: map[string][]*tracepb.ResourceSpans{
+			encodedTID: {makeTestRS("github.com/x/p/TestA", "run-1", "passed", 1, 4_000_000, "ok")},
 		},
 	}
 	srv := newTestServer(t, ds, fstest.MapFS{
@@ -209,7 +202,6 @@ func TestServer_GetTestRun_HandlesDoubleEncodedTestIDs(t *testing.T) {
 	})
 	defer srv.Close()
 
-	// SPA sends the encoded ID through encodeURIComponent → double-encoded:
 	doubleEncodedTID := url.PathEscape(encodedTID)
 	resp, err := http.Get(srv.URL + "/api/test/" + doubleEncodedTID + "/run/run-1")
 	if err != nil {

@@ -1,6 +1,7 @@
 package otlp
 
 import (
+	"bytes"
 	"testing"
 	"time"
 
@@ -8,16 +9,25 @@ import (
 	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
 	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
 	resourcepb "go.opentelemetry.io/proto/otlp/resource/v1"
+	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
 
 	"github.com/bjk95/defrost/internal/models"
 )
 
+var (
+	stubTraceID    = []byte{0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11}
+	stubRootSpanID = []byte{0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22}
+)
+
 func newRunContext() models.RunContext {
 	return models.RunContext{
-		RunID:             "run-001",
-		TraceID:           "11111111111111111111111111111111",
-		RootSpanID:        "2222222222222222",
-		Resource:          map[string]any{"service.name": "defrost", "vcs.repository.ref.revision": "abc123"},
+		RunID:      "run-001",
+		TraceID:    stubTraceID,
+		RootSpanID: stubRootSpanID,
+		Resource: &resourcepb.Resource{Attributes: []*commonpb.KeyValue{
+			models.StringAttr("service.name", "defrost"),
+			models.StringAttr("vcs.repository.ref.revision", "abc123"),
+		}},
 		StartTimeUnixNano: 1714_500_000_000_000_000,
 	}
 }
@@ -38,38 +48,35 @@ func TestTestResultsToSpans_Pass(t *testing.T) {
 	if s.Name != r.Id {
 		t.Errorf("name: want %q got %q", r.Id, s.Name)
 	}
-	if s.TraceID != "11111111111111111111111111111111" {
-		t.Errorf("trace_id: %q", s.TraceID)
+	if !bytes.Equal(s.TraceId, stubTraceID) {
+		t.Errorf("trace_id: %x", s.TraceId)
 	}
-	if s.ParentSpanID != "2222222222222222" {
-		t.Errorf("parent_span_id: %q", s.ParentSpanID)
+	if !bytes.Equal(s.ParentSpanId, stubRootSpanID) {
+		t.Errorf("parent_span_id: %x", s.ParentSpanId)
 	}
-	if s.Status.Code != "OK" {
-		t.Errorf("status.code: want OK got %q", s.Status.Code)
+	if s.Status.Code != tracepb.Status_STATUS_CODE_OK {
+		t.Errorf("status.code: want OK got %v", s.Status.Code)
 	}
-	if s.Attributes["test.case.name"] != r.Id {
-		t.Errorf("test.case.name attribute missing: %+v", s.Attributes)
+	if got := models.AttrString(s.Attributes, "test.case.name"); got != r.Id {
+		t.Errorf("test.case.name attribute: %q", got)
 	}
-	if s.Attributes["test.case.result.status"] != "passed" {
-		t.Errorf("test.case.result.status: %v", s.Attributes["test.case.result.status"])
+	if got := models.AttrString(s.Attributes, "test.case.result.status"); got != "passed" {
+		t.Errorf("test.case.result.status: %q", got)
 	}
-	if s.Attributes["defrost.run_id"] != "run-001" {
-		t.Errorf("defrost.run_id attribute missing: %+v", s.Attributes)
+	if got := models.AttrString(s.Attributes, "defrost.run_id"); got != "run-001" {
+		t.Errorf("defrost.run_id attribute missing: %q", got)
 	}
-	if s.Attributes["test.suite.name"] != "github.com/x/p" {
-		t.Errorf("test.suite.name: %v", s.Attributes["test.suite.name"])
+	if got := models.AttrString(s.Attributes, "test.suite.name"); got != "github.com/x/p" {
+		t.Errorf("test.suite.name: %q", got)
 	}
-	if s.Attributes["code.function"] != "TestA" {
-		t.Errorf("code.function: %v", s.Attributes["code.function"])
+	if got := models.AttrString(s.Attributes, "code.function"); got != "TestA" {
+		t.Errorf("code.function: %q", got)
 	}
-	if got := s.EndTimeUnixNano - s.StartTimeUnixNano; got != int64(5*time.Millisecond) {
-		t.Errorf("duration nanos: want %d got %d", int64(5*time.Millisecond), got)
+	if d := s.EndTimeUnixNano - s.StartTimeUnixNano; d != uint64(5*time.Millisecond) {
+		t.Errorf("duration nanos: want %d got %d", uint64(5*time.Millisecond), d)
 	}
 	if len(s.Events) != 0 {
-		t.Errorf("expected no events for passing test with empty output, got %+v", s.Events)
-	}
-	if s.Resource["service.name"] != "defrost" {
-		t.Errorf("resource not inlined: %+v", s.Resource)
+		t.Errorf("expected no events for passing test with empty output, got %v", s.Events)
 	}
 }
 
@@ -84,14 +91,14 @@ func TestTestResultsToSpans_FailWithOutput(t *testing.T) {
 	}
 	got := TestResultsToSpans([]models.TestResult{r}, newRunContext())
 	s := got[0]
-	if s.Status.Code != "ERROR" {
-		t.Errorf("status.code: want ERROR got %q", s.Status.Code)
+	if s.Status.Code != tracepb.Status_STATUS_CODE_ERROR {
+		t.Errorf("status.code: want ERROR got %v", s.Status.Code)
 	}
 	if s.Status.Message != "FAIL" {
 		t.Errorf("status.message: want first line 'FAIL', got %q", s.Status.Message)
 	}
-	if s.Attributes["test.case.result.status"] != "failed" {
-		t.Errorf("result status: %v", s.Attributes["test.case.result.status"])
+	if got := models.AttrString(s.Attributes, "test.case.result.status"); got != "failed" {
+		t.Errorf("result status: %q", got)
 	}
 	if len(s.Events) != 1 {
 		t.Fatalf("want 1 event for non-empty output, got %d", len(s.Events))
@@ -99,19 +106,19 @@ func TestTestResultsToSpans_FailWithOutput(t *testing.T) {
 	if s.Events[0].Name != "test.output" {
 		t.Errorf("event name: %q", s.Events[0].Name)
 	}
-	if s.Events[0].Attributes["body"] != r.Output {
-		t.Errorf("event body: %v", s.Events[0].Attributes["body"])
+	if got := models.AttrString(s.Events[0].Attributes, "body"); got != r.Output {
+		t.Errorf("event body: %q", got)
 	}
 }
 
 func TestTestResultsToSpans_Skip(t *testing.T) {
 	r := models.TestResult{Id: "p/TestSkipped", Ran: false}
 	s := TestResultsToSpans([]models.TestResult{r}, newRunContext())[0]
-	if s.Status.Code != "UNSET" {
-		t.Errorf("status.code: want UNSET got %q", s.Status.Code)
+	if s.Status.Code != tracepb.Status_STATUS_CODE_UNSET {
+		t.Errorf("status.code: want UNSET got %v", s.Status.Code)
 	}
-	if s.Attributes["test.case.result.status"] != "skipped" {
-		t.Errorf("result status: %v", s.Attributes["test.case.result.status"])
+	if got := models.AttrString(s.Attributes, "test.case.result.status"); got != "skipped" {
+		t.Errorf("result status: %q", got)
 	}
 }
 
@@ -123,11 +130,11 @@ func TestTestResultsToSpans_Panic(t *testing.T) {
 		Output: "panic: nil pointer\nfoo()\n",
 	}
 	s := TestResultsToSpans([]models.TestResult{r}, newRunContext())[0]
-	if s.Status.Code != "ERROR" {
-		t.Errorf("status.code: want ERROR got %q", s.Status.Code)
+	if s.Status.Code != tracepb.Status_STATUS_CODE_ERROR {
+		t.Errorf("status.code: want ERROR got %v", s.Status.Code)
 	}
-	if s.Attributes["test.case.result.status"] != "aborted" {
-		t.Errorf("result status: want aborted got %v", s.Attributes["test.case.result.status"])
+	if got := models.AttrString(s.Attributes, "test.case.result.status"); got != "aborted" {
+		t.Errorf("result status: want aborted got %q", got)
 	}
 }
 
@@ -138,11 +145,11 @@ func TestTestResultsToSpans_PytestId(t *testing.T) {
 		Passed: true,
 	}
 	s := TestResultsToSpans([]models.TestResult{r}, newRunContext())[0]
-	if s.Attributes["test.suite.name"] != "tests/test_module.py" {
-		t.Errorf("test.suite.name: %v", s.Attributes["test.suite.name"])
+	if got := models.AttrString(s.Attributes, "test.suite.name"); got != "tests/test_module.py" {
+		t.Errorf("test.suite.name: %q", got)
 	}
-	if s.Attributes["code.function"] != "test_method" {
-		t.Errorf("code.function: %v", s.Attributes["code.function"])
+	if got := models.AttrString(s.Attributes, "code.function"); got != "test_method" {
+		t.Errorf("code.function: %q", got)
 	}
 }
 
@@ -157,23 +164,19 @@ func TestTestResultsToSpans_Siblings(t *testing.T) {
 		t.Fatalf("want 3 spans, got %d", len(got))
 	}
 	for i, s := range got {
-		if s.ParentSpanID != "2222222222222222" {
-			t.Errorf("span %d: parent_span_id should be the run root, got %q", i, s.ParentSpanID)
+		if !bytes.Equal(s.ParentSpanId, stubRootSpanID) {
+			t.Errorf("span %d: parent_span_id should be the run root, got %x", i, s.ParentSpanId)
 		}
 	}
 }
 
-func strKV(k, v string) *commonpb.KeyValue {
-	return &commonpb.KeyValue{Key: k, Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: v}}}
-}
+func strKV(k, v string) *commonpb.KeyValue { return models.StringAttr(k, v) }
 
 func makeRequest(metrics ...*metricspb.Metric) *cmetricspb.ExportMetricsServiceRequest {
 	return &cmetricspb.ExportMetricsServiceRequest{
 		ResourceMetrics: []*metricspb.ResourceMetrics{{
 			Resource: &resourcepb.Resource{Attributes: []*commonpb.KeyValue{strKV("service.name", "client")}},
-			ScopeMetrics: []*metricspb.ScopeMetrics{{
-				Metrics: metrics,
-			}},
+			ScopeMetrics: []*metricspb.ScopeMetrics{{Metrics: metrics}},
 		}},
 	}
 }
@@ -192,29 +195,36 @@ func TestMetricsToEntries_Gauge(t *testing.T) {
 	}
 	got := MetricsToEntries(makeRequest(m), newRunContext())
 	if len(got) != 1 {
-		t.Fatalf("want 1 entry, got %d", len(got))
+		t.Fatalf("want 1 metric, got %d", len(got))
 	}
-	e := got[0]
-	if e.Name != "db.connection_pool.size" {
-		t.Errorf("name: %q", e.Name)
+	out := got[0]
+	if out.Name != "db.connection_pool.size" {
+		t.Errorf("name: %q", out.Name)
 	}
-	if e.InstrumentType != "gauge" {
-		t.Errorf("instrument_type: %q", e.InstrumentType)
+	if out.Unit != "{connections}" {
+		t.Errorf("unit: %q", out.Unit)
 	}
-	if e.Unit != "{connections}" {
-		t.Errorf("unit: %q", e.Unit)
+	g, ok := out.Data.(*metricspb.Metric_Gauge)
+	if !ok {
+		t.Fatalf("not a gauge: %T", out.Data)
 	}
-	if e.Value == nil || *e.Value != 12.0 {
-		t.Errorf("value: %v", e.Value)
+	if len(g.Gauge.DataPoints) != 1 {
+		t.Fatalf("want 1 data point, got %d", len(g.Gauge.DataPoints))
 	}
-	if e.Attributes["db.system"] != "postgresql" {
-		t.Errorf("attribute missing: %+v", e.Attributes)
+	dp := g.Gauge.DataPoints[0]
+	v, ok := dp.Value.(*metricspb.NumberDataPoint_AsDouble)
+	if !ok || v.AsDouble != 12.0 {
+		t.Errorf("value: %v", dp.Value)
 	}
-	if e.Resource["service.name"] != "defrost" {
-		t.Errorf("resource: defrost RunContext should override caller resource: %+v", e.Resource)
+	if got := models.AttrString(dp.Attributes, "db.system"); got != "postgresql" {
+		t.Errorf("attribute missing: %q", got)
 	}
-	if e.TraceID != "11111111111111111111111111111111" {
-		t.Errorf("trace_id: %q", e.TraceID)
+	// Trace exemplar present.
+	if len(dp.Exemplars) != 1 {
+		t.Fatalf("want 1 exemplar, got %d", len(dp.Exemplars))
+	}
+	if !bytes.Equal(dp.Exemplars[0].TraceId, stubTraceID) {
+		t.Errorf("exemplar trace_id: %x", dp.Exemplars[0].TraceId)
 	}
 }
 
@@ -232,17 +242,20 @@ func TestMetricsToEntries_SumDelta(t *testing.T) {
 		}},
 	}
 	got := MetricsToEntries(makeRequest(m), newRunContext())[0]
-	if got.InstrumentType != "sum" {
-		t.Errorf("instrument_type: %q", got.InstrumentType)
+	sum, ok := got.Data.(*metricspb.Metric_Sum)
+	if !ok {
+		t.Fatalf("not a sum: %T", got.Data)
 	}
-	if !got.Monotonic {
+	if !sum.Sum.IsMonotonic {
 		t.Error("monotonic should be true")
 	}
-	if got.Temporality != "delta" {
-		t.Errorf("temporality: %q", got.Temporality)
+	if sum.Sum.AggregationTemporality != metricspb.AggregationTemporality_AGGREGATION_TEMPORALITY_DELTA {
+		t.Errorf("temporality: %v", sum.Sum.AggregationTemporality)
 	}
-	if got.Value == nil || *got.Value != 7 {
-		t.Errorf("value: %v", got.Value)
+	dp := sum.Sum.DataPoints[0]
+	v, ok := dp.Value.(*metricspb.NumberDataPoint_AsInt)
+	if !ok || v.AsInt != 7 {
+		t.Errorf("value: %v", dp.Value)
 	}
 }
 
@@ -264,29 +277,19 @@ func TestMetricsToEntries_Histogram(t *testing.T) {
 		}},
 	}
 	got := MetricsToEntries(makeRequest(m), newRunContext())[0]
-	if got.InstrumentType != "histogram" {
-		t.Errorf("instrument_type: %q", got.InstrumentType)
+	hist, ok := got.Data.(*metricspb.Metric_Histogram)
+	if !ok {
+		t.Fatalf("not a histogram: %T", got.Data)
 	}
-	if got.Count == nil || *got.Count != 3 {
-		t.Errorf("count: %v", got.Count)
+	dp := hist.Histogram.DataPoints[0]
+	if dp.Count != 3 {
+		t.Errorf("count: %d", dp.Count)
 	}
-	if got.Sum == nil || *got.Sum != 0.45 {
-		t.Errorf("sum: %v", got.Sum)
+	if dp.Sum == nil || *dp.Sum != 0.45 {
+		t.Errorf("sum: %v", dp.Sum)
 	}
-	if got.Min == nil || *got.Min != 0.05 {
-		t.Errorf("min: %v", got.Min)
-	}
-	if got.Max == nil || *got.Max != 0.25 {
-		t.Errorf("max: %v", got.Max)
-	}
-	if len(got.Buckets) != 3 {
-		t.Fatalf("buckets: want 3, got %d (%v)", len(got.Buckets), got.Buckets)
-	}
-	if got.Buckets[0].UpperBound == nil || *got.Buckets[0].UpperBound != 0.1 || got.Buckets[0].Count != 1 {
-		t.Errorf("bucket 0: %+v", got.Buckets[0])
-	}
-	if got.Buckets[2].UpperBound != nil {
-		t.Errorf("bucket 2 (+Inf) should have nil UpperBound, got %v", got.Buckets[2].UpperBound)
+	if len(dp.BucketCounts) != 3 || len(dp.ExplicitBounds) != 2 {
+		t.Errorf("buckets shape: counts=%v bounds=%v", dp.BucketCounts, dp.ExplicitBounds)
 	}
 }
 
@@ -300,37 +303,22 @@ func TestMetricsToEntries_ExponentialHistogram(t *testing.T) {
 				TimeUnixNano: 1714_500_000_000_000_000,
 				Count:        4,
 				Sum:          ptr(10.0),
-				Scale:        0, // base = 2
+				Scale:        0,
 				ZeroCount:    1,
 				Positive: &metricspb.ExponentialHistogramDataPoint_Buckets{
 					Offset:       0,
-					BucketCounts: []uint64{2, 1}, // bucket [1, 2): 2, bucket [2, 4): 1
+					BucketCounts: []uint64{2, 1},
 				},
 			}},
 		}},
 	}
 	got := MetricsToEntries(makeRequest(m), newRunContext())[0]
-	if got.InstrumentType != "histogram" {
-		t.Errorf("instrument_type: %q", got.InstrumentType)
+	exp, ok := got.Data.(*metricspb.Metric_ExponentialHistogram)
+	if !ok {
+		t.Fatalf("not an exponential histogram: %T", got.Data)
 	}
-	if got.Count == nil || *got.Count != 4 {
-		t.Errorf("count: %v", got.Count)
-	}
-	// Expect 4 buckets: zero (UB=0, count=1), positive[0] (UB=2, count=2), positive[1] (UB=4, count=1), +Inf (UB=nil, count=0).
-	if len(got.Buckets) != 4 {
-		t.Fatalf("buckets: want 4, got %d (%v)", len(got.Buckets), got.Buckets)
-	}
-	if got.Buckets[0].UpperBound == nil || *got.Buckets[0].UpperBound != 0 || got.Buckets[0].Count != 1 {
-		t.Errorf("zero bucket: %+v", got.Buckets[0])
-	}
-	if got.Buckets[1].UpperBound == nil || *got.Buckets[1].UpperBound != 2 || got.Buckets[1].Count != 2 {
-		t.Errorf("positive bucket 0 (UB=2): %+v", got.Buckets[1])
-	}
-	if got.Buckets[2].UpperBound == nil || *got.Buckets[2].UpperBound != 4 || got.Buckets[2].Count != 1 {
-		t.Errorf("positive bucket 1 (UB=4): %+v", got.Buckets[2])
-	}
-	if got.Buckets[3].UpperBound != nil {
-		t.Errorf("last bucket (+Inf) should have nil UpperBound, got %v", got.Buckets[3].UpperBound)
+	if exp.ExponentialHistogram.DataPoints[0].Count != 4 {
+		t.Errorf("count: %d", exp.ExponentialHistogram.DataPoints[0].Count)
 	}
 }
 

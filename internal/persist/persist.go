@@ -6,7 +6,6 @@ import (
 	"crypto/rand"
 	"crypto/sha1"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -19,6 +18,12 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
+	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
+	resourcepb "go.opentelemetry.io/proto/otlp/resource/v1"
+	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
+	"google.golang.org/protobuf/encoding/protojson"
 
 	"github.com/bjk95/defrost/internal/models"
 )
@@ -37,6 +42,11 @@ const (
 	rootSpanName = "defrost.run"
 )
 
+// RootSpanName is the OTel span.Name used for every defrost.run root span.
+// Exported so the serve layer can find root spans by name without
+// hard-coding the literal.
+const RootSpanName = rootSpanName
+
 // Options controls Backend creation.
 type Options struct {
 	RepoDir    string
@@ -48,15 +58,29 @@ type Options struct {
 
 const DevDir = ".defrost-dev"
 
-// Backend is the swappable persistence layer. Schema 3.
+// Backend is the swappable persistence layer. Spans and metrics are
+// passed and returned as the canonical OTel proto types — *tracepb.Span,
+// *metricspb.Metric — wrapped in their per-record Resource via
+// *tracepb.ResourceSpans / *metricspb.ResourceMetrics. On disk each
+// line is one ResourceSpans (single Span) or one ResourceMetrics
+// (single Metric with one data point).
 type Backend interface {
 	InitialisePersistence() error
-	// InsertNewRun atomically persists the root run span, every test span,
-	// and every metric data point produced by one defrost exec invocation.
-	InsertNewRun(root models.Span, testSpans []models.Span, metrics []models.MetricEntry) error
-	// GetTestHistory returns every span persisted under traces/<testName>.ndjson,
-	// sorted oldest first by start time. Empty slice when nothing matches.
-	GetTestHistory(testName string) ([]models.Span, error)
+
+	// InsertNewRun atomically persists everything produced by one
+	// defrost exec invocation: the root run span, every test span, and
+	// every metric data point. Each ResourceSpans / ResourceMetrics
+	// carries its own Resource — span and metric Resources may differ
+	// (caller strips run-unique fields from the metric Resource to keep
+	// metric cardinality bounded).
+	InsertNewRun(traces []*tracepb.ResourceSpans, metrics []*metricspb.ResourceMetrics) error
+
+	// GetTestHistory returns every span persisted under
+	// traces/<testName>.ndjson, sorted oldest first by start time. Each
+	// element is a ResourceSpans containing exactly one Span. Empty
+	// slice when nothing matches.
+	GetTestHistory(testName string) ([]*tracepb.ResourceSpans, error)
+
 	// GetSuppressions returns the current list of suppressed test IDs,
 	// or an empty slice if none have been recorded. A missing data branch
 	// is not an error.
@@ -64,11 +88,12 @@ type Backend interface {
 	// UpdateSuppressions reads the current list, applies mutate, and
 	// writes the result. msg is the commit message used for the update.
 	UpdateSuppressions(mutate func([]string) []string, msg string) error
+
 	// LoadAll returns every root run span and every test span across
 	// all files, grouped by encoded span name. Used by `defrost serve`
 	// to populate the heatmap grid in a single read instead of N.
 	// Returns nil slices/maps when there is no data yet.
-	LoadAll() (rootSpans []models.Span, byEncodedName map[string][]models.Span, err error)
+	LoadAll() (rootSpans []*tracepb.ResourceSpans, byEncodedName map[string][]*tracepb.ResourceSpans, err error)
 }
 
 // New returns the Backend implied by opts. Dev mode selects the local
@@ -111,53 +136,54 @@ func DetectRunContext(opts Options, cmd []string, defrostVersion string) (models
 	}
 
 	runID := NewRunID()
-	res := map[string]any{
-		"service.name":            "defrost",
-		"service.version":         defrostVersion,
-		"cicd.pipeline.run.id":    runID,
-		"host.os.type":            runtime.GOOS,
-		"host.arch":               runtime.GOARCH,
-		"process.runtime.version": runtime.Version(),
-		"defrost.cmd":             cmd,
-		"defrost.cmd_hash":        cmdHash(cmd),
-		"defrost.run_id":          runID,
+	attrs := []*commonpb.KeyValue{
+		models.StringAttr("service.name", "defrost"),
+		models.StringAttr("service.version", defrostVersion),
+		models.StringAttr("cicd.pipeline.run.id", runID),
+		models.StringAttr("host.os.type", runtime.GOOS),
+		models.StringAttr("host.arch", runtime.GOARCH),
+		models.StringAttr("process.runtime.version", runtime.Version()),
+		models.StringArrayAttr("defrost.cmd", cmd),
+		models.StringAttr("defrost.cmd_hash", cmdHash(cmd)),
+		models.StringAttr("defrost.run_id", runID),
+		models.StringAttr("defrost.runner", inferRunner(cmd)),
 	}
 
 	if out, err := runGit(opts.RepoDir, "log", "-1", "--format=%H%n%P%n%ae%n%an"); err == nil {
 		lines := strings.SplitN(out, "\n", 4)
 		if len(lines) >= 1 && lines[0] != "" {
-			res["vcs.repository.ref.revision"] = lines[0]
+			attrs = append(attrs, models.StringAttr("vcs.repository.ref.revision", lines[0]))
 		}
 		if len(lines) >= 2 {
 			parents := strings.Fields(lines[1])
 			if len(parents) > 0 {
-				res["defrost.parent_commit"] = parents[0]
+				attrs = append(attrs, models.StringAttr("defrost.parent_commit", parents[0]))
 			}
 		}
 		if len(lines) >= 3 && lines[2] != "" {
-			res["defrost.author_email"] = lines[2]
+			attrs = append(attrs, models.StringAttr("defrost.author_email", lines[2]))
 		}
 		if len(lines) >= 4 && lines[3] != "" {
-			res["defrost.author_name"] = lines[3]
+			attrs = append(attrs, models.StringAttr("defrost.author_name", lines[3]))
 		}
 	}
 
 	if out, err := runGit(opts.RepoDir, "rev-parse", "--abbrev-ref", "HEAD"); err == nil && out != "HEAD" && out != "" {
-		res["vcs.repository.ref.name"] = out
+		attrs = append(attrs, models.StringAttr("vcs.repository.ref.name", out))
 	} else if v := os.Getenv("GITHUB_HEAD_REF"); v != "" {
-		res["vcs.repository.ref.name"] = v
+		attrs = append(attrs, models.StringAttr("vcs.repository.ref.name", v))
 	} else if v := os.Getenv("GITHUB_REF_NAME"); v != "" {
-		res["vcs.repository.ref.name"] = v
+		attrs = append(attrs, models.StringAttr("vcs.repository.ref.name", v))
 	}
 
 	if pr := parsePRFromEnv(); pr != 0 {
-		res["vcs.repository.change.id"] = strconv.Itoa(pr)
+		attrs = append(attrs, models.StringAttr("vcs.repository.change.id", strconv.Itoa(pr)))
 	}
 
 	dirty, dirtyHash := workingTreeStatus(opts.RepoDir)
-	res["defrost.dirty"] = dirty
+	attrs = append(attrs, models.BoolAttr("defrost.dirty", dirty))
 	if dirtyHash != "" {
-		res["defrost.dirty_hash"] = dirtyHash
+		attrs = append(attrs, models.StringAttr("defrost.dirty_hash", dirtyHash))
 	}
 
 	now := time.Now().UnixNano()
@@ -165,26 +191,130 @@ func DetectRunContext(opts Options, cmd []string, defrostVersion string) (models
 		RunID:             runID,
 		TraceID:           models.DeriveTraceID(runID),
 		RootSpanID:        models.NewSpanID(),
-		Resource:          res,
+		Resource:          &resourcepb.Resource{Attributes: attrs},
 		StartTimeUnixNano: now,
 	}, nil
+}
+
+// MetricResource returns the subset of the run's Resource attributes that
+// is safe to attach to metrics — i.e. excluding fields that would
+// explode time-series cardinality (run_id, full cmd, dirty hash, author,
+// commit). Spans keep the full identity Resource because spans aren't
+// aggregated; metrics do not.
+func MetricResource(run models.RunContext) *resourcepb.Resource {
+	if run.Resource == nil {
+		return nil
+	}
+	skip := map[string]struct{}{
+		"defrost.run_id":             {},
+		"cicd.pipeline.run.id":       {},
+		"defrost.cmd":                {},
+		"defrost.dirty_hash":         {},
+		"defrost.author_email":       {},
+		"defrost.author_name":        {},
+		"defrost.parent_commit":      {},
+		"vcs.repository.ref.revision": {},
+	}
+	out := &resourcepb.Resource{}
+	for _, kv := range run.Resource.Attributes {
+		if _, drop := skip[kv.Key]; drop {
+			continue
+		}
+		out.Attributes = append(out.Attributes, kv)
+	}
+	return out
+}
+
+// inferRunner returns a stable token identifying the runner used in cmd:
+// "go", "pytest", "jest", or "" when nothing matches.
+func inferRunner(cmd []string) string {
+	if len(cmd) == 0 {
+		return ""
+	}
+	switch {
+	case len(cmd) >= 2 && cmd[0] == "go" && cmd[1] == "test":
+		return "go"
+	case cmd[0] == "pytest" || cmd[0] == "py.test":
+		return "pytest"
+	case cmd[0] == "jest" || cmd[0] == "npx" && len(cmd) > 1 && cmd[1] == "jest" || cmd[0] == "npm" && len(cmd) > 1 && cmd[1] == "test":
+		return "jest"
+	}
+	return ""
 }
 
 // NewRootSpan returns the bookkeeping span representing one defrost exec
 // invocation. End time and status are filled in by the caller after the
 // child exits and persistence either succeeds or fails.
-func NewRootSpan(run models.RunContext) models.Span {
-	return models.Span{
-		Schema:            models.SchemaV3,
-		TraceID:           run.TraceID,
-		SpanID:            run.RootSpanID,
+func NewRootSpan(run models.RunContext) *tracepb.Span {
+	return &tracepb.Span{
+		TraceId:           run.TraceID,
+		SpanId:            run.RootSpanID,
 		Name:              rootSpanName,
-		Kind:              "INTERNAL",
-		StartTimeUnixNano: run.StartTimeUnixNano,
-		Status:            models.SpanStatus{Code: "UNSET"},
-		Attributes:        map[string]any{"defrost.run_id": run.RunID},
-		Resource:          run.Resource,
+		Kind:              tracepb.Span_SPAN_KIND_INTERNAL,
+		StartTimeUnixNano: uint64(run.StartTimeUnixNano),
+		Status:            &tracepb.Status{Code: tracepb.Status_STATUS_CODE_UNSET},
+		Attributes:        []*commonpb.KeyValue{models.StringAttr("defrost.run_id", run.RunID)},
 	}
+}
+
+// WrapSpansInResource constructs one *tracepb.ResourceSpans per span,
+// each carrying the same Resource. This is the storage shape: each line
+// in traces/<name>.ndjson is one ResourceSpans with a single Span.
+func WrapSpansInResource(resource *resourcepb.Resource, spans []*tracepb.Span) []*tracepb.ResourceSpans {
+	if len(spans) == 0 {
+		return nil
+	}
+	out := make([]*tracepb.ResourceSpans, 0, len(spans))
+	for _, s := range spans {
+		out = append(out, &tracepb.ResourceSpans{
+			Resource: resource,
+			ScopeSpans: []*tracepb.ScopeSpans{{
+				Scope: &commonpb.InstrumentationScope{Name: "defrost"},
+				Spans: []*tracepb.Span{s},
+			}},
+		})
+	}
+	return out
+}
+
+// WrapMetricsInResource constructs one *metricspb.ResourceMetrics per
+// metric, each carrying the same Resource. This is the storage shape:
+// each line in metrics/<name>.ndjson is one ResourceMetrics with a
+// single Metric (which itself contains one data point).
+func WrapMetricsInResource(resource *resourcepb.Resource, metrics []*metricspb.Metric) []*metricspb.ResourceMetrics {
+	if len(metrics) == 0 {
+		return nil
+	}
+	out := make([]*metricspb.ResourceMetrics, 0, len(metrics))
+	for _, m := range metrics {
+		out = append(out, &metricspb.ResourceMetrics{
+			Resource: resource,
+			ScopeMetrics: []*metricspb.ScopeMetrics{{
+				Scope:   &commonpb.InstrumentationScope{Name: "defrost"},
+				Metrics: []*metricspb.Metric{m},
+			}},
+		})
+	}
+	return out
+}
+
+// SpanFromResourceSpans returns the single *tracepb.Span inside a
+// ResourceSpans we wrote. Panics if the ResourceSpans is empty (we never
+// write empty wrappers).
+func SpanFromResourceSpans(rs *tracepb.ResourceSpans) *tracepb.Span {
+	if rs == nil || len(rs.ScopeSpans) == 0 || len(rs.ScopeSpans[0].Spans) == 0 {
+		return nil
+	}
+	return rs.ScopeSpans[0].Spans[0]
+}
+
+// MetricFromResourceMetrics returns the single *metricspb.Metric inside
+// a ResourceMetrics we wrote.
+func MetricFromResourceMetrics(rm *metricspb.ResourceMetrics) *metricspb.Metric {
+	if rm == nil || len(rm.ScopeMetrics) == 0 || len(rm.ScopeMetrics[0].Metrics) == 0 {
+		return nil
+	}
+	return rm.ScopeMetrics[0].Metrics[0]
 }
 
 // gitBackend stores spans and metrics on a dedicated git data branch.
@@ -192,9 +322,9 @@ type gitBackend struct{ opts Options }
 
 func (b *gitBackend) InitialisePersistence() error { return nil }
 
-func (b *gitBackend) InsertNewRun(root models.Span, testSpans []models.Span, metrics []models.MetricEntry) error {
-	if root.SpanID == "" {
-		return errors.New("persist: empty root span id")
+func (b *gitBackend) InsertNewRun(traces []*tracepb.ResourceSpans, metrics []*metricspb.ResourceMetrics) error {
+	if len(traces) == 0 && len(metrics) == 0 {
+		return nil
 	}
 
 	branch := b.opts.DataBranch
@@ -224,21 +354,21 @@ func (b *gitBackend) InsertNewRun(root models.Span, testSpans []models.Span, met
 		}
 	}
 
-	if err := appendSpans(workDir, append([]models.Span{root}, testSpans...)); err != nil {
+	if err := appendSpans(workDir, traces); err != nil {
 		return err
 	}
 	if err := appendMetrics(workDir, metrics); err != nil {
 		return err
 	}
 
-	if err := commitAll(workDir, commitMessage(root, len(testSpans)+1, len(metrics))); err != nil {
+	if err := commitAll(workDir, commitMessage(traces, metrics)); err != nil {
 		return err
 	}
 
 	return pushWithRetry(workDir, branch, branchExisted)
 }
 
-func (b *gitBackend) GetTestHistory(testName string) ([]models.Span, error) {
+func (b *gitBackend) GetTestHistory(testName string) ([]*tracepb.ResourceSpans, error) {
 	branch := b.opts.DataBranch
 	if branch == "" {
 		branch = DefaultDataBranch
@@ -260,7 +390,7 @@ func (b *gitBackend) GetTestHistory(testName string) ([]models.Span, error) {
 		return nil, fmt.Errorf("mktemp: %w", err)
 	}
 	defer os.RemoveAll(workDir)
-	_ = os.Remove(workDir) // clone wants empty path
+	_ = os.Remove(workDir)
 
 	if _, err := runGit("", "clone", "--quiet", "--depth=1", "--single-branch", "--branch", branch, remoteURL, workDir); err != nil {
 		return nil, fmt.Errorf("clone data branch: %w", err)
@@ -269,7 +399,7 @@ func (b *gitBackend) GetTestHistory(testName string) ([]models.Span, error) {
 	return readSpansFromDir(workDir, testName)
 }
 
-func (b *gitBackend) LoadAll() ([]models.Span, map[string][]models.Span, error) {
+func (b *gitBackend) LoadAll() ([]*tracepb.ResourceSpans, map[string][]*tracepb.ResourceSpans, error) {
 	branch := b.opts.DataBranch
 	if branch == "" {
 		branch = DefaultDataBranch
@@ -306,20 +436,20 @@ func (b *fileBackend) InitialisePersistence() error {
 	return os.MkdirAll(b.dir, 0o755)
 }
 
-func (b *fileBackend) InsertNewRun(root models.Span, testSpans []models.Span, metrics []models.MetricEntry) error {
-	if root.SpanID == "" {
-		return errors.New("persist: empty root span id")
+func (b *fileBackend) InsertNewRun(traces []*tracepb.ResourceSpans, metrics []*metricspb.ResourceMetrics) error {
+	if len(traces) == 0 && len(metrics) == 0 {
+		return nil
 	}
 	if err := b.InitialisePersistence(); err != nil {
 		return err
 	}
-	if err := appendSpans(b.dir, append([]models.Span{root}, testSpans...)); err != nil {
+	if err := appendSpans(b.dir, traces); err != nil {
 		return err
 	}
 	return appendMetrics(b.dir, metrics)
 }
 
-func (b *fileBackend) GetTestHistory(testName string) ([]models.Span, error) {
+func (b *fileBackend) GetTestHistory(testName string) ([]*tracepb.ResourceSpans, error) {
 	if _, err := os.Stat(b.dir); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
@@ -329,7 +459,7 @@ func (b *fileBackend) GetTestHistory(testName string) ([]models.Span, error) {
 	return readSpansFromDir(b.dir, testName)
 }
 
-func (b *fileBackend) LoadAll() ([]models.Span, map[string][]models.Span, error) {
+func (b *fileBackend) LoadAll() ([]*tracepb.ResourceSpans, map[string][]*tracepb.ResourceSpans, error) {
 	if _, err := os.Stat(b.dir); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil, nil
@@ -341,6 +471,11 @@ func (b *fileBackend) LoadAll() ([]models.Span, map[string][]models.Span, error)
 
 // --- write helpers ---
 
+// protoMarshalCompact writes a single-line JSON encoding of a proto
+// message using the canonical OTLP/JSON form. We strip whitespace so each
+// line is one record (NDJSON discipline).
+var protoMarshal = protojson.MarshalOptions{UseProtoNames: true, EmitUnpopulated: false}
+
 func writeSeed(workDir string) error {
 	if err := os.WriteFile(filepath.Join(workDir, ".gitattributes"), []byte(gitAttributes), 0o644); err != nil {
 		return err
@@ -348,20 +483,25 @@ func writeSeed(workDir string) error {
 	return os.WriteFile(filepath.Join(workDir, "README.md"), []byte(readme), 0o644)
 }
 
-func appendSpans(workDir string, spans []models.Span) error {
-	if len(spans) == 0 {
+func appendSpans(workDir string, traces []*tracepb.ResourceSpans) error {
+	if len(traces) == 0 {
 		return nil
 	}
 	dir := filepath.Join(workDir, "traces")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	for _, s := range spans {
-		line, err := json.Marshal(s)
-		if err != nil {
-			return fmt.Errorf("marshal span %s: %w", s.Name, err)
+	for _, rs := range traces {
+		span := SpanFromResourceSpans(rs)
+		if span == nil {
+			continue
 		}
-		path := filepath.Join(dir, EncodeName(s.Name)+".ndjson")
+		line, err := protoMarshal.Marshal(rs)
+		if err != nil {
+			return fmt.Errorf("marshal span %s: %w", span.Name, err)
+		}
+		line = bytes.ReplaceAll(line, []byte("\n"), []byte(" "))
+		path := filepath.Join(dir, EncodeName(span.Name)+".ndjson")
 		if err := appendLine(path, line); err != nil {
 			return err
 		}
@@ -369,20 +509,25 @@ func appendSpans(workDir string, spans []models.Span) error {
 	return nil
 }
 
-func appendMetrics(workDir string, entries []models.MetricEntry) error {
-	if len(entries) == 0 {
+func appendMetrics(workDir string, metrics []*metricspb.ResourceMetrics) error {
+	if len(metrics) == 0 {
 		return nil
 	}
 	dir := filepath.Join(workDir, "metrics")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	for _, e := range entries {
-		line, err := json.Marshal(e)
-		if err != nil {
-			return fmt.Errorf("marshal metric %s: %w", e.Name, err)
+	for _, rm := range metrics {
+		m := MetricFromResourceMetrics(rm)
+		if m == nil {
+			continue
 		}
-		path := filepath.Join(dir, EncodeName(e.Name)+".ndjson")
+		line, err := protoMarshal.Marshal(rm)
+		if err != nil {
+			return fmt.Errorf("marshal metric %s: %w", m.Name, err)
+		}
+		line = bytes.ReplaceAll(line, []byte("\n"), []byte(" "))
+		path := filepath.Join(dir, EncodeName(m.Name)+".ndjson")
 		if err := appendLine(path, line); err != nil {
 			return err
 		}
@@ -408,7 +553,7 @@ func appendLine(path string, line []byte) error {
 
 // --- read helpers ---
 
-func readSpansFromDir(dir, testName string) ([]models.Span, error) {
+func readSpansFromDir(dir, testName string) ([]*tracepb.ResourceSpans, error) {
 	path := filepath.Join(dir, "traces", EncodeName(testName)+".ndjson")
 	f, err := os.Open(path)
 	if err != nil {
@@ -419,19 +564,22 @@ func readSpansFromDir(dir, testName string) ([]models.Span, error) {
 	}
 	defer f.Close()
 
-	spans, err := parseSpansNDJSON(f)
+	traces, err := parseSpansNDJSON(f)
 	if err != nil {
 		return nil, err
 	}
-	sort.Slice(spans, func(i, j int) bool { return spans[i].StartTimeUnixNano < spans[j].StartTimeUnixNano })
-	return spans, nil
+	sort.Slice(traces, func(i, j int) bool {
+		a := SpanFromResourceSpans(traces[i])
+		b := SpanFromResourceSpans(traces[j])
+		if a == nil || b == nil {
+			return false
+		}
+		return a.StartTimeUnixNano < b.StartTimeUnixNano
+	})
+	return traces, nil
 }
 
-// readAllSpans walks dir/traces/, parses every NDJSON file, and returns
-// (root run spans, test spans grouped by file basename without .ndjson).
-// The grouping key matches what the file system stored — i.e. EncodeName
-// of the span name. Empty inputs return (nil, nil, nil).
-func readAllSpans(dir string) ([]models.Span, map[string][]models.Span, error) {
+func readAllSpans(dir string) ([]*tracepb.ResourceSpans, map[string][]*tracepb.ResourceSpans, error) {
 	tracesDir := filepath.Join(dir, "traces")
 	files, err := os.ReadDir(tracesDir)
 	if err != nil {
@@ -440,9 +588,9 @@ func readAllSpans(dir string) ([]models.Span, map[string][]models.Span, error) {
 		}
 		return nil, nil, err
 	}
-	const rootFile = "defrost.run.ndjson"
-	var roots []models.Span
-	byEncodedName := make(map[string][]models.Span)
+	rootFile := EncodeName(rootSpanName) + ".ndjson"
+	var roots []*tracepb.ResourceSpans
+	byEncodedName := make(map[string][]*tracepb.ResourceSpans)
 	for _, f := range files {
 		if f.IsDir() || !strings.HasSuffix(f.Name(), ".ndjson") {
 			continue
@@ -452,23 +600,23 @@ func readAllSpans(dir string) ([]models.Span, map[string][]models.Span, error) {
 		if err != nil {
 			return nil, nil, err
 		}
-		spans, err := parseSpansNDJSON(fh)
+		traces, err := parseSpansNDJSON(fh)
 		fh.Close()
 		if err != nil {
 			return nil, nil, fmt.Errorf("parse %s: %w", full, err)
 		}
 		if f.Name() == rootFile {
-			roots = append(roots, spans...)
+			roots = append(roots, traces...)
 			continue
 		}
 		key := strings.TrimSuffix(f.Name(), ".ndjson")
-		byEncodedName[key] = spans
+		byEncodedName[key] = traces
 	}
 	return roots, byEncodedName, nil
 }
 
-func parseSpansNDJSON(r io.Reader) ([]models.Span, error) {
-	var out []models.Span
+func parseSpansNDJSON(r io.Reader) ([]*tracepb.ResourceSpans, error) {
+	var out []*tracepb.ResourceSpans
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 64*1024), 8*1024*1024)
 	for sc.Scan() {
@@ -476,32 +624,45 @@ func parseSpansNDJSON(r io.Reader) ([]models.Span, error) {
 		if len(line) == 0 {
 			continue
 		}
-		var s models.Span
-		if err := json.Unmarshal(line, &s); err != nil {
+		rs := &tracepb.ResourceSpans{}
+		if err := protojson.Unmarshal(line, rs); err != nil {
 			return nil, fmt.Errorf("parse ndjson line: %w", err)
 		}
-		out = append(out, s)
+		out = append(out, rs)
 	}
 	return out, sc.Err()
 }
 
-func commitMessage(root models.Span, nSpans, nMetrics int) string {
-	commit, _ := root.Resource["vcs.repository.ref.revision"].(string)
-	short := commit
-	if len(short) > 7 {
-		short = short[:7]
-	}
-	if short == "" {
-		runID, _ := root.Resource["defrost.run_id"].(string)
-		short = runID
-		if len(short) > 8 {
-			short = short[:8]
+func commitMessage(traces []*tracepb.ResourceSpans, metrics []*metricspb.ResourceMetrics) string {
+	short := ""
+	for _, rs := range traces {
+		span := SpanFromResourceSpans(rs)
+		if span == nil || span.Name != rootSpanName {
+			continue
+		}
+		commit := models.ResourceString(rs.Resource, "vcs.repository.ref.revision")
+		if commit != "" {
+			short = commit
+			if len(short) > 7 {
+				short = short[:7]
+			}
+			break
+		}
+		runID := models.ResourceString(rs.Resource, "defrost.run_id")
+		if runID != "" {
+			short = runID
+			if len(short) > 8 {
+				short = short[:8]
+			}
 		}
 	}
-	return fmt.Sprintf("results for %s (%d spans, %d metrics)", short, nSpans, nMetrics)
+	if short == "" {
+		short = "unknown"
+	}
+	return fmt.Sprintf("results for %s (%d spans, %d metrics)", short, len(traces), len(metrics))
 }
 
-// --- preserved helpers (unchanged from schema 2) ---
+// --- preserved helpers (unchanged) ---
 
 type gitErr struct {
 	args   []string

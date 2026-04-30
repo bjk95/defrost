@@ -10,6 +10,9 @@ import (
 	"strings"
 	"time"
 
+	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
+	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
+
 	"github.com/bjk95/defrost/internal/models"
 	"github.com/bjk95/defrost/internal/persist"
 )
@@ -63,7 +66,7 @@ func New(opts persist.Options, assets fs.FS) http.Handler {
 		w.Header().Set("Cache-Control", "public, max-age=86400")
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(struct {
-			Test entryDTO `json:"test"`
+			Test entryDTO     `json:"test"`
 			Run  runDetailDTO `json:"run"`
 		}{Test: test, Run: run})
 	})
@@ -136,28 +139,47 @@ func buildGridResponse(ds Dataset) gridResponse {
 		Runs:  make([]runDTO, 0, len(ds.Roots)),
 		Tests: make([]testDTO, 0, len(ds.TestSpans)),
 	}
-	for _, r := range ds.Roots {
+	for _, rs := range ds.Roots {
+		span := persist.SpanFromResourceSpans(rs)
+		if span == nil {
+			continue
+		}
 		out.Runs = append(out.Runs, runDTO{
-			RunID:     resourceString(r.Resource, "defrost.run_id"),
-			Timestamp: nanosToRFC3339(r.StartTimeUnixNano),
-			Commit:    resourceString(r.Resource, "vcs.repository.ref.revision"),
-			Branch:    resourceString(r.Resource, "vcs.repository.ref.name"),
+			RunID:     runIDOf(rs),
+			Timestamp: nanosToRFC3339(int64(span.StartTimeUnixNano)),
+			Commit:    models.ResourceString(rs.Resource, "vcs.repository.ref.revision"),
+			Branch:    models.ResourceString(rs.Resource, "vcs.repository.ref.name"),
 		})
 	}
-	for tid, spans := range ds.TestSpans {
+	for tid, traces := range ds.TestSpans {
 		// Sort spans by StartTimeUnixNano ascending so cells flow
 		// left→right as older→newer (matches the "← older · newer →"
 		// header).
-		sorted := append([]models.Span(nil), spans...)
+		sorted := append([]*tracepb.ResourceSpans(nil), traces...)
 		sort.Slice(sorted, func(i, j int) bool {
-			return sorted[i].StartTimeUnixNano < sorted[j].StartTimeUnixNano
+			a := persist.SpanFromResourceSpans(sorted[i])
+			b := persist.SpanFromResourceSpans(sorted[j])
+			if a == nil || b == nil {
+				return false
+			}
+			return a.StartTimeUnixNano < b.StartTimeUnixNano
 		})
-		t := testDTO{TestID: tid, TestName: sorted[0].Name}
-		for _, s := range sorted {
-			rid, _ := s.Attributes["defrost.run_id"].(string)
-			durMs := (s.EndTimeUnixNano - s.StartTimeUnixNano) / 1_000_000
+		first := persist.SpanFromResourceSpans(sorted[0])
+		if first == nil {
+			continue
+		}
+		t := testDTO{TestID: tid, TestName: first.Name}
+		for _, rs := range sorted {
+			s := persist.SpanFromResourceSpans(rs)
+			if s == nil {
+				continue
+			}
+			durMs := int64(0)
+			if s.EndTimeUnixNano > s.StartTimeUnixNano {
+				durMs = int64((s.EndTimeUnixNano - s.StartTimeUnixNano) / 1_000_000)
+			}
 			t.Cells = append(t.Cells, cellDTO{
-				RunID:      rid,
+				RunID:      runIDOf(rs),
 				Status:     spanResultStatus(s),
 				DurationMs: durMs,
 			})
@@ -168,48 +190,69 @@ func buildGridResponse(ds Dataset) gridResponse {
 }
 
 func lookupEntry(ds Dataset, tid, rid string) (entryDTO, runDetailDTO, bool) {
-	spans, ok := ds.TestSpans[tid]
+	traces, ok := ds.TestSpans[tid]
 	if !ok {
 		return entryDTO{}, runDetailDTO{}, false
 	}
-	var hit models.Span
-	found := false
-	for _, s := range spans {
-		if got, _ := s.Attributes["defrost.run_id"].(string); got == rid {
-			hit = s
-			found = true
+	var hit *tracepb.ResourceSpans
+	for _, rs := range traces {
+		if runIDOf(rs) == rid {
+			hit = rs
 			break
 		}
 	}
-	if !found {
+	if hit == nil {
 		return entryDTO{}, runDetailDTO{}, false
 	}
-	for _, r := range ds.Roots {
-		if got, _ := r.Resource["defrost.run_id"].(string); got == rid {
-			return spanToEntryDTO(hit), rootSpanToRunDTO(r), true
+	for _, root := range ds.Roots {
+		if runIDOf(root) == rid {
+			return spanToEntryDTO(hit), rootSpanToRunDTO(root), true
 		}
 	}
 	return entryDTO{}, runDetailDTO{}, false
 }
 
-func spanToEntryDTO(s models.Span) entryDTO {
-	rid, _ := s.Attributes["defrost.run_id"].(string)
-	resultStatus, _ := s.Attributes["test.case.result.status"].(string)
+// runIDOf reads the defrost.run_id from either the ResourceSpans's
+// Resource (preferred for root spans) or the contained Span's Attributes
+// (preferred for test spans).
+func runIDOf(rs *tracepb.ResourceSpans) string {
+	if rs == nil {
+		return ""
+	}
+	if id := models.ResourceString(rs.Resource, "defrost.run_id"); id != "" {
+		return id
+	}
+	span := persist.SpanFromResourceSpans(rs)
+	if span == nil {
+		return ""
+	}
+	return models.AttrString(span.Attributes, "defrost.run_id")
+}
+
+func spanToEntryDTO(rs *tracepb.ResourceSpans) entryDTO {
+	s := persist.SpanFromResourceSpans(rs)
+	if s == nil {
+		return entryDTO{}
+	}
+	resultStatus := models.AttrString(s.Attributes, "test.case.result.status")
 	output := ""
 	for _, ev := range s.Events {
 		if ev.Name == "test.output" {
-			if body, ok := ev.Attributes["body"].(string); ok {
-				output = body
+			output = models.AttrString(ev.Attributes, "body")
+			if output != "" {
 				break
 			}
 		}
 	}
-	durMs := (s.EndTimeUnixNano - s.StartTimeUnixNano) / 1_000_000
+	durMs := int64(0)
+	if s.EndTimeUnixNano > s.StartTimeUnixNano {
+		durMs = int64((s.EndTimeUnixNano - s.StartTimeUnixNano) / 1_000_000)
+	}
 	return entryDTO{
 		TestID:     persist.EncodeName(s.Name),
 		TestName:   s.Name,
-		RunID:      rid,
-		Timestamp:  nanosToRFC3339(s.StartTimeUnixNano),
+		RunID:      runIDOf(rs),
+		Timestamp:  nanosToRFC3339(int64(s.StartTimeUnixNano)),
 		Ran:        resultStatus != "skipped",
 		Passed:     resultStatus == "passed",
 		Status:     compactStatusFromSemconv(resultStatus),
@@ -218,56 +261,69 @@ func spanToEntryDTO(s models.Span) entryDTO {
 	}
 }
 
-func rootSpanToRunDTO(r models.Span) runDetailDTO {
-	prStr := resourceString(r.Resource, "vcs.repository.change.id")
+func rootSpanToRunDTO(rs *tracepb.ResourceSpans) runDetailDTO {
+	span := persist.SpanFromResourceSpans(rs)
+	if span == nil {
+		return runDetailDTO{}
+	}
+	prStr := models.ResourceString(rs.Resource, "vcs.repository.change.id")
 	pr := 0
 	if prStr != "" {
-		// Best-effort parse; runDetailDTO field is int.
 		var n int
 		_, _ = fmtSscanf(prStr, &n)
 		pr = n
 	}
-	cmd, _ := r.Resource["defrost.cmd"].([]string)
-	if cmd == nil {
-		// JSON-decoded slices come back as []any; widen.
-		if anySlice, ok := r.Resource["defrost.cmd"].([]any); ok {
-			for _, v := range anySlice {
-				if s, ok := v.(string); ok {
-					cmd = append(cmd, s)
-				}
+	cmd := readStringArrayAttr(rs.Resource.GetAttributes(), "defrost.cmd")
+	dirty := false
+	for _, kv := range rs.Resource.GetAttributes() {
+		if kv.Key == "defrost.dirty" {
+			if v, ok := kv.Value.GetValue().(*commonpb.AnyValue_BoolValue); ok {
+				dirty = v.BoolValue
 			}
+			break
 		}
 	}
-	dirty, _ := r.Resource["defrost.dirty"].(bool)
 	return runDetailDTO{
-		RunID:       resourceString(r.Resource, "defrost.run_id"),
-		Commit:      resourceString(r.Resource, "vcs.repository.ref.revision"),
-		Parent:      resourceString(r.Resource, "defrost.parent_commit"),
-		Branch:      resourceString(r.Resource, "vcs.repository.ref.name"),
+		RunID:       models.ResourceString(rs.Resource, "defrost.run_id"),
+		Commit:      models.ResourceString(rs.Resource, "vcs.repository.ref.revision"),
+		Parent:      models.ResourceString(rs.Resource, "defrost.parent_commit"),
+		Branch:      models.ResourceString(rs.Resource, "vcs.repository.ref.name"),
 		PR:          pr,
-		AuthorEmail: resourceString(r.Resource, "defrost.author_email"),
-		AuthorName:  resourceString(r.Resource, "defrost.author_name"),
+		AuthorEmail: models.ResourceString(rs.Resource, "defrost.author_email"),
+		AuthorName:  models.ResourceString(rs.Resource, "defrost.author_name"),
 		Dirty:       dirty,
-		DirtyHash:   resourceString(r.Resource, "defrost.dirty_hash"),
+		DirtyHash:   models.ResourceString(rs.Resource, "defrost.dirty_hash"),
 		Cmd:         cmd,
-		CmdHash:     resourceString(r.Resource, "defrost.cmd_hash"),
-		GoVersion:   resourceString(r.Resource, "process.runtime.version"),
-		OS:          resourceString(r.Resource, "host.os.type"),
-		Arch:        resourceString(r.Resource, "host.arch"),
-		Timestamp:   nanosToRFC3339(r.StartTimeUnixNano),
+		CmdHash:     models.ResourceString(rs.Resource, "defrost.cmd_hash"),
+		GoVersion:   models.ResourceString(rs.Resource, "process.runtime.version"),
+		OS:          models.ResourceString(rs.Resource, "host.os.type"),
+		Arch:        models.ResourceString(rs.Resource, "host.arch"),
+		Timestamp:   nanosToRFC3339(int64(span.StartTimeUnixNano)),
 	}
 }
 
-// resourceString reads a Resource attribute as a string, returning ""
-// when the key is missing or the value is not a string. JSON-decoded maps
-// hand back interface{} which is type-asserted here.
-func resourceString(res map[string]any, key string) string {
-	v, _ := res[key].(string)
-	return v
+func readStringArrayAttr(attrs []*commonpb.KeyValue, key string) []string {
+	for _, kv := range attrs {
+		if kv.Key != key {
+			continue
+		}
+		arr, ok := kv.Value.GetValue().(*commonpb.AnyValue_ArrayValue)
+		if !ok {
+			return nil
+		}
+		out := make([]string, 0, len(arr.ArrayValue.Values))
+		for _, v := range arr.ArrayValue.Values {
+			if s, ok := v.GetValue().(*commonpb.AnyValue_StringValue); ok {
+				out = append(out, s.StringValue)
+			}
+		}
+		return out
+	}
+	return nil
 }
 
 // nanosToRFC3339 formats a Unix-nano timestamp as RFC 3339, the same wire
-// shape used by the schema-2 RunRecord.Timestamp/Entry.Timestamp fields.
+// shape the schema-2 frontend was built against.
 func nanosToRFC3339(ns int64) string {
 	if ns == 0 {
 		return ""
@@ -275,12 +331,14 @@ func nanosToRFC3339(ns int64) string {
 	return time.Unix(0, ns).UTC().Format(time.RFC3339Nano)
 }
 
-// spanResultStatus converts the OTel `test.case.result.status` attribute
-// (passed/failed/skipped/aborted) into the compact status string the
-// schema-2 frontend grid expects: "pass" / "fail" / "skip" / "panic".
-func spanResultStatus(s models.Span) string {
-	v, _ := s.Attributes["test.case.result.status"].(string)
-	return compactStatusFromSemconv(v)
+// spanResultStatus reads the OTel `test.case.result.status` attribute
+// (passed/failed/skipped/aborted) from a span and converts to the
+// frontend's compact status string.
+func spanResultStatus(s *tracepb.Span) string {
+	if s == nil {
+		return ""
+	}
+	return compactStatusFromSemconv(models.AttrString(s.Attributes, "test.case.result.status"))
 }
 
 func compactStatusFromSemconv(v string) string {
@@ -297,11 +355,9 @@ func compactStatusFromSemconv(v string) string {
 	return v
 }
 
-// fmtSscanf is a tiny wrapper to avoid importing fmt twice in this file.
-// Returns (read, err) but we use it for a single decimal int parse only.
+// fmtSscanf is a tiny helper for parsing one decimal int from a string
+// without pulling strconv in.
 func fmtSscanf(s string, n *int) (int, error) {
-	// Inline strconv for clarity; importing strconv adds a dep we already
-	// touch elsewhere indirectly.
 	parsed := 0
 	for i := 0; i < len(s); i++ {
 		c := s[i]

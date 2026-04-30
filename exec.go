@@ -7,6 +7,9 @@ import (
 	"os"
 	"time"
 
+	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
+	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
+
 	"github.com/bjk95/defrost/internal/golang"
 	"github.com/bjk95/defrost/internal/javascript/jest"
 	"github.com/bjk95/defrost/internal/models"
@@ -103,7 +106,7 @@ func execWith(a runner.Adapter, cmd []string, opts ExecOpts) int {
 		fmt.Fprintf(os.Stderr, "defrost: results: %d pass, %d fail, %d skip\n", pass, fail, skip)
 	}
 
-	var metrics []models.MetricEntry
+	var metrics []*metricspb.Metric
 	if receiver != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), drainGrace)
 		buffered, err := receiver.Shutdown(ctx)
@@ -270,14 +273,18 @@ func startReceiver() (*otlp.Receiver, func()) {
 	return r, restore
 }
 
-func persistRun(pOpts persist.Options, run models.RunContext, results []models.TestResult, metrics []models.MetricEntry, exitCode int) error {
+func persistRun(pOpts persist.Options, run models.RunContext, results []models.TestResult, metrics []*metricspb.Metric, exitCode int) error {
 	testSpans := otlp.TestResultsToSpans(results, run)
 
 	root := persist.NewRootSpan(run)
-	root.EndTimeUnixNano = time.Now().UnixNano()
+	root.EndTimeUnixNano = uint64(time.Now().UnixNano())
 	root.Status = rootStatusFromExit(exitCode)
 
-	if err := persist.New(pOpts).InsertNewRun(root, testSpans, metrics); err != nil {
+	allSpans := append([]*tracepb.Span{root}, testSpans...)
+	traces := persist.WrapSpansInResource(run.Resource, allSpans)
+	wrappedMetrics := persist.WrapMetricsInResource(persist.MetricResource(run), metrics)
+
+	if err := persist.New(pOpts).InsertNewRun(traces, wrappedMetrics); err != nil {
 		if errors.Is(err, persist.ErrNoOrigin) {
 			return errors.New("no 'origin' remote configured. Either add one (`git remote add origin ...`) or pass --no-remote to persist locally only")
 		}
@@ -286,9 +293,9 @@ func persistRun(pOpts persist.Options, run models.RunContext, results []models.T
 	return nil
 }
 
-func rootStatusFromExit(code int) models.SpanStatus {
+func rootStatusFromExit(code int) *tracepb.Status {
 	if code == 0 {
-		return models.SpanStatus{Code: "OK"}
+		return &tracepb.Status{Code: tracepb.Status_STATUS_CODE_OK}
 	}
-	return models.SpanStatus{Code: "ERROR", Message: fmt.Sprintf("exit code %d", code)}
+	return &tracepb.Status{Code: tracepb.Status_STATUS_CODE_ERROR, Message: fmt.Sprintf("exit code %d", code)}
 }
