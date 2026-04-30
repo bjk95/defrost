@@ -262,16 +262,16 @@ jobs:
         run: |
           set -e
           ./defrost suppress add \
-            'examples/promptfoo¬answer="I have no idea",question="capital-germany-wrong",provider="defrost-smoke-mock"' \
-            'examples/promptfoo¬answer="London is the answer",question="contaminated-output",provider="defrost-smoke-mock"' \
-            'examples/promptfoo¬answer="paris",question="case-sensitive",provider="defrost-smoke-mock"' \
-            'examples/promptfoo¬answer="123 invalid",question="regex-capital-digits",provider="defrost-smoke-mock"' \
-            'examples/promptfoo¬answer="just plain text",question="unstructured",provider="defrost-smoke-mock"' \
-            'examples/promptfoo¬answer="Berlin",question="case-insensitive-fail",provider="defrost-smoke-mock"' \
-            'examples/promptfoo¬answer="Only Paris is here",question="contains-all-fail-vars",provider="defrost-smoke-mock"' \
-            'examples/promptfoo¬answer="The capital is Paris",question="starts-with-fail-vars",provider="defrost-smoke-mock"' \
-            'examples/promptfoo¬answer="not xml at all",question="xml-invalid",provider="defrost-smoke-mock"' \
-            'examples/promptfoo¬answer="ROME",question="icontains-any-fail-vars",provider="defrost-smoke-mock"'
+            'examples/promptfoo¬answer="I have no idea",question="capital-germany-wrong",prompt="f7a68f6f0557",provider="defrost-smoke-mock"' \
+            'examples/promptfoo¬answer="London is the answer",question="contaminated-output",prompt="f7a68f6f0557",provider="defrost-smoke-mock"' \
+            'examples/promptfoo¬answer="paris",question="case-sensitive",prompt="f7a68f6f0557",provider="defrost-smoke-mock"' \
+            'examples/promptfoo¬answer="123 invalid",question="regex-capital-digits",prompt="f7a68f6f0557",provider="defrost-smoke-mock"' \
+            'examples/promptfoo¬answer="just plain text",question="unstructured",prompt="f7a68f6f0557",provider="defrost-smoke-mock"' \
+            'examples/promptfoo¬answer="Berlin",question="case-insensitive-fail",prompt="f7a68f6f0557",provider="defrost-smoke-mock"' \
+            'examples/promptfoo¬answer="Only Paris is here",question="contains-all-fail-vars",prompt="f7a68f6f0557",provider="defrost-smoke-mock"' \
+            'examples/promptfoo¬answer="The capital is Paris",question="starts-with-fail-vars",prompt="f7a68f6f0557",provider="defrost-smoke-mock"' \
+            'examples/promptfoo¬answer="not xml at all",question="xml-invalid",prompt="f7a68f6f0557",provider="defrost-smoke-mock"' \
+            'examples/promptfoo¬answer="ROME",question="icontains-any-fail-vars",prompt="f7a68f6f0557",provider="defrost-smoke-mock"'
           ./defrost suppress list
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
