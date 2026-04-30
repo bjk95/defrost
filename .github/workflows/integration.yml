@@ -74,10 +74,20 @@ jobs:
 
       - name: Assert result count matches expected
         run: |
-          count=$(grep -c '^{Id:' out.txt || true)
-          echo "TestResult lines emitted: $count"
-          if [ "$count" -ne 10 ]; then
-            echo "FAIL: expected 10 TestResult lines, got $count"
+          # Parse the "defrost: results: P pass, F fail, S skip" summary
+          # line. Total = P + F + S. Expected 10 across the pytest example.
+          line=$(grep -E '^defrost: results:' out.txt | tail -1)
+          if [ -z "$line" ]; then
+            echo "FAIL: no 'defrost: results:' line found"
+            cat out.txt
+            exit 1
+          fi
+          echo "summary: $line"
+          counts=$(echo "$line" | sed -E 's/^defrost: results: ([0-9]+) pass, ([0-9]+) fail, ([0-9]+) skip$/\1 \2 \3/')
+          set -- $counts
+          total=$(( $1 + $2 + $3 ))
+          if [ "$total" -ne 10 ]; then
+            echo "FAIL: expected 10 results total, got $total ($1 pass, $2 fail, $3 skip)"
             cat out.txt
             exit 1
           fi
@@ -132,10 +142,18 @@ jobs:
 
       - name: Assert result count matches expected
         run: |
-          count=$(grep -c '^{Id:' examples/javascript/out.txt || true)
-          echo "TestResult lines emitted: $count"
-          if [ "$count" -ne 12 ]; then
-            echo "FAIL: expected 12 TestResult lines, got $count"
+          line=$(grep -E '^defrost: results:' examples/javascript/out.txt | tail -1)
+          if [ -z "$line" ]; then
+            echo "FAIL: no 'defrost: results:' line found"
+            cat examples/javascript/out.txt
+            exit 1
+          fi
+          echo "summary: $line"
+          counts=$(echo "$line" | sed -E 's/^defrost: results: ([0-9]+) pass, ([0-9]+) fail, ([0-9]+) skip$/\1 \2 \3/')
+          set -- $counts
+          total=$(( $1 + $2 + $3 ))
+          if [ "$total" -ne 12 ]; then
+            echo "FAIL: expected 12 results total, got $total ($1 pass, $2 fail, $3 skip)"
             cat examples/javascript/out.txt
             exit 1
           fi
@@ -190,10 +208,18 @@ jobs:
 
       - name: Assert result count matches expected
         run: |
-          count=$(grep -c '^{Id:' examples/typescript/out.txt || true)
-          echo "TestResult lines emitted: $count"
-          if [ "$count" -ne 12 ]; then
-            echo "FAIL: expected 12 TestResult lines, got $count"
+          line=$(grep -E '^defrost: results:' examples/typescript/out.txt | tail -1)
+          if [ -z "$line" ]; then
+            echo "FAIL: no 'defrost: results:' line found"
+            cat examples/typescript/out.txt
+            exit 1
+          fi
+          echo "summary: $line"
+          counts=$(echo "$line" | sed -E 's/^defrost: results: ([0-9]+) pass, ([0-9]+) fail, ([0-9]+) skip$/\1 \2 \3/')
+          set -- $counts
+          total=$(( $1 + $2 + $3 ))
+          if [ "$total" -ne 12 ]; then
+            echo "FAIL: expected 12 results total, got $total ($1 pass, $2 fail, $3 skip)"
             cat examples/typescript/out.txt
             exit 1
           fi
