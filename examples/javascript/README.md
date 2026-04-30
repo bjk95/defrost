@@ -9,4 +9,4 @@ To run locally:
 
     cd examples/javascript
     npm install
-    ../../defrost exec --no-persist npm test
+    ../../defrost exec npm test

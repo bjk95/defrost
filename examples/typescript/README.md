@@ -10,4 +10,4 @@ To run locally:
 
     cd examples/typescript
     npm install
-    ../../defrost exec --no-persist npm test
+    ../../defrost exec npm test
