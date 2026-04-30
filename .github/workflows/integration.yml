@@ -258,7 +258,7 @@ jobs:
         run: |
           set +e
           cd examples/promptfoo
-          ../../defrost exec promptfoo eval -c promptfooconfig.yaml --no-cache --no-persist > out.txt 2>&1
+          ../../defrost exec --no-persist promptfoo eval -c promptfooconfig.yaml --no-cache > out.txt 2>&1
           echo "exit=$?" >> "$GITHUB_OUTPUT"
           exit 0
         env:
