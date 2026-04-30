@@ -4,7 +4,14 @@ export interface RunSummary {
   run_id: string;
   ts: string;
   commit?: string;
+  parent?: string;
   branch?: string;
+  pr?: number;
+  author_email?: string;
+  author_name?: string;
+  cmd?: string[];
+  os?: string;
+  arch?: string;
 }
 
 export interface Cell {
