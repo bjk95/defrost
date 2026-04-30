@@ -273,6 +273,34 @@ func TestGitBackend_Suppressions_RetryReplayNoOpSucceeds(t *testing.T) {
 	}
 }
 
+func TestGitBackend_Suppressions_RemoveOnEmptyBranch_NoOp(t *testing.T) {
+	requireGit(t)
+	repoDir, originURL := makeFixture(t)
+
+	rmX := func(cur []string) []string {
+		out := make([]string, 0, len(cur))
+		for _, id := range cur {
+			if id != "X" {
+				out = append(out, id)
+			}
+		}
+		return out
+	}
+	if err := New(Options{RepoDir: repoDir}).UpdateSuppressions(rmX, "remove X"); err != nil {
+		t.Fatalf("remove on empty branch: %v", err)
+	}
+
+	// The data branch should still NOT exist on origin: a no-op mutation
+	// must not pollute history or create an empty branch.
+	exists, err := branchExistsOnRemote(originURL, DefaultDataBranch)
+	if err != nil {
+		t.Fatalf("branchExistsOnRemote: %v", err)
+	}
+	if exists {
+		t.Errorf("data branch should not have been created for a no-op remove")
+	}
+}
+
 func TestGitBackend_Suppressions_DevModeUsesScratchDir(t *testing.T) {
 	requireGit(t)
 	repoDir, _ := makeFixture(t)

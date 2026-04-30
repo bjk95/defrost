@@ -141,6 +141,28 @@ func TestExec_SuppressionsReadError_ExitUnchanged(t *testing.T) {
 	}
 }
 
+func TestExec_PersistFailure_AllSuppressed_NotRewritten(t *testing.T) {
+	// RepoDir is a non-git tempdir → DetectRun fails → persistResults
+	// errors. Even though every failing test is suppressed, exec must
+	// preserve the non-zero exit so the persist failure doesn't get
+	// silently swallowed alongside an apparent green build.
+	repoDir := t.TempDir()
+	writeDevSuppressions(t, repoDir, []string{"pkg/TestA"})
+
+	stub := stubAdapter{
+		results: []models.TestResult{{Id: "pkg/TestA", Ran: true, Passed: false}},
+		code:    1,
+	}
+	got := execWith(stub, []string{"stub", "..."}, ExecOpts{
+		RepoDir: repoDir,
+		Persist: true,
+		Dev:     true,
+	})
+	if got != 1 {
+		t.Errorf("persist failure must not let suppression rewrite exit: want 1, got %d", got)
+	}
+}
+
 func TestExec_NoResultsNonZeroCode_NotSuppressed(t *testing.T) {
 	repoDir := makeRepo(t)
 	writeDevSuppressions(t, repoDir, []string{"anything"})

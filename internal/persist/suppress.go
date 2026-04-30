@@ -148,27 +148,29 @@ func updateSuppressionsInWorkDir(workDir, branch string, branchExisted bool, mut
 		if err != nil {
 			return false, err
 		}
-		next := mutate(cur)
-		next = sortAndDedupe(next)
-
-		prevBytes, _ := os.ReadFile(filepath.Join(workDir, suppressionsFile))
+		next := sortAndDedupe(mutate(cur))
+		// cur is already canonical because we always write sorted+deduped
+		// (or it's [] for an absent file). Compare lists, not file bytes —
+		// otherwise a no-op mutation on a fresh branch (where prevBytes is
+		// empty but newBytes is the empty-list JSON) would falsely report
+		// "changed" and create the data branch for a no-op operation.
+		if stringSlicesEqual(cur, next) {
+			return false, nil
+		}
 		if err := writeSuppressionsFile(workDir, next); err != nil {
 			return false, err
 		}
-		newBytes, err := os.ReadFile(filepath.Join(workDir, suppressionsFile))
-		if err != nil {
-			return false, err
-		}
-		return string(prevBytes) != string(newBytes), nil
+		return true, nil
 	}
 
 	changed, err := apply()
 	if err != nil {
 		return err
 	}
-	if !changed && branchExisted {
-		// No-op: file content unchanged and the branch already exists,
-		// so there is nothing to commit or push.
+	if !changed {
+		// Genuine no-op (e.g. add of an existing ID, or remove of a
+		// missing ID). Skip commit + push so we don't pollute history
+		// or create an empty branch on the remote.
 		return nil
 	}
 
@@ -217,6 +219,18 @@ func updateSuppressionsInWorkDir(workDir, branch string, branchExisted bool, mut
 		}
 	}
 	return fmt.Errorf("push failed after %d retries: %w", maxPushAttempts, lastErr)
+}
+
+func stringSlicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func sortAndDedupe(in []string) []string {

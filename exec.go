@@ -59,6 +59,7 @@ func execWith(a runner.Adapter, cmd []string, opts ExecOpts) int {
 		Dev:        opts.Dev,
 	}
 
+	persistFailed := false
 	if opts.Persist && len(results) > 0 {
 		if err := persistResults(pOpts, cmd, results); err != nil {
 			fmt.Fprintln(os.Stderr, "persist: failed:", err)
@@ -66,13 +67,17 @@ func execWith(a runner.Adapter, cmd []string, opts ExecOpts) int {
 			// itself succeeded — otherwise CI silently loses data and no
 			// one notices. If tests already failed, keep that exit code
 			// (it's the more important signal).
+			persistFailed = true
 			if code == 0 {
 				code = 1
 			}
 		}
 	}
 
-	if code != 0 {
+	// Don't rewrite the exit code to 0 when persistence failed: doing so
+	// would let CI report success on a run where historical data was lost
+	// (e.g. transient push/auth failure with all failing tests suppressed).
+	if code != 0 && !persistFailed {
 		code = maybeRewriteExitCode(code, results, pOpts)
 	}
 	return code
