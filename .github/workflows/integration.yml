@@ -282,6 +282,13 @@ jobs:
             exit 1
           fi
 
+      - name: Assert defrost exited 0
+        if: ${{ steps.run.outputs.exit != '0' }}
+        run: |
+          echo "defrost exec exited with code ${{ steps.run.outputs.exit }} (expected 0)"
+          cat examples/promptfoo/out.txt || true
+          exit 1
+
       - name: Upload defrost output for debugging
         if: failure()
         uses: actions/upload-artifact@v4
