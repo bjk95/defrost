@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 
 	"github.com/bjk95/defrost/internal/persist"
@@ -104,8 +105,14 @@ func buildGridResponse(ds Dataset) gridResponse {
 		})
 	}
 	for tid, entries := range ds.TestEntries {
-		t := testDTO{TestID: tid, TestName: entries[0].TestName}
-		for _, e := range entries {
+		// Sort entries by Timestamp ascending so cells flow left→right as
+		// older→newer (matches the "← older · newer →" header).
+		sortedEntries := append([]persist.Entry(nil), entries...)
+		sort.Slice(sortedEntries, func(i, j int) bool {
+			return sortedEntries[i].Timestamp < sortedEntries[j].Timestamp
+		})
+		t := testDTO{TestID: tid, TestName: sortedEntries[0].TestName}
+		for _, e := range sortedEntries {
 			t.Cells = append(t.Cells, cellDTO{RunID: e.RunID, Status: e.Status, DurationMs: e.DurationMs})
 		}
 		out.Tests = append(out.Tests, t)

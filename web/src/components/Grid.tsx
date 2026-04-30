@@ -19,6 +19,8 @@ export function Grid() {
     );
   }
 
+  const columns = data.tests.reduce((max, t) => Math.max(max, t.cells.length), 0);
+
   return (
     <div className="space-y-0">
       <div className="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
@@ -26,7 +28,7 @@ export function Grid() {
         <span>← older · newer →</span>
       </div>
       {data.tests.map((row) => (
-        <TestRow key={row.test_id} row={row} runs={[...data.runs].reverse()} />
+        <TestRow key={row.test_id} row={row} columns={columns} />
       ))}
     </div>
   );

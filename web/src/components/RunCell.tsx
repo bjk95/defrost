@@ -11,10 +11,12 @@ export function RunCell({
   testId,
   runId,
   status,
+  disabled,
 }: {
   testId: string;
   runId: string;
   status: string | null;
+  disabled?: boolean;
 }) {
   const [, setParams] = useSearchParams();
   const color = status ? colorByStatus[status] ?? "bg-yellow-500" : "bg-neutral-100 border border-neutral-200";
@@ -23,9 +25,8 @@ export function RunCell({
       type="button"
       data-testid={`run-cell-${testId}-${runId}`}
       className={cn("h-3.5 w-3.5 rounded-sm shrink-0", color)}
-      onClick={() => {
-        setParams({ test: testId, run: runId });
-      }}
+      disabled={disabled}
+      onClick={disabled ? undefined : () => setParams({ test: testId, run: runId })}
       aria-label={`run ${runId} test ${testId} status ${status ?? "missing"}`}
     />
   );
