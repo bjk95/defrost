@@ -4,6 +4,11 @@ import (
 	"testing"
 	"time"
 
+	cmetricspb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
+	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
+	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
+	resourcepb "go.opentelemetry.io/proto/otlp/resource/v1"
+
 	"github.com/bjk95/defrost/internal/models"
 )
 
@@ -157,3 +162,132 @@ func TestTestResultsToSpans_Siblings(t *testing.T) {
 		}
 	}
 }
+
+func strKV(k, v string) *commonpb.KeyValue {
+	return &commonpb.KeyValue{Key: k, Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: v}}}
+}
+
+func makeRequest(metrics ...*metricspb.Metric) *cmetricspb.ExportMetricsServiceRequest {
+	return &cmetricspb.ExportMetricsServiceRequest{
+		ResourceMetrics: []*metricspb.ResourceMetrics{{
+			Resource: &resourcepb.Resource{Attributes: []*commonpb.KeyValue{strKV("service.name", "client")}},
+			ScopeMetrics: []*metricspb.ScopeMetrics{{
+				Metrics: metrics,
+			}},
+		}},
+	}
+}
+
+func TestMetricsToEntries_Gauge(t *testing.T) {
+	m := &metricspb.Metric{
+		Name: "db.connection_pool.size",
+		Unit: "{connections}",
+		Data: &metricspb.Metric_Gauge{Gauge: &metricspb.Gauge{
+			DataPoints: []*metricspb.NumberDataPoint{{
+				TimeUnixNano: 1714_500_000_000_000_000,
+				Attributes:   []*commonpb.KeyValue{strKV("db.system", "postgresql")},
+				Value:        &metricspb.NumberDataPoint_AsDouble{AsDouble: 12.0},
+			}},
+		}},
+	}
+	got := MetricsToEntries(makeRequest(m), newRunContext())
+	if len(got) != 1 {
+		t.Fatalf("want 1 entry, got %d", len(got))
+	}
+	e := got[0]
+	if e.Name != "db.connection_pool.size" {
+		t.Errorf("name: %q", e.Name)
+	}
+	if e.InstrumentType != "gauge" {
+		t.Errorf("instrument_type: %q", e.InstrumentType)
+	}
+	if e.Unit != "{connections}" {
+		t.Errorf("unit: %q", e.Unit)
+	}
+	if e.Value == nil || *e.Value != 12.0 {
+		t.Errorf("value: %v", e.Value)
+	}
+	if e.Attributes["db.system"] != "postgresql" {
+		t.Errorf("attribute missing: %+v", e.Attributes)
+	}
+	if e.Resource["service.name"] != "defrost" {
+		t.Errorf("resource: defrost RunContext should override caller resource: %+v", e.Resource)
+	}
+	if e.TraceID != "11111111111111111111111111111111" {
+		t.Errorf("trace_id: %q", e.TraceID)
+	}
+}
+
+func TestMetricsToEntries_SumDelta(t *testing.T) {
+	m := &metricspb.Metric{
+		Name: "http.server.request.count",
+		Data: &metricspb.Metric_Sum{Sum: &metricspb.Sum{
+			IsMonotonic:            true,
+			AggregationTemporality: metricspb.AggregationTemporality_AGGREGATION_TEMPORALITY_DELTA,
+			DataPoints: []*metricspb.NumberDataPoint{{
+				TimeUnixNano:      1714_500_000_000_000_000,
+				StartTimeUnixNano: 1714_499_990_000_000_000,
+				Value:             &metricspb.NumberDataPoint_AsInt{AsInt: 7},
+			}},
+		}},
+	}
+	got := MetricsToEntries(makeRequest(m), newRunContext())[0]
+	if got.InstrumentType != "sum" {
+		t.Errorf("instrument_type: %q", got.InstrumentType)
+	}
+	if !got.Monotonic {
+		t.Error("monotonic should be true")
+	}
+	if got.Temporality != "delta" {
+		t.Errorf("temporality: %q", got.Temporality)
+	}
+	if got.Value == nil || *got.Value != 7 {
+		t.Errorf("value: %v", got.Value)
+	}
+}
+
+func TestMetricsToEntries_Histogram(t *testing.T) {
+	m := &metricspb.Metric{
+		Name: "http.server.request.duration",
+		Unit: "s",
+		Data: &metricspb.Metric_Histogram{Histogram: &metricspb.Histogram{
+			AggregationTemporality: metricspb.AggregationTemporality_AGGREGATION_TEMPORALITY_DELTA,
+			DataPoints: []*metricspb.HistogramDataPoint{{
+				TimeUnixNano:   1714_500_000_000_000_000,
+				Count:          3,
+				Sum:            ptr(0.45),
+				Min:            ptr(0.05),
+				Max:            ptr(0.25),
+				BucketCounts:   []uint64{1, 1, 1},
+				ExplicitBounds: []float64{0.1, 0.2},
+			}},
+		}},
+	}
+	got := MetricsToEntries(makeRequest(m), newRunContext())[0]
+	if got.InstrumentType != "histogram" {
+		t.Errorf("instrument_type: %q", got.InstrumentType)
+	}
+	if got.Count == nil || *got.Count != 3 {
+		t.Errorf("count: %v", got.Count)
+	}
+	if got.Sum == nil || *got.Sum != 0.45 {
+		t.Errorf("sum: %v", got.Sum)
+	}
+	if got.Min == nil || *got.Min != 0.05 {
+		t.Errorf("min: %v", got.Min)
+	}
+	if got.Max == nil || *got.Max != 0.25 {
+		t.Errorf("max: %v", got.Max)
+	}
+	if len(got.Buckets) != 3 {
+		t.Fatalf("buckets: want 3, got %d (%v)", len(got.Buckets), got.Buckets)
+	}
+	if got.Buckets[0].UpperBound == nil || *got.Buckets[0].UpperBound != 0.1 || got.Buckets[0].Count != 1 {
+		t.Errorf("bucket 0: %+v", got.Buckets[0])
+	}
+	if got.Buckets[2].UpperBound != nil {
+		t.Errorf("bucket 2 (+Inf) should have nil UpperBound, got %v", got.Buckets[2].UpperBound)
+	}
+}
+
+func ptr[T any](v T) *T { return &v }
