@@ -219,7 +219,7 @@ func (b *gitBackend) InsertNewRun(root models.Span, testSpans []models.Span, met
 		return err
 	}
 
-	if err := commitAll(workDir, commitMessage(root, len(testSpans), len(metrics))); err != nil {
+	if err := commitAll(workDir, commitMessage(root, len(testSpans)+1, len(metrics))); err != nil {
 		return err
 	}
 
