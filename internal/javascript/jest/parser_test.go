@@ -80,6 +80,24 @@ func TestParse(t *testing.T) {
 			},
 		},
 		{
+			name:    "nested describes with same title produce distinct IDs",
+			fixture: "nested-describes.json",
+			want: []models.TestResult{
+				{
+					Id:       "nested.test.js::outer > A > same",
+					Ran:      true,
+					Passed:   true,
+					Duration: time.Millisecond,
+				},
+				{
+					Id:       "nested.test.js::outer > B > same",
+					Ran:      true,
+					Passed:   true,
+					Duration: 2 * time.Millisecond,
+				},
+			},
+		},
+		{
 			name:    "multi-file mixed results",
 			fixture: "multi-file.json",
 			want: []models.TestResult{
