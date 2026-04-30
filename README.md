@@ -67,9 +67,13 @@ works in Go, Node, Rust, Java, and every other OTel-supported language.
 ### `defrost exec <cmd...>`
 
 Runs the test command, captures any evals or metrics emitted during the run,
-and records everything. Exits with the child's exit code — unless every
-failing test is on the suppression list, in which case the exit is rewritten
-to 0.
+and records everything. Exit code:
+
+- Normally the child's exit code.
+- If every failing test is on the suppression list, the exit is rewritten to `0`.
+- If persisting to the `_defrost` branch fails (e.g. push rejected,
+  no `origin`), the exit is forced to `1` even when the test command itself
+  succeeded — so CI never silently loses data.
 
 ### `defrost history <test_id>`
 
