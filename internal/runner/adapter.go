@@ -1,15 +1,24 @@
 package runner
 
-import "github.com/bjk95/defrost/internal/models"
+import (
+	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
+
+	"github.com/bjk95/defrost/internal/models"
+)
 
 // Adapter wraps a single language/test-framework integration. Implementations
 // inspect a defrost-exec argv and decide whether they handle it (Matches),
-// then run the underlying child command and return the parsed test results
-// plus the child's exit code (Run). The caller is responsible for how to
-// present or persist the results.
+// then run the underlying child command and return the parsed test results,
+// any framework-emitted eval/score metric data points, and the child's exit
+// code (Run). Adapters that don't emit metrics return a nil slice.
+//
+// Each *metricspb.Metric in the returned slice MUST contain exactly one
+// data point (gauge / sum / histogram). This matches the convention
+// established by `otlp.MetricsToEntries` for receiver-emitted metrics —
+// the persistence layer writes one line per *metricspb.Metric.
 type Adapter interface {
 	Matches(cmd []string) bool
-	Run(cmd []string) ([]models.TestResult, int)
+	Run(cmd []string) ([]models.TestResult, []*metricspb.Metric, int)
 }
 
 // Registry holds an ordered list of adapters. The first adapter whose Matches
