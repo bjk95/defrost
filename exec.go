@@ -70,17 +70,25 @@ func execWith(a runner.Adapter, cmd []string, opts ExecOpts) int {
 	// side effects — and they actively interfere with users who have
 	// OTEL_EXPORTER_OTLP_* set for their own observability. Skip the
 	// whole metrics path in that mode.
+	//
+	// When Persist is on but DetectRunContext fails (non-git workdir,
+	// transient git error), tests must still run — defrost is a wrapper,
+	// not a precondition. Skip the metrics+persist path, log the error,
+	// and treat it as a persist failure for exit-code purposes so the
+	// signal isn't masked by passing tests.
 	var run models.RunContext
 	var receiver *otlp.Receiver
 	restoreEnv := func() {}
+	persistFailed := false
 	if opts.Persist {
 		var runErr error
 		run, runErr = persist.DetectRunContext(pOpts, cmd, defrostVersion)
 		if runErr != nil {
-			fmt.Fprintln(os.Stderr, "exec: detect run context:", runErr)
-			return 1
+			fmt.Fprintln(os.Stderr, "exec: detect run context, skipping persist:", runErr)
+			persistFailed = true
+		} else {
+			receiver, restoreEnv = startReceiver()
 		}
-		receiver, restoreEnv = startReceiver()
 	}
 	defer restoreEnv()
 
@@ -108,14 +116,13 @@ func execWith(a runner.Adapter, cmd []string, opts ExecOpts) int {
 		}
 	}
 
-	persistFailed := false
-	// Always persist when --persist is on, even with zero results and zero
-	// metrics. Schema 3 models the run as the `defrost.run` root span; a
-	// compile/setup failure that produces no test cases still needs a
-	// history entry recording who, when, what commit, what exit code —
-	// the runs you most want to debug are precisely the ones with no
-	// per-test data.
-	if opts.Persist {
+	// Always persist when --persist is on AND a run context was built,
+	// even with zero results and zero metrics. Schema 3 models the run
+	// as the `defrost.run` root span; a compile/setup failure that
+	// produces no test cases still needs a history entry recording who,
+	// when, what commit, what exit code — the runs you most want to
+	// debug are precisely the ones with no per-test data.
+	if opts.Persist && !persistFailed {
 		if err := persistRun(pOpts, run, results, metrics, code); err != nil {
 			fmt.Fprintln(os.Stderr, "persist: failed:", err)
 			// A persist failure should surface even when the test command
@@ -123,10 +130,10 @@ func execWith(a runner.Adapter, cmd []string, opts ExecOpts) int {
 			// one notices. If tests already failed, keep that exit code
 			// (it's the more important signal).
 			persistFailed = true
-			if code == 0 {
-				code = 1
-			}
 		}
+	}
+	if persistFailed && code == 0 {
+		code = 1
 	}
 
 	// Don't rewrite the exit code to 0 when persistence failed: doing so
@@ -212,18 +219,19 @@ func tallyResults(results []models.TestResult) (pass, fail, skip int) {
 	return
 }
 
-// startReceiver binds the OTLP listener and exports the standard env vars
-// for the child. On bind failure we log and return (nil, no-op) so the
-// run continues without metric collection. Returns a restore function the
-// caller MUST call to clear the exported env vars regardless of outcome.
+// startReceiver binds the OTLP listener and exports the metrics-signal
+// env vars for the child. On bind failure we log and return (nil, no-op)
+// so the run continues without metric collection. Returns a restore
+// function the caller MUST call to clear the exported env vars regardless
+// of outcome.
 //
-// Both the generic (OTEL_EXPORTER_OTLP_*) and the per-signal metrics
-// (OTEL_EXPORTER_OTLP_METRICS_*) env vars are set, because OTLP gives
-// per-signal vars higher precedence — if a user already has
-// OTEL_EXPORTER_OTLP_METRICS_ENDPOINT pointed at their own collector, our
-// generic override is silently ignored and metrics ship to the wrong
-// place. Setting both ensures defrost's localhost endpoint always wins
-// for the metrics signal in this child process.
+// Only the OTEL_EXPORTER_OTLP_METRICS_* per-signal vars are overridden —
+// not the generic OTEL_EXPORTER_OTLP_* — because the receiver implements
+// /v1/metrics only. Redirecting the generic endpoint would point the
+// child's trace and log exporters at our localhost, where they'd 404 on
+// /v1/traces and /v1/logs and silently drop unrelated telemetry. Per OTel
+// precedence rules the per-signal var wins for the metrics signal even
+// when a user has the generic var set, so this scoping is safe.
 func startReceiver() (*otlp.Receiver, func()) {
 	r := otlp.New()
 	port, err := r.Start()
@@ -239,14 +247,10 @@ func startReceiver() (*otlp.Receiver, func()) {
 		hadPrev   bool
 	}
 	overrides := []envVar{
-		{key: "OTEL_EXPORTER_OTLP_ENDPOINT"},
-		{key: "OTEL_EXPORTER_OTLP_PROTOCOL"},
 		{key: "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT"},
 		{key: "OTEL_EXPORTER_OTLP_METRICS_PROTOCOL"},
 	}
 	values := map[string]string{
-		"OTEL_EXPORTER_OTLP_ENDPOINT":         endpoint,
-		"OTEL_EXPORTER_OTLP_PROTOCOL":         "http/protobuf",
 		"OTEL_EXPORTER_OTLP_METRICS_ENDPOINT": endpoint + "/v1/metrics",
 		"OTEL_EXPORTER_OTLP_METRICS_PROTOCOL": "http/protobuf",
 	}
