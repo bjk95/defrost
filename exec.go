@@ -10,6 +10,7 @@ import (
 	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
 	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
 
+	"github.com/bjk95/defrost/internal/eval/promptfoo"
 	"github.com/bjk95/defrost/internal/golang"
 	"github.com/bjk95/defrost/internal/javascript/jest"
 	"github.com/bjk95/defrost/internal/models"
@@ -46,6 +47,7 @@ func HandleExecution(cmd []string, opts ExecOpts) int {
 	reg.Register(golang.Adapter{})
 	reg.Register(pytest.Adapter{})
 	reg.Register(&jest.Adapter{})
+	reg.Register(&promptfoo.Adapter{})
 
 	a := reg.Find(cmd)
 	if a == nil {
