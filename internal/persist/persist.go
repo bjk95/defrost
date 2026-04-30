@@ -132,6 +132,19 @@ type Backend interface {
 	// joined with its RunRecord, oldest first. Returns an empty slice
 	// when the test has no history yet.
 	GetTestHistory(testName string) ([]HistoricalEntry, error)
+
+	// GetSuppressions returns the current list of suppressed test IDs,
+	// or an empty slice if none have been recorded. A missing storage
+	// (no data branch yet, no scratch dir yet) is not an error.
+	GetSuppressions() ([]string, error)
+
+	// UpdateSuppressions reads the current list, applies mutate, and
+	// writes the result. The closure form lets the git backend re-apply
+	// the caller's intent against the latest tip during push retry, so
+	// concurrent add calls for different IDs both end up in the final
+	// list. msg is used as the commit message by backends that commit;
+	// other backends ignore it.
+	UpdateSuppressions(mutate func([]string) []string, msg string) error
 }
 
 // New returns the Backend implied by opts. Dev mode selects the local
@@ -296,6 +309,14 @@ func (b *gitBackend) InsertNewTestResults(run RunRecord, results []models.TestRe
 	}
 
 	return pushWithRetry(workDir, branch, branchExisted)
+}
+
+func (b *gitBackend) GetSuppressions() ([]string, error) {
+	return nil, errors.New("gitBackend.GetSuppressions: not implemented")
+}
+
+func (b *gitBackend) UpdateSuppressions(mutate func([]string) []string, msg string) error {
+	return errors.New("gitBackend.UpdateSuppressions: not implemented")
 }
 
 func (b *gitBackend) GetTestHistory(testName string) ([]HistoricalEntry, error) {

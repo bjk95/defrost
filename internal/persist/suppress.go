@@ -55,6 +55,27 @@ func writeSuppressionsFile(dir string, ids []string) error {
 	return os.WriteFile(path, append(b, '\n'), 0o644)
 }
 
+func (b *fileBackend) GetSuppressions() ([]string, error) {
+	if _, err := os.Stat(b.dir); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return []string{}, nil
+		}
+		return nil, err
+	}
+	return readSuppressionsFile(b.dir)
+}
+
+func (b *fileBackend) UpdateSuppressions(mutate func([]string) []string, _ string) error {
+	if err := b.InitialisePersistence(); err != nil {
+		return err
+	}
+	cur, err := readSuppressionsFile(b.dir)
+	if err != nil {
+		return err
+	}
+	return writeSuppressionsFile(b.dir, mutate(cur))
+}
+
 func sortAndDedupe(in []string) []string {
 	out := make([]string, 0, len(in))
 	seen := make(map[string]struct{}, len(in))

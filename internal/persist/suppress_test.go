@@ -75,3 +75,34 @@ func TestSortAndDedupe(t *testing.T) {
 		t.Errorf("not sorted: %v", got)
 	}
 }
+
+func TestFileBackend_SuppressionsRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	b := &fileBackend{dir: filepath.Join(dir, "scratch")}
+
+	got, err := b.GetSuppressions()
+	if err != nil {
+		t.Fatalf("GetSuppressions on empty: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("want empty, got %v", got)
+	}
+
+	addX := func(cur []string) []string { return append(cur, "x") }
+	if err := b.UpdateSuppressions(addX, "ignored"); err != nil {
+		t.Fatalf("UpdateSuppressions add x: %v", err)
+	}
+	addY := func(cur []string) []string { return append(cur, "y") }
+	if err := b.UpdateSuppressions(addY, "ignored"); err != nil {
+		t.Fatalf("UpdateSuppressions add y: %v", err)
+	}
+
+	got, err = b.GetSuppressions()
+	if err != nil {
+		t.Fatalf("GetSuppressions after writes: %v", err)
+	}
+	want := []string{"x", "y"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("want %v got %v", want, got)
+	}
+}
