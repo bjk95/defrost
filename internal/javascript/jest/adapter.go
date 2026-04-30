@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/bjk95/defrost/internal/models"
+	"github.com/bjk95/defrost/internal/runner"
 )
 
 // Adapter implements runner.Adapter for jest invocations. Forms supported:
@@ -236,6 +237,7 @@ func (a *Adapter) Run(cmd []string) ([]models.TestResult, int) {
 		fmt.Fprintln(os.Stderr, "defrost:", parseErr)
 		return nil, 1
 	}
+	runner.ApplyRepoPrefix(results)
 
 	return results, exitCode
 }
