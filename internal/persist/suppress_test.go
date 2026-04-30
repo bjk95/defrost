@@ -223,7 +223,7 @@ func TestGitBackend_Suppressions_RetryReplaysAcrossConflict(t *testing.T) {
 
 	// Slow writer wants to add "slow". Its workdir is now stale relative
 	// to origin. The retry path must fetch+reset, re-apply, and push.
-	if err := updateSuppressionsInWorkDir(slowDir, DefaultDataBranch, true,
+	if err := updateSuppressionsInWorkDir(slowDir, DefaultDataBranch,
 		func(c []string) []string { return append(c, "slow") }, "add slow"); err != nil {
 		t.Fatalf("slow add: %v", err)
 	}
@@ -258,7 +258,7 @@ func TestGitBackend_Suppressions_RetryReplayNoOpSucceeds(t *testing.T) {
 	// Slow writer also wants to add X. After the conflict-fetch-reset,
 	// the workdir already has X, so the closure replay is a no-op. Must
 	// succeed (not error with "nothing to commit") and leave origin as-is.
-	if err := updateSuppressionsInWorkDir(slowDir, DefaultDataBranch, true,
+	if err := updateSuppressionsInWorkDir(slowDir, DefaultDataBranch,
 		func(c []string) []string { return append(c, "X") }, "slow add X"); err != nil {
 		t.Fatalf("slow add X: %v", err)
 	}
@@ -268,6 +268,52 @@ func TestGitBackend_Suppressions_RetryReplayNoOpSucceeds(t *testing.T) {
 		t.Fatalf("GetSuppressions: %v", err)
 	}
 	want := []string{"X", "seed"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("want %v got %v", want, got)
+	}
+}
+
+func TestGitBackend_Suppressions_RetryAfterFirstCreationRace(t *testing.T) {
+	requireGit(t)
+	repoDir, originURL := makeFixture(t)
+
+	// Slow writer stages its workdir while NO data branch exists yet,
+	// so openOrInitDataRepo initialises a fresh branch with no remote
+	// tracking. This mirrors the first instant of two writers both
+	// observing "branch absent" and racing to create it.
+	slowDir := filepath.Join(t.TempDir(), "slow")
+	branchExisted, err := openOrInitDataRepo(slowDir, originURL, DefaultDataBranch)
+	if err != nil {
+		t.Fatalf("openOrInit slow: %v", err)
+	}
+	if branchExisted {
+		t.Fatal("precondition: expected branch to not exist yet")
+	}
+	if err := writeSeed(slowDir); err != nil {
+		t.Fatalf("writeSeed slow: %v", err)
+	}
+
+	// Fast writer races and creates the branch via the public API.
+	be := New(Options{RepoDir: repoDir})
+	if err := be.UpdateSuppressions(func(c []string) []string { return append(c, "fast") }, "add fast"); err != nil {
+		t.Fatalf("fast: %v", err)
+	}
+
+	// Slow writer now attempts to add "slow". Its push will be
+	// non-fast-forward (its history has no commits in common with the
+	// branch fast just created). The retry path must fetch the winner's
+	// tip, hard-reset, replay, and push — even though branchExisted was
+	// false at the start of the call.
+	if err := updateSuppressionsInWorkDir(slowDir, DefaultDataBranch,
+		func(c []string) []string { return append(c, "slow") }, "add slow"); err != nil {
+		t.Fatalf("slow add: %v", err)
+	}
+
+	got, err := be.GetSuppressions()
+	if err != nil {
+		t.Fatalf("GetSuppressions: %v", err)
+	}
+	want := []string{"fast", "slow"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("want %v got %v", want, got)
 	}

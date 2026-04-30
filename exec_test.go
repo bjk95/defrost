@@ -177,6 +177,46 @@ func TestExec_NoResultsNonZeroCode_NotSuppressed(t *testing.T) {
 	}
 }
 
+func TestExec_FileError_NotSuppressedEvenIfRanTrue(t *testing.T) {
+	// Adapters synthesise file-level failures with `Ran: true` and the
+	// FileErrorSuffix in the ID (jest's "could not load file" et al.).
+	// These represent infrastructure failures, not test failures, and
+	// must never be suppressible — even when the synthetic ID happens
+	// to be on the suppression list.
+	repoDir := makeRepo(t)
+	syntheticID := "src/foo.test.ts" + models.FileErrorSuffix
+	writeDevSuppressions(t, repoDir, []string{syntheticID})
+
+	stub := stubAdapter{
+		results: []models.TestResult{{Id: syntheticID, Ran: true, Passed: false}},
+		code:    1,
+	}
+	got := runExecWithAdapter(t, stub, repoDir)
+	if got != 1 {
+		t.Errorf("file-level error must keep non-zero exit: want 1, got %d", got)
+	}
+}
+
+func TestExec_FileErrorAlongsideSuppressedTest_NotRewritten(t *testing.T) {
+	// Even when every "real" failing test is suppressed, the presence of
+	// any file-level error must keep the exit non-zero. Suppressing the
+	// real test failures should not mask infrastructure problems.
+	repoDir := makeRepo(t)
+	writeDevSuppressions(t, repoDir, []string{"pkg/TestA"})
+
+	stub := stubAdapter{
+		results: []models.TestResult{
+			{Id: "pkg/TestA", Ran: true, Passed: false},
+			{Id: "src/foo.test.ts" + models.FileErrorSuffix, Ran: true, Passed: false},
+		},
+		code: 1,
+	}
+	got := runExecWithAdapter(t, stub, repoDir)
+	if got != 1 {
+		t.Errorf("file-error alongside suppressed test must preserve exit: want 1, got %d", got)
+	}
+}
+
 func TestExec_BuildOnlyFailure_NotSuppressed(t *testing.T) {
 	repoDir := makeRepo(t)
 	// "buildErr" is the only ID present; suppress it. We must NOT rewrite

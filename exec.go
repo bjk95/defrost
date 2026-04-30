@@ -88,6 +88,14 @@ func maybeRewriteExitCode(code int, results []models.TestResult, pOpts persist.O
 	if len(failingIDs) == 0 {
 		return code
 	}
+	for _, r := range results {
+		if r.IsFileError() {
+			fmt.Fprintf(os.Stderr,
+				"defrost: file-level error present (%s); exit %d preserved\n",
+				r.Id, code)
+			return code
+		}
+	}
 
 	pass, fail, skip := tallyResults(results)
 	fmt.Fprintf(os.Stderr, "defrost: results: %d pass, %d fail, %d skip\n", pass, fail, skip)
@@ -126,7 +134,11 @@ func maybeRewriteExitCode(code int, results []models.TestResult, pOpts persist.O
 func collectFailingTestIDs(results []models.TestResult) []string {
 	out := make([]string, 0, len(results))
 	for _, r := range results {
-		if r.Ran && !r.Passed {
+		// Only count actual test-level failures. Synthetic file-error
+		// results (jest's "could not load file" et al.) carry Ran=true
+		// but represent infrastructure failures, not test failures —
+		// suppressing those would let a broken test file mask itself.
+		if r.Ran && !r.Passed && !r.IsFileError() {
 			out = append(out, r.Id)
 		}
 	}

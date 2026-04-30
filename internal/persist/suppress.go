@@ -135,14 +135,14 @@ func (b *gitBackend) UpdateSuppressions(mutate func([]string) []string, msg stri
 		}
 	}
 
-	return updateSuppressionsInWorkDir(workDir, branch, branchExisted, mutate, msg)
+	return updateSuppressionsInWorkDir(workDir, branch, mutate, msg)
 }
 
 // updateSuppressionsInWorkDir handles the apply/commit/push/retry cycle
 // against a workdir that already holds a checkout of the data branch.
 // Split out from UpdateSuppressions so tests can pre-stage a workdir whose
 // clone predates a competing push and exercise the retry path directly.
-func updateSuppressionsInWorkDir(workDir, branch string, branchExisted bool, mutate func([]string) []string, msg string) error {
+func updateSuppressionsInWorkDir(workDir, branch string, mutate func([]string) []string, msg string) error {
 	apply := func() (changed bool, err error) {
 		cur, err := readSuppressionsFile(workDir)
 		if err != nil {
@@ -192,9 +192,14 @@ func updateSuppressionsInWorkDir(workDir, branch string, branchExisted bool, mut
 			return nil
 		}
 		lastErr = err
-		if !branchExisted || !isNonFastForward(err) {
+		if !isNonFastForward(err) {
 			return err
 		}
+		// Non-fast-forward at this point means another writer raced us:
+		// either updating an existing branch (branchExisted=true) OR
+		// creating it for the first time between our existence check and
+		// our push (branchExisted=false). Both cases recover the same
+		// way — fetch the winner's tip, reset hard, replay.
 		refspec := fmt.Sprintf("+refs/heads/%s:refs/remotes/origin/%s", branch, branch)
 		if _, err := runGit(workDir, "fetch", "--quiet", "origin", refspec); err != nil {
 			return fmt.Errorf("fetch after push conflict (attempt %d): %w", attempt, err)
