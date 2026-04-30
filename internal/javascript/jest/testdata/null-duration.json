@@ -1,0 +1,18 @@
+{
+  "testResults": [
+    {
+      "name": "__CWD__/x.test.js",
+      "status": "passed",
+      "message": "",
+      "assertionResults": [
+        {
+          "title": "no timing info",
+          "status": "passed",
+          "ancestorTitles": [],
+          "failureMessages": [],
+          "duration": null
+        }
+      ]
+    }
+  ]
+}

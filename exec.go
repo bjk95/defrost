@@ -6,8 +6,11 @@ import (
 	"os"
 
 	"github.com/bjk95/defrost/internal/golang"
+	"github.com/bjk95/defrost/internal/javascript/jest"
 	"github.com/bjk95/defrost/internal/models"
 	"github.com/bjk95/defrost/internal/persist"
+	"github.com/bjk95/defrost/internal/python/pytest"
+	"github.com/bjk95/defrost/internal/runner"
 )
 
 type ExecOpts struct {
@@ -15,6 +18,7 @@ type ExecOpts struct {
 	DataBranch string
 	Persist    bool
 	NoRemote   bool
+	Dev        bool
 }
 
 func HandleExecution(cmd []string, opts ExecOpts) int {
@@ -23,17 +27,18 @@ func HandleExecution(cmd []string, opts ExecOpts) int {
 		return 2
 	}
 
-	var (
-		results []models.TestResult
-		code    int
-	)
-	switch cmd[0] {
-	case "go":
-		results, code = golang.ExecuteGoTest(cmd)
-	default:
+	reg := runner.NewRegistry()
+	reg.Register(golang.Adapter{})
+	reg.Register(pytest.Adapter{})
+	reg.Register(&jest.Adapter{})
+
+	a := reg.Find(cmd)
+	if a == nil {
 		fmt.Fprintf(os.Stderr, "exec: unsupported test command: %q\n", cmd[0])
 		return 2
 	}
+
+	results, code := a.Run(cmd)
 
 	for _, r := range results {
 		fmt.Printf("%+v\n", r)
@@ -60,12 +65,13 @@ func persistResults(opts ExecOpts, cmd []string, results []models.TestResult) er
 		DataBranch: opts.DataBranch,
 		AuthToken:  os.Getenv("GITHUB_TOKEN"),
 		NoRemote:   opts.NoRemote,
+		Dev:        opts.Dev,
 	}
 	run, err := persist.DetectRun(pOpts, cmd)
 	if err != nil {
 		return fmt.Errorf("detect run: %w", err)
 	}
-	if err := persist.Persist(pOpts, run, results); err != nil {
+	if err := persist.New(pOpts).InsertNewTestResults(run, results); err != nil {
 		if errors.Is(err, persist.ErrNoOrigin) {
 			return errors.New("no 'origin' remote configured. Either add one (`git remote add origin ...`) or pass --no-remote to persist locally only")
 		}

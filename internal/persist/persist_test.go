@@ -69,7 +69,7 @@ func TestPersist_CreatesDataBranchOnFirstWrite(t *testing.T) {
 	}
 	run := newTestRun("run-001", "abc123def4567890", "main")
 
-	if err := Persist(Options{RepoDir: repoDir}, run, results); err != nil {
+	if err := New(Options{RepoDir: repoDir}).InsertNewTestResults(run, results); err != nil {
 		t.Fatalf("Persist: %v", err)
 	}
 
@@ -117,7 +117,7 @@ func TestPersist_AppendsToExistingBranch(t *testing.T) {
 		StartTime: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 	}}
 	run1 := newTestRun("run-A", "1111111111111111", "main")
-	if err := Persist(Options{RepoDir: repoDir}, run1, first); err != nil {
+	if err := New(Options{RepoDir: repoDir}).InsertNewTestResults(run1, first); err != nil {
 		t.Fatalf("first Persist: %v", err)
 	}
 
@@ -129,7 +129,7 @@ func TestPersist_AppendsToExistingBranch(t *testing.T) {
 		StartTime: time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC),
 	}}
 	run2 := newTestRun("run-B", "2222222222222222", "main")
-	if err := Persist(Options{RepoDir: repoDir}, run2, second); err != nil {
+	if err := New(Options{RepoDir: repoDir}).InsertNewTestResults(run2, second); err != nil {
 		t.Fatalf("second Persist: %v", err)
 	}
 
@@ -177,11 +177,11 @@ func TestHistory_RoundTripJoinsRunRecord(t *testing.T) {
 	run.Dirty = true
 	run.DirtyHash = "abcd1234"
 
-	if err := Persist(Options{RepoDir: repoDir}, run, in); err != nil {
+	if err := New(Options{RepoDir: repoDir}).InsertNewTestResults(run, in); err != nil {
 		t.Fatalf("Persist: %v", err)
 	}
 
-	got, err := History(Options{RepoDir: repoDir}, "github.com/x/p/TestA")
+	got, err := New(Options{RepoDir: repoDir}).GetTestHistory("github.com/x/p/TestA")
 	if err != nil {
 		t.Fatalf("History: %v", err)
 	}
@@ -238,7 +238,7 @@ func TestPushWithRetry_RebasesOnConflict(t *testing.T) {
 		Duration:  1 * time.Millisecond,
 		StartTime: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 	}}
-	if err := Persist(Options{RepoDir: repoDir}, newTestRun("run-seed", "1111111111111111", "main"), seed); err != nil {
+	if err := New(Options{RepoDir: repoDir}).InsertNewTestResults(newTestRun("run-seed", "1111111111111111", "main"), seed); err != nil {
 		t.Fatalf("seed Persist: %v", err)
 	}
 
@@ -277,7 +277,7 @@ func TestPushWithRetry_RebasesOnConflict(t *testing.T) {
 		Duration:  3 * time.Millisecond,
 		StartTime: time.Date(2026, 1, 3, 0, 0, 0, 0, time.UTC),
 	}}
-	if err := Persist(Options{RepoDir: repoDir}, newTestRun("run-racer", "3333333333333333", "main"), racer); err != nil {
+	if err := New(Options{RepoDir: repoDir}).InsertNewTestResults(newTestRun("run-racer", "3333333333333333", "main"), racer); err != nil {
 		t.Fatalf("racer Persist: %v", err)
 	}
 
@@ -306,7 +306,7 @@ func TestPushWithRetry_RebasesOnConflict(t *testing.T) {
 func TestHistory_UnknownTestReturnsEmpty(t *testing.T) {
 	requireGit(t)
 	repoDir, _ := makeFixture(t)
-	got, err := History(Options{RepoDir: repoDir}, "github.com/x/p/NeverWritten")
+	got, err := New(Options{RepoDir: repoDir}).GetTestHistory("github.com/x/p/NeverWritten")
 	if err != nil {
 		t.Fatalf("History on empty origin: %v", err)
 	}
@@ -365,7 +365,7 @@ func TestPersist_LocalOnlyNoRemote(t *testing.T) {
 		StartTime: time.Date(2026, 4, 30, 0, 0, 0, 0, time.UTC),
 	}}
 	run := newTestRun("local-run", "abc123", "main")
-	if err := Persist(Options{RepoDir: dir, NoRemote: true}, run, results); err != nil {
+	if err := New(Options{RepoDir: dir, NoRemote: true}).InsertNewTestResults(run, results); err != nil {
 		t.Fatalf("Persist (no-remote): %v", err)
 	}
 
@@ -377,12 +377,84 @@ func TestPersist_LocalOnlyNoRemote(t *testing.T) {
 		t.Errorf("test ndjson missing run_id %q:\n%s", run.RunID, out)
 	}
 
-	hist, err := History(Options{RepoDir: dir, NoRemote: true}, "p/TestA")
+	hist, err := New(Options{RepoDir: dir, NoRemote: true}).GetTestHistory("p/TestA")
 	if err != nil {
 		t.Fatalf("History (no-remote): %v", err)
 	}
 	if len(hist) != 1 || hist[0].Test.RunID != run.RunID {
 		t.Fatalf("unexpected history: %+v", hist)
+	}
+}
+
+// TestPersist_LocalOnlyNoRemote_RelativeRepoDir guards the localGitDir
+// regression: when RepoDir was passed as a relative path (e.g. "."), the
+// resolved .git path stayed relative and the push from the ephemeral
+// workdir silently no-op'd against the wrong cwd.
+func TestPersist_LocalOnlyNoRemote_RelativeRepoDir(t *testing.T) {
+	requireGit(t)
+	parent := t.TempDir()
+	gitMust(t, "", "init", "-b", "main", filepath.Join(parent, "repo"))
+	gitMust(t, filepath.Join(parent, "repo"), "config", "user.email", "t@example.com")
+	gitMust(t, filepath.Join(parent, "repo"), "config", "user.name", "t")
+	gitMust(t, filepath.Join(parent, "repo"), "commit", "--allow-empty", "-m", "init")
+
+	t.Chdir(parent)
+
+	results := []models.TestResult{{
+		Id:        "p/TestA",
+		Ran:       true,
+		Passed:    true,
+		Duration:  1 * time.Millisecond,
+		StartTime: time.Date(2026, 4, 30, 0, 0, 0, 0, time.UTC),
+	}}
+	run := newTestRun("rel-run", "abc123", "main")
+	if err := New(Options{RepoDir: "repo", NoRemote: true}).InsertNewTestResults(run, results); err != nil {
+		t.Fatalf("Persist (no-remote, relative): %v", err)
+	}
+
+	out, err := exec.Command("git", "-C", "repo", "show", DefaultDataBranch+":tests/"+EncodeTestID("p/TestA")+".ndjson").CombinedOutput()
+	if err != nil {
+		t.Fatalf("read tests file from data branch: %v: %s", err, out)
+	}
+	if !strings.Contains(string(out), run.RunID) {
+		t.Errorf("test ndjson missing run_id %q:\n%s", run.RunID, out)
+	}
+}
+
+func TestPersist_DevModeWritesScratchDirAndSkipsGit(t *testing.T) {
+	requireGit(t)
+	dir := t.TempDir()
+	gitMust(t, "", "init", "-b", "main", dir)
+
+	results := []models.TestResult{{
+		Id:        "p/TestA",
+		Ran:       true,
+		Passed:    true,
+		Duration:  1 * time.Millisecond,
+		StartTime: time.Date(2026, 4, 30, 0, 0, 0, 0, time.UTC),
+	}}
+	run := newTestRun("dev-run", "abc123", "main")
+	if err := New(Options{RepoDir: dir, Dev: true}).InsertNewTestResults(run, results); err != nil {
+		t.Fatalf("Persist (dev): %v", err)
+	}
+
+	scratch := filepath.Join(dir, DevDir)
+	runPath := filepath.Join(scratch, "runs", run.RunID+".json")
+	if _, err := os.Stat(runPath); err != nil {
+		t.Errorf("run record not written to scratch dir: %v", err)
+	}
+	entryPath := filepath.Join(scratch, "tests", EncodeTestID("p/TestA")+".ndjson")
+	b, err := os.ReadFile(entryPath)
+	if err != nil {
+		t.Fatalf("entry file not written: %v", err)
+	}
+	if !strings.Contains(string(b), run.RunID) {
+		t.Errorf("entry file missing run_id %q:\n%s", run.RunID, b)
+	}
+
+	// No data branch ref should exist — git path was skipped.
+	if out, err := exec.Command("git", "-C", dir, "rev-parse", "--verify", DefaultDataBranch).CombinedOutput(); err == nil {
+		t.Errorf("expected no %s branch, but rev-parse succeeded: %s", DefaultDataBranch, out)
 	}
 }
 
@@ -392,7 +464,7 @@ func TestPersist_RequiresOriginByDefault(t *testing.T) {
 	gitMust(t, "", "init", dir)
 	results := []models.TestResult{{Id: "p/TestA", Ran: true, Passed: true}}
 	run := newTestRun("orphan-run", "abc", "main")
-	err := Persist(Options{RepoDir: dir}, run, results)
+	err := New(Options{RepoDir: dir}).InsertNewTestResults(run, results)
 	if !errors.Is(err, ErrNoOrigin) {
 		t.Errorf("expected ErrNoOrigin, got %v", err)
 	}

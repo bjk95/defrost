@@ -1,0 +1,18 @@
+{
+  "testResults": [
+    {
+      "name": "__CWD__/basics.test.js",
+      "status": "passed",
+      "message": "",
+      "assertionResults": [
+        {
+          "title": "adds correctly",
+          "status": "passed",
+          "ancestorTitles": [],
+          "failureMessages": [],
+          "duration": 1.0
+        }
+      ]
+    }
+  ]
+}

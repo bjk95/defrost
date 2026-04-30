@@ -1,0 +1,25 @@
+{
+  "testResults": [
+    {
+      "name": "__CWD__/nested.test.js",
+      "status": "passed",
+      "message": "",
+      "assertionResults": [
+        {
+          "title": "same",
+          "status": "passed",
+          "ancestorTitles": ["outer", "A"],
+          "failureMessages": [],
+          "duration": 1.0
+        },
+        {
+          "title": "same",
+          "status": "passed",
+          "ancestorTitles": ["outer", "B"],
+          "failureMessages": [],
+          "duration": 2.0
+        }
+      ]
+    }
+  ]
+}

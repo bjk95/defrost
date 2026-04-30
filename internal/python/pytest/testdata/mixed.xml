@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<testsuites>
+  <testsuite name="pytest" errors="0" failures="1" skipped="1" tests="3" time="0.005" timestamp="2026-04-29T00:00:00.000000" hostname="x">
+    <testcase classname="tests.test_a" name="test_pass" time="0.001">
+      <system-out>hello stdout</system-out>
+    </testcase>
+    <testcase classname="tests.test_a" name="test_fail" time="0.002">
+      <failure message="assert 1 == 2" type="AssertionError">stack</failure>
+      <system-out>captured stdout</system-out>
+      <system-err>captured stderr</system-err>
+    </testcase>
+    <testcase classname="tests.test_a" name="test_skip" time="0.000">
+      <skipped message="not today" type="pytest.skip"/>
+    </testcase>
+  </testsuite>
+</testsuites>
