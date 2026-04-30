@@ -22,11 +22,13 @@ type Span struct {
 	Resource          map[string]any `json:"resource"`
 }
 
+// SpanStatus records the outcome of a span.
 type SpanStatus struct {
 	Code    string `json:"code"`              // "OK" | "ERROR" | "UNSET"
 	Message string `json:"message,omitempty"`
 }
 
+// SpanEvent is a timestamped annotation attached to a span.
 type SpanEvent struct {
 	TimeUnixNano int64          `json:"time_unix_nano"`
 	Name         string         `json:"name"`

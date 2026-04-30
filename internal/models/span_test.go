@@ -3,6 +3,7 @@ package models
 import (
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -64,17 +65,9 @@ func TestSpan_OmitsEmptyOptionalFields(t *testing.T) {
 	}
 	s := string(b)
 	for _, omitted := range []string{`"parent_span_id"`, `"kind"`, `"attributes"`, `"events"`, `"message"`} {
-		if got := s; containsField(got, omitted) {
+		if got := s; strings.Contains(got, omitted) {
 			t.Errorf("expected %s to be omitted, got: %s", omitted, got)
 		}
 	}
 }
 
-func containsField(haystack, field string) bool {
-	for i := 0; i+len(field) <= len(haystack); i++ {
-		if haystack[i:i+len(field)] == field {
-			return true
-		}
-	}
-	return false
-}
