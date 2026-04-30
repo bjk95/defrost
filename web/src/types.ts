@@ -67,3 +67,7 @@ export interface TestRunDetail {
   test: Entry;
   run: RunRecord;
 }
+
+export interface SuppressionsResponse {
+  test_ids: string[];
+}

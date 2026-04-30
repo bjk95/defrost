@@ -20,6 +20,10 @@ import (
 // loaderFn is a package-level seam so tests stub the data load.
 var loaderFn = Load
 
+// backendFn is a package-level seam so tests stub the persist backend
+// without going through the real git/file backends.
+var backendFn = func(opts persist.Options) persist.Backend { return persist.New(opts) }
+
 // New returns the http.Handler for `defrost serve`. It does not retain
 // any per-request state — each /api/* request loads the data branch via
 // loaderFn(opts).
@@ -35,6 +39,10 @@ func New(opts persist.Options, assets fs.FS) http.Handler {
 		w.Header().Set("Cache-Control", "public, max-age=60")
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(buildGridResponse(ds))
+	})
+
+	mux.HandleFunc("/api/suppressions", func(w http.ResponseWriter, r *http.Request) {
+		handleSuppressions(w, r, opts)
 	})
 
 	mux.HandleFunc("/api/test/", func(w http.ResponseWriter, r *http.Request) {
@@ -73,6 +81,100 @@ func New(opts persist.Options, assets fs.FS) http.Handler {
 
 	mux.HandleFunc("/", spaHandler(assets))
 	return mux
+}
+
+// suppressionsResponse is the wire shape for GET /api/suppressions.
+// The on-disk schema only stores test IDs; richer metadata
+// (added_at / by) is intentionally not persisted yet.
+type suppressionsResponse struct {
+	TestIDs []string `json:"test_ids"`
+}
+
+// suppressionMutation is the wire shape for POST and DELETE bodies.
+// We send the test_id in the body (rather than the URL) to avoid
+// double-escaping issues for IDs containing slashes or percent-encoded
+// characters.
+type suppressionMutation struct {
+	TestID string `json:"test_id"`
+}
+
+func handleSuppressions(w http.ResponseWriter, r *http.Request, opts persist.Options) {
+	be := backendFn(opts)
+	switch r.Method {
+	case http.MethodGet:
+		ids, err := be.GetSuppressions()
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if ids == nil {
+			ids = []string{}
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(suppressionsResponse{TestIDs: ids})
+	case http.MethodPost:
+		var body suppressionMutation
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeJSONError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		if body.TestID == "" {
+			writeJSONError(w, http.StatusBadRequest, "test_id is required")
+			return
+		}
+		mutate := func(cur []string) []string { return append(cur, body.TestID) }
+		if err := be.UpdateSuppressions(mutate, "suppress: add "+body.TestID); err != nil {
+			writeJSONError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		ids, err := be.GetSuppressions()
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if ids == nil {
+			ids = []string{}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(suppressionsResponse{TestIDs: ids})
+	case http.MethodDelete:
+		var body suppressionMutation
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeJSONError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		if body.TestID == "" {
+			writeJSONError(w, http.StatusBadRequest, "test_id is required")
+			return
+		}
+		mutate := func(cur []string) []string {
+			out := make([]string, 0, len(cur))
+			for _, id := range cur {
+				if id != body.TestID {
+					out = append(out, id)
+				}
+			}
+			return out
+		}
+		if err := be.UpdateSuppressions(mutate, "suppress: remove "+body.TestID); err != nil {
+			writeJSONError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		ids, err := be.GetSuppressions()
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if ids == nil {
+			ids = []string{}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(suppressionsResponse{TestIDs: ids})
+	default:
+		w.Header().Set("Allow", "GET, POST, DELETE")
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
 }
 
 type runDTO struct {

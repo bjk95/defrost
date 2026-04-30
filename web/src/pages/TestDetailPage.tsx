@@ -1,18 +1,13 @@
-import { useCallback, useMemo, useState, useSyncExternalStore } from "react";
+import { useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { getTests, getTestRun } from "@/api";
-import { decodeTestId, fmt, suppression, testStats } from "@/lib/utils";
+import { decodeTestId, fmt, testStats } from "@/lib/utils";
+import { useSuppressions } from "@/lib/suppressions";
 import type { Cell, RunSummary } from "@/types";
 import { Avatar, SectionLabel, StatusPill } from "@/components/Primitives";
 import { Icon } from "@/components/Icons";
 import { DurationChart, type ChartPoint } from "@/components/DurationChart";
-
-function useSuppression(testId: string) {
-  const subscribe = useCallback((cb: () => void) => suppression.subscribe(cb), []);
-  const get = useCallback(() => suppression.has(testId), [testId]);
-  return useSyncExternalStore(subscribe, get, get);
-}
 
 export function TestDetailPage() {
   const [searchParams] = useSearchParams();
@@ -62,7 +57,8 @@ function TestDetailInner({
   onBack: () => void;
   onOpenRun: (rid: string) => void;
 }) {
-  const isSuppressed = useSuppression(testId);
+  const { has, add, remove, isMutating } = useSuppressions();
+  const isSuppressed = has(testId);
 
   const points: ChartPoint[] = useMemo(() => {
     const byRun = new Map(cells.map((c) => [c.run_id, c] as const));
@@ -145,12 +141,13 @@ function TestDetailInner({
         <div style={{ flex: 1 }} />
         <SuppressionAction
           suppressed={isSuppressed}
-          onAdd={() => suppression.add(testId)}
-          onRemove={() => suppression.remove(testId)}
+          pending={isMutating}
+          onAdd={() => add(testId)}
+          onRemove={() => remove(testId)}
         />
       </div>
 
-      {isSuppressed && <SuppressionBanner onRemove={() => suppression.remove(testId)} />}
+      {isSuppressed && <SuppressionBanner onRemove={() => remove(testId)} />}
 
       <div
         style={{
@@ -609,10 +606,12 @@ function RunHistoryTable({
 
 function SuppressionAction({
   suppressed,
+  pending,
   onAdd,
   onRemove,
 }: {
   suppressed: boolean;
+  pending: boolean;
   onAdd: () => void;
   onRemove: () => void;
 }) {
@@ -623,6 +622,7 @@ function SuppressionAction({
     return (
       <button
         onClick={onRemove}
+        disabled={pending}
         onMouseEnter={() => setHover(true)}
         onMouseLeave={() => setHover(false)}
         style={{
@@ -636,7 +636,8 @@ function SuppressionAction({
           color: "var(--fg)",
           border: "1px solid var(--border)",
           borderRadius: 6,
-          cursor: "pointer",
+          cursor: pending ? "wait" : "pointer",
+          opacity: pending ? 0.6 : 1,
         }}
       >
         <Icon.Check /> Remove from suppression list
@@ -648,6 +649,7 @@ function SuppressionAction({
       <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
         <span style={{ fontSize: 12, color: "var(--fg-muted)" }}>Suppress this test?</span>
         <button
+          disabled={pending}
           onClick={() => {
             onAdd();
             setConfirming(false);

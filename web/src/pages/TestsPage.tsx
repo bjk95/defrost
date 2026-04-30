@@ -1,15 +1,17 @@
-import { useCallback, useMemo, useState, useSyncExternalStore } from "react";
+import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
+import Fuse from "fuse.js";
 import { getTests } from "@/api";
 import {
   buildTestTree,
+  decodeTestId,
   fmt,
-  suppression,
   testStats,
   type TreeBranch,
   type TreeNode,
 } from "@/lib/utils";
+import { useSuppressions } from "@/lib/suppressions";
 import type { Cell, RunSummary, TestRow } from "@/types";
 import {
   CountsBar,
@@ -22,15 +24,6 @@ import { SearchInput, Segmented } from "@/components/Controls";
 
 type StatusFilter = "all" | "failing" | "flaky";
 type WindowSize = "10" | "20" | "50";
-
-function useSuppressedTest(testId: string) {
-  const subscribe = useCallback(
-    (cb: () => void) => suppression.subscribe(cb),
-    [],
-  );
-  const get = useCallback(() => suppression.has(testId), [testId]);
-  return useSyncExternalStore(subscribe, get, get);
-}
 
 export function TestsPage() {
   const navigate = useNavigate();
@@ -125,6 +118,30 @@ function TestsPageInner({
     [visibleRuns],
   );
 
+  // Fuse indexes both the human-readable test name and the decoded
+  // test_id so users can match how they read the tree (slashes, dots,
+  // mixed case) without typing percent-encoded characters. Built from
+  // `tests` only — windowing/status/cells filters are applied after.
+  const fuse = useMemo(
+    () =>
+      new Fuse(
+        tests.map((t) => ({ test: t, decoded: decodeTestId(t.test_id) })),
+        {
+          keys: ["test.test_name", "decoded"],
+          threshold: 0.4,
+          ignoreLocation: true,
+          minMatchCharLength: 2,
+        },
+      ),
+    [tests],
+  );
+
+  const matchedIds = useMemo<Set<string> | null>(() => {
+    const needle = search.trim();
+    if (!needle) return null;
+    return new Set(fuse.search(needle).map((r) => r.item.test.test_id));
+  }, [fuse, search]);
+
   const filtered = useMemo(() => {
     return tests
       .map((t) => ({
@@ -132,10 +149,7 @@ function TestsPageInner({
         cells: t.cells.filter((c) => visibleRunIds.has(c.run_id)),
       }))
       .filter((t) => {
-        if (search) {
-          const hay = (t.test_id + " " + t.test_name).toLowerCase();
-          if (!hay.includes(search.toLowerCase())) return false;
-        }
+        if (matchedIds && !matchedIds.has(t.test_id)) return false;
         const stats = testStats(t.cells);
         if (statusFilter === "failing" && stats.lastStatus !== "fail") return false;
         if (statusFilter === "flaky") {
@@ -143,7 +157,7 @@ function TestsPageInner({
         }
         return t.cells.length > 0;
       });
-  }, [tests, search, statusFilter, visibleRunIds]);
+  }, [tests, matchedIds, statusFilter, visibleRunIds]);
 
   const tree = useMemo(() => buildTestTree(filtered), [filtered]);
 
@@ -440,7 +454,8 @@ function TestRowView({
 }) {
   const [hover, setHover] = useState(false);
   const stats = testStats(test.cells);
-  const isSuppressed = useSuppressedTest(test.test_id);
+  const { has } = useSuppressions();
+  const isSuppressed = has(test.test_id);
   const indent = ROW_BASE_INDENT + depth * ROW_INDENT_STEP;
   return (
     <div

@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Link, Route, Routes, useLocation } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { getTests } from "@/api";
 import { Icon, Logo } from "@/components/Icons";
-import { suppression } from "@/lib/utils";
+import { useSuppressions } from "@/lib/suppressions";
 import { TestsPage } from "@/pages/TestsPage";
 import { TestDetailPage } from "@/pages/TestDetailPage";
 import { RunsPage } from "@/pages/RunsPage";
@@ -26,12 +26,6 @@ function useTheme(): [string, (next: string) => void] {
   return [theme, setTheme];
 }
 
-function useSuppressionCount(): number {
-  const subscribe = useCallback((cb: () => void) => suppression.subscribe(cb), []);
-  const get = useCallback(() => suppression.count(), []);
-  return useSyncExternalStore(subscribe, get, get);
-}
-
 export default function App() {
   const [theme, setTheme] = useTheme();
   const location = useLocation();
@@ -41,7 +35,7 @@ export default function App() {
   const onTests = !onSuppressions && !onRuns;
 
   const { data } = useQuery({ queryKey: ["tests"], queryFn: getTests });
-  const suppressionCount = useSuppressionCount();
+  const { count: suppressionCount } = useSuppressions();
 
   return (
     <div

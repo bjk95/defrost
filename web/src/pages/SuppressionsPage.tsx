@@ -1,35 +1,19 @@
-import { useCallback, useMemo, useState, useSyncExternalStore } from "react";
+import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
+import Fuse from "fuse.js";
 import { getTests } from "@/api";
 import {
   decodeTestId,
   fmt,
-  suppression,
   testStats,
-  type SuppressionEntry,
   type TestStats,
 } from "@/lib/utils";
+import { useSuppressions, type SuppressionEntry } from "@/lib/suppressions";
 import type { Cell, TestRow } from "@/types";
 import { Avatar, StatusPill } from "@/components/Primitives";
 import { Icon } from "@/components/Icons";
 import { SearchInput } from "@/components/Controls";
-
-function useSuppressionEntries(): SuppressionEntry[] {
-  const subscribe = useCallback((cb: () => void) => suppression.subscribe(cb), []);
-  // Stable snapshot: only return a new array when the entry set actually changes.
-  const snapshotRef = useMemo(() => ({ key: "", value: [] as SuppressionEntry[] }), []);
-  const get = useCallback(() => {
-    const next = suppression.entries();
-    const key = next.map((x) => x.test_id + "|" + x.added_at).join(",");
-    if (snapshotRef.key !== key) {
-      snapshotRef.key = key;
-      snapshotRef.value = next;
-    }
-    return snapshotRef.value;
-  }, [snapshotRef]);
-  return useSyncExternalStore(subscribe, get, get);
-}
 
 interface Row extends SuppressionEntry {
   test?: TestRow;
@@ -39,7 +23,7 @@ interface Row extends SuppressionEntry {
 
 export function SuppressionsPage() {
   const navigate = useNavigate();
-  const items = useSuppressionEntries();
+  const { entries: items, remove, isLoading, isMutating } = useSuppressions();
   const { data } = useQuery({ queryKey: ["tests"], queryFn: getTests });
   const [q, setQ] = useState("");
 
@@ -49,21 +33,41 @@ export function SuppressionsPage() {
     return m;
   }, [data]);
 
-  const rows = useMemo<Row[]>(() => {
-    const needle = q.trim().toLowerCase();
-    return items
-      .map((entry) => {
+  const allRows = useMemo<Row[]>(
+    () =>
+      items.map((entry) => {
         const test = testById.get(entry.test_id);
         const stats = test ? testStats(test.cells) : undefined;
         const lastCell = test
           ? [...test.cells].reverse().find((c) => c.status !== "skip")
           : undefined;
         return { ...entry, test, stats, lastCell };
-      })
-      .filter((r) =>
-        !needle || r.test_id.toLowerCase().includes(needle),
-      );
-  }, [items, q, testById]);
+      }),
+    [items, testById],
+  );
+
+  // Fuse indexes the decoded form so users can type the package + test
+  // name as they read it on screen (slashes, dots, mixed case all work),
+  // not the URL-encoded test_id we store on disk.
+  const fuse = useMemo(
+    () =>
+      new Fuse(
+        allRows.map((r) => ({ row: r, decoded: decodeTestId(r.test_id) })),
+        {
+          keys: ["decoded"],
+          threshold: 0.4,
+          ignoreLocation: true,
+          minMatchCharLength: 2,
+        },
+      ),
+    [allRows],
+  );
+
+  const rows = useMemo<Row[]>(() => {
+    const needle = q.trim();
+    if (!needle) return allRows;
+    return fuse.search(needle).map((res) => res.item.row);
+  }, [allRows, fuse, q]);
 
   const onOpenTest = (testId: string) =>
     navigate(`/test?id=${encodeURIComponent(testId)}`);
@@ -107,8 +111,19 @@ export function SuppressionsPage() {
             color: "var(--fg-muted)",
           }}
         >
-          {items.length} {items.length === 1 ? "test" : "tests"}
+          {isLoading ? "loading…" : `${items.length} ${items.length === 1 ? "test" : "tests"}`}
         </span>
+        {isMutating && (
+          <span
+            style={{
+              fontFamily: "var(--font-mono)",
+              fontSize: 12,
+              color: "var(--accent)",
+            }}
+          >
+            saving…
+          </span>
+        )}
       </div>
       <p
         style={{
@@ -186,7 +201,9 @@ export function SuppressionsPage() {
           <span></span>
         </div>
 
-        {rows.length === 0 ? (
+        {isLoading ? (
+          <LoadingState />
+        ) : rows.length === 0 ? (
           <EmptyState
             hasFilter={!!q.trim()}
             onGoTests={onGoTests}
@@ -197,8 +214,9 @@ export function SuppressionsPage() {
             <SuppressionRow
               key={r.test_id}
               row={r}
+              pending={isMutating}
               onOpen={() => onOpenTest(r.test_id)}
-              onRemove={() => suppression.remove(r.test_id)}
+              onRemove={() => remove(r.test_id)}
             />
           ))
         )}
@@ -228,10 +246,12 @@ export function SuppressionsPage() {
 
 function SuppressionRow({
   row,
+  pending,
   onOpen,
   onRemove,
 }: {
   row: Row;
+  pending: boolean;
   onOpen: () => void;
   onRemove: () => void;
 }) {
@@ -246,9 +266,9 @@ function SuppressionRow({
   const pkg = dot === -1 ? "" : decoded.slice(0, dot);
   const name = dot === -1 ? decoded : decoded.slice(dot + 1);
 
-  const relAdded = row.added_at ? fmt.relTime(row.added_at) : "—";
-  const absAdded = row.added_at ? fmt.absDate(row.added_at) : "";
-  const byLabel = row.by || "you";
+  const relAdded = "—";
+  const absAdded = "";
+  const byLabel = "you";
 
   return (
     <div
@@ -367,6 +387,7 @@ function SuppressionRow({
         {confirming ? (
           <button
             onClick={onRemove}
+            disabled={pending}
             title="Confirm remove"
             style={{
               fontSize: 11,
@@ -376,7 +397,8 @@ function SuppressionRow({
               color: "white",
               border: "none",
               borderRadius: 4,
-              cursor: "pointer",
+              cursor: pending ? "wait" : "pointer",
+              opacity: pending ? 0.6 : 1,
             }}
           >
             Remove
@@ -402,6 +424,21 @@ function SuppressionRow({
           </button>
         )}
       </div>
+    </div>
+  );
+}
+
+function LoadingState() {
+  return (
+    <div
+      style={{
+        padding: "48px 24px",
+        textAlign: "center",
+        color: "var(--fg-muted)",
+        fontSize: 13,
+      }}
+    >
+      Loading suppressions…
     </div>
   );
 }

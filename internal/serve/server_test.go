@@ -1,20 +1,75 @@
 package serve
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"sort"
 	"testing"
 	"testing/fstest"
 
 	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
+	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
 	resourcepb "go.opentelemetry.io/proto/otlp/resource/v1"
 	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
 
 	"github.com/bjk95/defrost/internal/models"
 	"github.com/bjk95/defrost/internal/persist"
 )
+
+// stubBackend is a minimal in-memory persist.Backend used to test the
+// suppressions endpoints without going through the real git/file
+// backends. Only the suppressions methods are exercised; the rest are
+// stubs that return zero values.
+type stubBackend struct {
+	ids []string
+}
+
+func (s *stubBackend) InitialisePersistence() error { return nil }
+func (s *stubBackend) InsertNewRun(_ []*tracepb.ResourceSpans, _ []*metricspb.ResourceMetrics) error {
+	return nil
+}
+func (s *stubBackend) GetTestHistory(_ string) ([]*tracepb.ResourceSpans, error) { return nil, nil }
+func (s *stubBackend) LoadAll() ([]*tracepb.ResourceSpans, map[string][]*tracepb.ResourceSpans, error) {
+	return nil, nil, nil
+}
+func (s *stubBackend) GetSuppressions() ([]string, error) {
+	out := append([]string(nil), s.ids...)
+	return out, nil
+}
+func (s *stubBackend) UpdateSuppressions(mutate func([]string) []string, _ string) error {
+	cur := append([]string(nil), s.ids...)
+	next := mutate(cur)
+	// Mirror the on-disk dedupe+sort so reads are deterministic.
+	seen := make(map[string]struct{}, len(next))
+	out := make([]string, 0, len(next))
+	for _, id := range next {
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	sort.Strings(out)
+	s.ids = out
+	return nil
+}
+
+func newSuppressionsServer(t *testing.T, ids []string) (*httptest.Server, *stubBackend) {
+	t.Helper()
+	be := &stubBackend{ids: append([]string(nil), ids...)}
+	prev := backendFn
+	backendFn = func(_ persist.Options) persist.Backend { return be }
+	t.Cleanup(func() { backendFn = prev })
+	h := New(persist.Options{}, fstest.MapFS{
+		"web/dist/index.html": &fstest.MapFile{Data: []byte("<!doctype html>")},
+	})
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+	return srv, be
+}
 
 func stubDataset() Dataset {
 	return Dataset{
@@ -231,5 +286,103 @@ func TestServer_SPAFallback(t *testing.T) {
 	n, _ := resp.Body.Read(buf)
 	if string(buf[:n]) != "<!doctype html><html>spa</html>" {
 		t.Errorf("fallback body wrong: %q", buf[:n])
+	}
+}
+
+func TestServer_GetSuppressions_EmptyIsEmptyArray(t *testing.T) {
+	srv, _ := newSuppressionsServer(t, nil)
+
+	resp, err := http.Get(srv.URL + "/api/suppressions")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("status: want 200, got %d", resp.StatusCode)
+	}
+	var body suppressionsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.TestIDs == nil {
+		t.Errorf("test_ids must be [] not null when empty")
+	}
+	if len(body.TestIDs) != 0 {
+		t.Errorf("want 0 ids, got %d", len(body.TestIDs))
+	}
+}
+
+func TestServer_PostSuppressions_AddsAndReturnsCurrent(t *testing.T) {
+	srv, be := newSuppressionsServer(t, []string{"existing"})
+
+	body, _ := json.Marshal(suppressionMutation{TestID: "pkg.TestNew"})
+	resp, err := http.Post(srv.URL+"/api/suppressions", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("status: want 200, got %d", resp.StatusCode)
+	}
+	var got suppressionsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(got.TestIDs) != 2 || got.TestIDs[0] != "existing" || got.TestIDs[1] != "pkg.TestNew" {
+		t.Errorf("unexpected response ids: %v", got.TestIDs)
+	}
+	if len(be.ids) != 2 || be.ids[0] != "existing" || be.ids[1] != "pkg.TestNew" {
+		t.Errorf("backend state: %v", be.ids)
+	}
+}
+
+func TestServer_PostSuppressions_RejectsMissingID(t *testing.T) {
+	srv, _ := newSuppressionsServer(t, nil)
+	resp, err := http.Post(srv.URL+"/api/suppressions", "application/json", bytes.NewReader([]byte("{}")))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("want 400, got %d", resp.StatusCode)
+	}
+}
+
+func TestServer_DeleteSuppressions_RemovesAndReturnsCurrent(t *testing.T) {
+	srv, be := newSuppressionsServer(t, []string{"a", "b", "c"})
+
+	body, _ := json.Marshal(suppressionMutation{TestID: "b"})
+	req, _ := http.NewRequest(http.MethodDelete, srv.URL+"/api/suppressions", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("status: want 200, got %d", resp.StatusCode)
+	}
+	var got suppressionsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(got.TestIDs) != 2 || got.TestIDs[0] != "a" || got.TestIDs[1] != "c" {
+		t.Errorf("unexpected response ids: %v", got.TestIDs)
+	}
+	if len(be.ids) != 2 || be.ids[0] != "a" || be.ids[1] != "c" {
+		t.Errorf("backend state: %v", be.ids)
+	}
+}
+
+func TestServer_Suppressions_RejectsUnsupportedMethod(t *testing.T) {
+	srv, _ := newSuppressionsServer(t, nil)
+	req, _ := http.NewRequest(http.MethodPut, srv.URL+"/api/suppressions", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Errorf("want 405, got %d", resp.StatusCode)
 	}
 }
