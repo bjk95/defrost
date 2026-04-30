@@ -9,9 +9,23 @@ permissions:
   contents: write
 
 jobs:
+  unit-tests:
+    name: go unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Run go test
+        run: go test -race ./...
+
   python:
     name: pytest example
     runs-on: ubuntu-latest
+    needs: unit-tests
     steps:
       - uses: actions/checkout@v4
 
@@ -67,6 +81,7 @@ jobs:
   javascript:
     name: jest example (js)
     runs-on: ubuntu-latest
+    needs: unit-tests
     steps:
       - uses: actions/checkout@v4
 
@@ -124,6 +139,7 @@ jobs:
   typescript:
     name: jest example (ts)
     runs-on: ubuntu-latest
+    needs: unit-tests
     steps:
       - uses: actions/checkout@v4
 
