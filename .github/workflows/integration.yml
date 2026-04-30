@@ -278,6 +278,7 @@ jobs:
 
       - name: Run defrost against examples/promptfoo
         run: |
+          set -o pipefail
           cd examples/promptfoo
           ../../defrost exec promptfoo eval -c promptfooconfig.yaml --no-cache 2>&1 | tee out.txt
         env:
