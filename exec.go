@@ -99,7 +99,7 @@ func execWith(a runner.Adapter, cmd []string, opts ExecOpts) int {
 	// to the user (pytest and jest do; the Go adapter consumes stdout
 	// because go test -json is for the parser). Defrost does not layer
 	// its own per-test print on top — we only emit a summary line below.
-	results, code := a.Run(cmd)
+	results, adapterMetrics, code := a.Run(cmd)
 
 	if len(results) > 0 {
 		pass, fail, skip := tallyResults(results)
@@ -107,6 +107,7 @@ func execWith(a runner.Adapter, cmd []string, opts ExecOpts) int {
 	}
 
 	var metrics []*metricspb.Metric
+	metrics = append(metrics, adapterMetrics...)
 	if receiver != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), drainGrace)
 		buffered, err := receiver.Shutdown(ctx)
