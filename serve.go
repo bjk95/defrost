@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"syscall"
 
 	"github.com/bjk95/defrost/internal/persist"
 	"github.com/bjk95/defrost/internal/serve"
@@ -30,8 +31,7 @@ func HandleServe(opts ServeOpts) int {
 	addr := "127.0.0.1:" + strconv.Itoa(opts.Port)
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
-		var opErr *net.OpError
-		if errors.As(err, &opErr) {
+		if errors.Is(err, syscall.EADDRINUSE) {
 			fmt.Fprintf(os.Stderr, "port %d already in use; pass --port to override\n", opts.Port)
 			return 1
 		}

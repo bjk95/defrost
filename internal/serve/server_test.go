@@ -127,6 +127,34 @@ func TestServer_GetTestRun_404OnUnknown(t *testing.T) {
 	}
 }
 
+func TestServer_GetTestRun_HandlesEncodedTestIDs(t *testing.T) {
+	// Real test IDs are url.PathEscape'd: github.com/x/p/TestA → github.com%2Fx%2Fp%2FTestA
+	encodedTID := "github.com%2Fx%2Fp%2FTestA"
+	ds := Dataset{
+		Runs: []persist.RunRecord{
+			{RunID: "run-1", Timestamp: "2026-01-01T00:00:00Z"},
+		},
+		TestEntries: map[string][]persist.Entry{
+			encodedTID: {
+				{TestID: encodedTID, TestName: "github.com/x/p/TestA", RunID: "run-1", Status: "pass", DurationMs: 4, Output: "ok"},
+			},
+		},
+	}
+	srv := newTestServer(t, ds, fstest.MapFS{
+		"web/dist/index.html": &fstest.MapFile{Data: []byte("<!doctype html>")},
+	})
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/test/" + encodedTID + "/run/run-1")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("status: want 200, got %d", resp.StatusCode)
+	}
+}
+
 func TestServer_SPAFallback(t *testing.T) {
 	srv := newTestServer(t, stubDataset(), fstest.MapFS{
 		"web/dist/index.html": &fstest.MapFile{Data: []byte("<!doctype html><html>spa</html>")},

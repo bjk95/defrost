@@ -10,6 +10,10 @@ on:
       - 'web/vite.config.ts'
       - 'web/tailwind.config.ts'
       - 'web/tsconfig.json'
+      - 'web/tsconfig.app.json'
+      - 'web/tsconfig.node.json'
+      - 'web/postcss.config.js'
+      - 'web/vitest.setup.ts'
       - 'web/components.json'
 
 permissions:

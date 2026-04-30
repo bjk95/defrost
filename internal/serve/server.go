@@ -31,7 +31,7 @@ func New(opts persist.Options, assets fs.FS) http.Handler {
 	})
 
 	mux.HandleFunc("/api/test/", func(w http.ResponseWriter, r *http.Request) {
-		tid, rid, ok := parseTestRunPath(r.URL.Path)
+		tid, rid, ok := parseTestRunPath(r.URL.EscapedPath())
 		if !ok {
 			http.NotFound(w, r)
 			return
