@@ -1,8 +1,16 @@
 package promptfoo
 
 import (
+	"fmt"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+
+	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
+
+	"github.com/bjk95/defrost/internal/models"
+	"github.com/bjk95/defrost/internal/runner"
 )
 
 // Adapter implements runner.Adapter for `promptfoo eval` invocations.
@@ -66,4 +74,56 @@ func buildArgs(cmd []string, jsonPath string) []string {
 		return rest
 	}
 	return append(rest, "--output", jsonPath)
+}
+
+func (a *Adapter) Run(cmd []string) ([]models.TestResult, []*metricspb.Metric, int) {
+	if len(cmd) == 0 {
+		return nil, nil, 2
+	}
+	userPath := userOutputPath(cmd[1:])
+	tempPath := userPath
+	if tempPath == "" {
+		f, err := os.CreateTemp("", "defrost-promptfoo-*.json")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "defrost:", err)
+			return nil, nil, 1
+		}
+		tempPath = f.Name()
+		f.Close()
+		defer os.Remove(tempPath)
+	}
+
+	args := buildArgs(cmd, tempPath)
+
+	child := exec.Command(cmd[0], args...)
+	child.Stdout = os.Stdout
+	child.Stderr = os.Stderr
+
+	runErr := child.Run()
+	exitCode := 0
+	switch e := runErr.(type) {
+	case nil:
+		// success
+	case *exec.ExitError:
+		exitCode = e.ExitCode()
+	default:
+		fmt.Fprintln(os.Stderr, "defrost:", runErr)
+		return nil, nil, 1
+	}
+
+	f, err := os.Open(tempPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "defrost: promptfoo output not found at", tempPath, ":", err)
+		return nil, nil, exitCode
+	}
+	defer f.Close()
+
+	tests, metrics, parseErr := Parse(f)
+	if parseErr != nil {
+		fmt.Fprintln(os.Stderr, "defrost:", parseErr)
+		return nil, nil, exitCode
+	}
+	runner.ApplyRepoPrefix(tests)
+
+	return tests, metrics, exitCode
 }

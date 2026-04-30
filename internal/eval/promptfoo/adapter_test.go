@@ -1,20 +1,11 @@
 package promptfoo
 
 import (
-	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"testing"
 )
-
-// silence unused imports until later tasks introduce real uses
-var _ = io.Discard
-var _ = exec.Command
-var _ = os.CreateTemp
-var _ = filepath.Join
-var _ = runtime.GOOS
 
 func TestMatches(t *testing.T) {
 	cases := []struct {
@@ -108,4 +99,76 @@ func equalSlices(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// fakeChildScript writes a small shell script that copies a fixture to the
+// path given after `--output`. Used to stub out `promptfoo eval` in Run tests.
+func fakeChildScript(t *testing.T, fixture string) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("fake-child shell script is bash-only")
+	}
+	dir := t.TempDir()
+	scriptPath := filepath.Join(dir, "fake-promptfoo")
+	fixtureSrc := filepath.Join("testdata", fixture)
+	body := `#!/usr/bin/env bash
+set -e
+out=""
+for ((i=1;i<=$#;i++)); do
+    a="${!i}"
+    if [[ "$a" == "--output" || "$a" == "-o" ]]; then
+        n=$((i+1))
+        out="${!n}"
+        break
+    elif [[ "$a" == --output=* ]]; then
+        out="${a#*=}"
+        break
+    fi
+done
+if [[ -z "$out" ]]; then
+    echo "fake-promptfoo: no --output flag" >&2
+    exit 2
+fi
+cp "` + fixtureSrc + `" "$out"
+`
+	if err := os.WriteFile(scriptPath, []byte(body), 0o755); err != nil {
+		t.Fatalf("write fake-promptfoo: %v", err)
+	}
+	abs, err := filepath.Abs(scriptPath)
+	if err != nil {
+		t.Fatalf("abs: %v", err)
+	}
+	return abs
+}
+
+func TestRunHappyPath(t *testing.T) {
+	bin := fakeChildScript(t, "single_assertion.json")
+	a := &Adapter{}
+	tests, metrics, code := a.Run([]string{bin, "eval", "-c", "x.yaml"})
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d", code)
+	}
+	if len(tests) != 1 || !tests[0].Passed {
+		t.Fatalf("expected 1 passing test, got %v", tests)
+	}
+	if len(metrics) != 1 || metrics[0].Name != "eval.contains" {
+		t.Fatalf("expected eval.contains metric, got %v", metrics)
+	}
+}
+
+func TestRunFailingChildPropagatesExit(t *testing.T) {
+	dir := t.TempDir()
+	scriptPath := filepath.Join(dir, "fake-fail")
+	body := `#!/usr/bin/env bash
+exit 7
+`
+	if err := os.WriteFile(scriptPath, []byte(body), 0o755); err != nil {
+		t.Fatalf("write fake-fail: %v", err)
+	}
+	abs, _ := filepath.Abs(scriptPath)
+	a := &Adapter{}
+	_, _, code := a.Run([]string{abs, "eval"})
+	if code != 7 {
+		t.Fatalf("expected exit 7, got %d", code)
+	}
 }
