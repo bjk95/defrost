@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-light-128.png">
+    <img alt="defrost" src="assets/logo-128.png" width="96" height="96">
+  </picture>
+</p>
+
 # defrost
 
 > Track AI evals, metrics, and tests with Git as the database.
