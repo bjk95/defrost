@@ -173,6 +173,37 @@ exit 7
 	}
 }
 
+func TestRunUserSuppliedOutputClearsStaleContent(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake-child shell script is bash-only")
+	}
+	// Pre-existing file at the user-supplied path with stale content.
+	dir := t.TempDir()
+	userPath := filepath.Join(dir, "user.json")
+	stale := []byte(`{"results":{"results":[{"success":true,"vars":{"stale":"data"},"gradingResult":{"pass":true,"score":1,"componentResults":[{"pass":true,"score":1,"assertion":{"type":"contains"}}]}}]}}`)
+	if err := os.WriteFile(userPath, stale, 0o644); err != nil {
+		t.Fatalf("write stale: %v", err)
+	}
+
+	// Fake child that exits 0 but writes nothing — so any stale content
+	// would survive and be parsed if defrost didn't clear it pre-run.
+	scriptPath := filepath.Join(dir, "fake-noop")
+	if err := os.WriteFile(scriptPath, []byte("#!/usr/bin/env bash\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("write fake: %v", err)
+	}
+	abs, _ := filepath.Abs(scriptPath)
+
+	a := &Adapter{}
+	tests, _, code := a.Run([]string{abs, "eval", "--output", userPath})
+	// Defrost must surface this as failure, not parse the stale data.
+	if code == 0 {
+		t.Fatalf("expected non-zero exit (stale file should not be ingested), got 0")
+	}
+	if len(tests) != 0 {
+		t.Fatalf("expected zero tests (stale data must not be ingested), got %d: %+v", len(tests), tests)
+	}
+}
+
 func TestRunChildSucceededButNoOutputFileBumpsExit(t *testing.T) {
 	// Fake child that exits 0 but never writes the output file. Defrost
 	// must surface this as a non-zero exit so a CI run can't silently

@@ -91,6 +91,13 @@ func (a *Adapter) Run(cmd []string) ([]models.TestResult, []*metricspb.Metric, i
 		tempPath = f.Name()
 		f.Close()
 		defer os.Remove(tempPath)
+	} else {
+		// User-supplied path: clear any pre-existing content so a failed
+		// child run can't be silently parsed as the current run's results.
+		if err := os.Remove(tempPath); err != nil && !os.IsNotExist(err) {
+			fmt.Fprintln(os.Stderr, "defrost: cannot clear", tempPath, ":", err)
+			return nil, nil, 1
+		}
 	}
 
 	args := buildArgs(cmd, tempPath)
