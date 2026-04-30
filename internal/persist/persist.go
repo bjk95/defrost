@@ -257,6 +257,39 @@ func NewRootSpan(run models.RunContext) *tracepb.Span {
 	}
 }
 
+// RunDurationMetric returns the auto-emitted gauge that records the
+// wall-clock duration of one defrost exec invocation, in milliseconds.
+// The metric name embeds the run's path-from-repo-root and the wrapped
+// command so each invocation site has its own time series.
+func RunDurationMetric(run models.RunContext, cmd []string, repoDir string, end time.Time) *metricspb.Metric {
+	durationMs := float64(end.UnixNano()-run.StartTimeUnixNano) / 1e6
+	return &metricspb.Metric{
+		Name:        "defrost.run." + runFQN(repoDir, cmd),
+		Description: "Wall-clock duration of one defrost exec invocation.",
+		Unit:        "ms",
+		Data: &metricspb.Metric_Gauge{Gauge: &metricspb.Gauge{
+			DataPoints: []*metricspb.NumberDataPoint{{
+				StartTimeUnixNano: uint64(run.StartTimeUnixNano),
+				TimeUnixNano:      uint64(end.UnixNano()),
+				Value:             &metricspb.NumberDataPoint_AsDouble{AsDouble: durationMs},
+			}},
+		}},
+	}
+}
+
+// runFQN builds the fully qualified run identifier embedded in the
+// duration metric name: "<path-from-repo-root>¬<space-joined cmd>" when
+// invoked from a subdirectory, or just the command when invoked at the
+// repo root (or when the prefix lookup fails).
+func runFQN(repoDir string, cmd []string) string {
+	joined := strings.Join(cmd, " ")
+	prefix, err := runGit(repoDir, "rev-parse", "--show-prefix")
+	if err != nil || prefix == "" {
+		return joined
+	}
+	return strings.TrimSuffix(prefix, "/") + "¬" + joined
+}
+
 // WrapSpansInResource constructs one *tracepb.ResourceSpans per span,
 // each carrying the same Resource. This is the storage shape: each line
 // in traces/<name>.ndjson is one ResourceSpans with a single Span.

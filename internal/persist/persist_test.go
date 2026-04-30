@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
 	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
@@ -433,6 +434,65 @@ func TestLoadAll_NoBranch_ReturnsEmpty(t *testing.T) {
 	}
 	if len(byEncodedName) != 0 {
 		t.Errorf("expected 0 test groups, got %d", len(byEncodedName))
+	}
+}
+
+func TestRunDurationMetric(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	repoDir := t.TempDir()
+	if out, err := exec.Command("git", "init", "-q", repoDir).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, out)
+	}
+	sub := filepath.Join(repoDir, "subpkg")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	startNs := int64(1_000_000_000)
+	run := models.RunContext{StartTimeUnixNano: startNs}
+	end := time.Unix(0, startNs+1_500_000_000) // +1.5s
+
+	cases := []struct {
+		name    string
+		repoDir string
+		want    string
+	}{
+		{"root", repoDir, "defrost.run.go test ./..."},
+		{"subdir", sub, "defrost.run.subpkg¬go test ./..."},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := RunDurationMetric(run, []string{"go", "test", "./..."}, tc.repoDir, end)
+			if m.Name != tc.want {
+				t.Errorf("name: got %q want %q", m.Name, tc.want)
+			}
+			if m.Unit != "ms" {
+				t.Errorf("unit: got %q want %q", m.Unit, "ms")
+			}
+			g, ok := m.Data.(*metricspb.Metric_Gauge)
+			if !ok {
+				t.Fatalf("data: got %T want *Metric_Gauge", m.Data)
+			}
+			if len(g.Gauge.DataPoints) != 1 {
+				t.Fatalf("data points: got %d want 1", len(g.Gauge.DataPoints))
+			}
+			dp := g.Gauge.DataPoints[0]
+			dv, ok := dp.Value.(*metricspb.NumberDataPoint_AsDouble)
+			if !ok {
+				t.Fatalf("value: got %T want AsDouble", dp.Value)
+			}
+			if dv.AsDouble != 1500.0 {
+				t.Errorf("value ms: got %v want 1500", dv.AsDouble)
+			}
+			if dp.StartTimeUnixNano != uint64(startNs) {
+				t.Errorf("start nano: got %d want %d", dp.StartTimeUnixNano, startNs)
+			}
+			if dp.TimeUnixNano != uint64(end.UnixNano()) {
+				t.Errorf("end nano: got %d want %d", dp.TimeUnixNano, end.UnixNano())
+			}
+		})
 	}
 }
 
