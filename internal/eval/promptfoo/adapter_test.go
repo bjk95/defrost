@@ -172,3 +172,26 @@ exit 7
 		t.Fatalf("expected exit 7, got %d", code)
 	}
 }
+
+func TestRunChildSucceededButNoOutputFileBumpsExit(t *testing.T) {
+	// Fake child that exits 0 but never writes the output file. Defrost
+	// must surface this as a non-zero exit so a CI run can't silently
+	// report success when defrost itself failed to read results.
+	if runtime.GOOS == "windows" {
+		t.Skip("fake-child shell script is bash-only")
+	}
+	dir := t.TempDir()
+	scriptPath := filepath.Join(dir, "fake-noop")
+	body := `#!/usr/bin/env bash
+exit 0
+`
+	if err := os.WriteFile(scriptPath, []byte(body), 0o755); err != nil {
+		t.Fatalf("write fake-noop: %v", err)
+	}
+	abs, _ := filepath.Abs(scriptPath)
+	a := &Adapter{}
+	_, _, code := a.Run([]string{abs, "eval"})
+	if code != 1 {
+		t.Fatalf("expected exit 1 (defrost-internal floor), got %d", code)
+	}
+}

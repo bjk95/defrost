@@ -114,6 +114,9 @@ func (a *Adapter) Run(cmd []string) ([]models.TestResult, []*metricspb.Metric, i
 	f, err := os.Open(tempPath)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "defrost: promptfoo output not found at", tempPath, ":", err)
+		if exitCode == 0 {
+			exitCode = 1
+		}
 		return nil, nil, exitCode
 	}
 	defer f.Close()
@@ -121,6 +124,9 @@ func (a *Adapter) Run(cmd []string) ([]models.TestResult, []*metricspb.Metric, i
 	tests, metrics, parseErr := Parse(f)
 	if parseErr != nil {
 		fmt.Fprintln(os.Stderr, "defrost:", parseErr)
+		if exitCode == 0 {
+			exitCode = 1
+		}
 		return nil, nil, exitCode
 	}
 	runner.ApplyRepoPrefix(tests)
