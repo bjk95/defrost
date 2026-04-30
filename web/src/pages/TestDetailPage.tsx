@@ -1,18 +1,13 @@
-import { useCallback, useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { getTests, getTestRun } from "@/api";
-import { decodeTestId, fmt, suppression, testStats } from "@/lib/utils";
+import { decodeTestId, fmt, testStats } from "@/lib/utils";
+import { useSuppressions } from "@/lib/suppressions";
 import type { Cell, RunSummary } from "@/types";
 import { Avatar, SectionLabel, StatusPill } from "@/components/Primitives";
 import { Icon } from "@/components/Icons";
 import { DurationChart, type ChartPoint } from "@/components/DurationChart";
-
-function useSuppression(testId: string) {
-  const subscribe = useCallback((cb: () => void) => suppression.subscribe(cb), []);
-  const get = useCallback(() => suppression.has(testId), [testId]);
-  return useSyncExternalStore(subscribe, get, get);
-}
 
 export function TestDetailPage() {
   const [searchParams] = useSearchParams();
@@ -62,7 +57,18 @@ function TestDetailInner({
   onBack: () => void;
   onOpenRun: (rid: string) => void;
 }) {
-  const isSuppressed = useSuppression(testId);
+  const {
+    has,
+    add,
+    remove,
+    isMutating,
+    isError: suppressionsError,
+    error: suppressionsErrorObj,
+  } = useSuppressions();
+  // Don't trust `has(testId)` when the read failed — the empty fallback
+  // would render a real suppression as "not suppressed" and offer the
+  // wrong action.
+  const isSuppressed = !suppressionsError && has(testId);
 
   const points: ChartPoint[] = useMemo(() => {
     const byRun = new Map(cells.map((c) => [c.run_id, c] as const));
@@ -143,14 +149,21 @@ function TestDetailInner({
           stats.failRate < 0.5 && <StatusPill status="flaky" />}
         {isSuppressed && <StatusPill status="suppressed" />}
         <div style={{ flex: 1 }} />
-        <SuppressionAction
-          suppressed={isSuppressed}
-          onAdd={() => suppression.add(testId)}
-          onRemove={() => suppression.remove(testId)}
-        />
+        {suppressionsError ? (
+          <SuppressionLoadError message={suppressionsErrorObj?.message} />
+        ) : (
+          <SuppressionAction
+            suppressed={isSuppressed}
+            pending={isMutating}
+            onAdd={() => add(testId)}
+            onRemove={() => remove(testId)}
+          />
+        )}
       </div>
 
-      {isSuppressed && <SuppressionBanner onRemove={() => suppression.remove(testId)} />}
+      {isSuppressed && (
+        <SuppressionBanner pending={isMutating} onRemove={() => remove(testId)} />
+      )}
 
       <div
         style={{
@@ -609,20 +622,30 @@ function RunHistoryTable({
 
 function SuppressionAction({
   suppressed,
+  pending,
   onAdd,
   onRemove,
 }: {
   suppressed: boolean;
+  pending: boolean;
   onAdd: () => void;
   onRemove: () => void;
 }) {
   const [hover, setHover] = useState(false);
   const [confirming, setConfirming] = useState(false);
 
+  // Once the mutation settles and the test is suppressed, reset the
+  // confirm flag so a later un-suppress + re-add starts from the default
+  // Add button rather than landing back inside the confirm UI.
+  useEffect(() => {
+    if (suppressed) setConfirming(false);
+  }, [suppressed]);
+
   if (suppressed) {
     return (
       <button
         onClick={onRemove}
+        disabled={pending}
         onMouseEnter={() => setHover(true)}
         onMouseLeave={() => setHover(false)}
         style={{
@@ -636,7 +659,8 @@ function SuppressionAction({
           color: "var(--fg)",
           border: "1px solid var(--border)",
           borderRadius: 6,
-          cursor: "pointer",
+          cursor: pending ? "wait" : "pointer",
+          opacity: pending ? 0.6 : 1,
         }}
       >
         <Icon.Check /> Remove from suppression list
@@ -644,14 +668,18 @@ function SuppressionAction({
     );
   }
   if (confirming) {
+    // Keep the confirm UI on screen — and both buttons disabled — while
+    // the POST is in flight so a slow backend can't accept duplicate
+    // clicks. The effect above resets `confirming` once the suppressed
+    // state flips, so we never get stuck here.
     return (
       <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-        <span style={{ fontSize: 12, color: "var(--fg-muted)" }}>Suppress this test?</span>
+        <span style={{ fontSize: 12, color: "var(--fg-muted)" }}>
+          {pending ? "Suppressing…" : "Suppress this test?"}
+        </span>
         <button
-          onClick={() => {
-            onAdd();
-            setConfirming(false);
-          }}
+          disabled={pending}
+          onClick={onAdd}
           style={{
             padding: "6px 12px",
             fontSize: 12,
@@ -660,12 +688,14 @@ function SuppressionAction({
             color: "var(--bg)",
             border: "1px solid var(--fg)",
             borderRadius: 6,
-            cursor: "pointer",
+            cursor: pending ? "wait" : "pointer",
+            opacity: pending ? 0.6 : 1,
           }}
         >
           Suppress
         </button>
         <button
+          disabled={pending}
           onClick={() => setConfirming(false)}
           style={{
             padding: "6px 10px",
@@ -674,7 +704,8 @@ function SuppressionAction({
             color: "var(--fg-muted)",
             border: "1px solid var(--border)",
             borderRadius: 6,
-            cursor: "pointer",
+            cursor: pending ? "wait" : "pointer",
+            opacity: pending ? 0.6 : 1,
           }}
         >
           Cancel
@@ -706,7 +737,35 @@ function SuppressionAction({
   );
 }
 
-function SuppressionBanner({ onRemove }: { onRemove: () => void }) {
+function SuppressionLoadError({ message }: { message?: string }) {
+  return (
+    <span
+      title={message || "Suppression state unavailable"}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 6,
+        padding: "6px 12px",
+        fontSize: 12,
+        color: "var(--danger)",
+        border: "1px solid var(--border)",
+        borderRadius: 6,
+        background: "var(--bg)",
+        cursor: "help",
+      }}
+    >
+      <Icon.AlertTriangle /> Suppression state unavailable
+    </span>
+  );
+}
+
+function SuppressionBanner({
+  pending,
+  onRemove,
+}: {
+  pending: boolean;
+  onRemove: () => void;
+}) {
   return (
     <div
       style={{
@@ -729,17 +788,19 @@ function SuppressionBanner({ onRemove }: { onRemove: () => void }) {
       <div style={{ flex: 1 }} />
       <button
         onClick={onRemove}
+        disabled={pending}
         style={{
           fontSize: 12,
           background: "transparent",
           border: "none",
-          cursor: "pointer",
+          cursor: pending ? "wait" : "pointer",
           color: "var(--accent)",
           padding: 0,
           fontWeight: 500,
+          opacity: pending ? 0.6 : 1,
         }}
       >
-        Remove
+        {pending ? "Removing…" : "Remove"}
       </button>
     </div>
   );
