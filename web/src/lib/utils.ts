@@ -34,6 +34,13 @@ export const fmt = {
       month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
     });
   },
+  absDate(iso: string): string {
+    if (!iso) return "—";
+    const d = new Date(iso);
+    return d.toLocaleDateString(undefined, {
+      year: "numeric", month: "short", day: "numeric",
+    });
+  },
   initials(name?: string): string {
     if (!name) return "??";
     const parts = name.trim().split(/\s+/).filter(Boolean);
@@ -175,30 +182,83 @@ export function runCounts(tests: TestRow[], runId: string): RunCounts {
   return { pass, fail, skip, total, total_ms };
 }
 
-const SUPPRESS_KEY = "defrost.suppressions.v1";
+export interface SuppressionEntry {
+  test_id: string;
+  added_at: string;
+  by?: string;
+}
+
+const SUPPRESS_KEY = "defrost.suppressions.v2";
+const SUPPRESS_KEY_V1 = "defrost.suppressions.v1";
 type Listener = () => void;
 
-function makeSuppressionStore() {
-  let set = new Set<string>();
-  if (typeof localStorage !== "undefined") {
-    try {
-      const raw = JSON.parse(localStorage.getItem(SUPPRESS_KEY) || "[]");
-      if (Array.isArray(raw)) set = new Set(raw.filter((x) => typeof x === "string"));
-    } catch {
-      // ignored
+function loadInitial(): Map<string, SuppressionEntry> {
+  const out = new Map<string, SuppressionEntry>();
+  if (typeof localStorage === "undefined") return out;
+  try {
+    const raw = JSON.parse(localStorage.getItem(SUPPRESS_KEY) || "[]");
+    if (Array.isArray(raw)) {
+      for (const item of raw) {
+        if (item && typeof item === "object" && typeof item.test_id === "string") {
+          out.set(item.test_id, {
+            test_id: item.test_id,
+            added_at: typeof item.added_at === "string" ? item.added_at : "",
+            by: typeof item.by === "string" ? item.by : undefined,
+          });
+        }
+      }
     }
+  } catch { /* ignored */ }
+  if (out.size === 0) {
+    try {
+      const v1 = JSON.parse(localStorage.getItem(SUPPRESS_KEY_V1) || "[]");
+      if (Array.isArray(v1)) {
+        for (const id of v1) {
+          if (typeof id === "string") {
+            out.set(id, { test_id: id, added_at: "", by: undefined });
+          }
+        }
+      }
+    } catch { /* ignored */ }
   }
+  return out;
+}
+
+function makeSuppressionStore() {
+  const entries = loadInitial();
   const listeners = new Set<Listener>();
   function persist() {
     if (typeof localStorage === "undefined") return;
-    try { localStorage.setItem(SUPPRESS_KEY, JSON.stringify([...set])); } catch { /* ignored */ }
+    try {
+      localStorage.setItem(SUPPRESS_KEY, JSON.stringify([...entries.values()]));
+    } catch { /* ignored */ }
   }
   function emit() { for (const l of listeners) l(); }
   return {
-    has(id: string) { return set.has(id); },
-    list() { return [...set]; },
-    add(id: string) { if (set.has(id)) return; set.add(id); persist(); emit(); },
-    remove(id: string) { if (!set.has(id)) return; set.delete(id); persist(); emit(); },
+    has(id: string) { return entries.has(id); },
+    list(): string[] { return [...entries.keys()]; },
+    entries(): SuppressionEntry[] {
+      // newest first
+      return [...entries.values()].sort((a, b) => {
+        if (a.added_at === b.added_at) return 0;
+        if (!a.added_at) return 1;
+        if (!b.added_at) return -1;
+        return b.added_at.localeCompare(a.added_at);
+      });
+    },
+    count(): number { return entries.size; },
+    add(id: string, by?: string) {
+      if (entries.has(id)) return;
+      entries.set(id, { test_id: id, added_at: new Date().toISOString(), by });
+      persist();
+      emit();
+    },
+    remove(id: string) {
+      if (!entries.has(id)) return;
+      entries.delete(id);
+      persist();
+      emit();
+    },
     subscribe(fn: Listener) { listeners.add(fn); return () => { listeners.delete(fn); }; },
   };
 }

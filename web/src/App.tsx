@@ -1,12 +1,14 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
 import { Link, Route, Routes, useLocation } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { getTests } from "@/api";
 import { Icon, Logo } from "@/components/Icons";
+import { suppression } from "@/lib/utils";
 import { TestsPage } from "@/pages/TestsPage";
 import { TestDetailPage } from "@/pages/TestDetailPage";
 import { RunsPage } from "@/pages/RunsPage";
 import { RunDetailPage } from "@/pages/RunDetailPage";
+import { SuppressionsPage } from "@/pages/SuppressionsPage";
 
 const THEME_KEY = "defrost.theme.v1";
 
@@ -24,17 +26,22 @@ function useTheme(): [string, (next: string) => void] {
   return [theme, setTheme];
 }
 
+function useSuppressionCount(): number {
+  const subscribe = useCallback((cb: () => void) => suppression.subscribe(cb), []);
+  const get = useCallback(() => suppression.count(), []);
+  return useSyncExternalStore(subscribe, get, get);
+}
+
 export default function App() {
   const [theme, setTheme] = useTheme();
   const location = useLocation();
-  const onTests =
-    location.pathname === "/" ||
-    location.pathname.startsWith("/tests") ||
-    location.pathname === "/test";
+  const onSuppressions = location.pathname.startsWith("/suppressions");
   const onRuns =
     location.pathname.startsWith("/runs") || location.pathname === "/run";
+  const onTests = !onSuppressions && !onRuns;
 
   const { data } = useQuery({ queryKey: ["tests"], queryFn: getTests });
+  const suppressionCount = useSuppressionCount();
 
   return (
     <div
@@ -73,6 +80,33 @@ export default function App() {
         <nav style={{ display: "flex", gap: 2, marginLeft: 12 }}>
           <NavLink to="/" active={onTests}>Tests</NavLink>
           <NavLink to="/runs" active={onRuns}>Runs</NavLink>
+          <NavLink to="/suppressions" active={onSuppressions}>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+              Suppressions
+              {suppressionCount > 0 && (
+                <span
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    minWidth: 18,
+                    height: 18,
+                    padding: "0 5px",
+                    fontSize: 10,
+                    fontWeight: 500,
+                    fontFamily: "var(--font-mono)",
+                    lineHeight: 1,
+                    background: "var(--bg-muted)",
+                    color: "var(--fg-muted)",
+                    border: "1px solid var(--border)",
+                    borderRadius: 999,
+                  }}
+                >
+                  {suppressionCount}
+                </span>
+              )}
+            </span>
+          </NavLink>
         </nav>
         <div style={{ flex: 1 }} />
         {data && (
@@ -120,6 +154,7 @@ export default function App() {
           <Route path="/test" element={<TestDetailPage />} />
           <Route path="/runs" element={<RunsPage />} />
           <Route path="/run" element={<RunDetailPage />} />
+          <Route path="/suppressions" element={<SuppressionsPage />} />
         </Routes>
       </main>
     </div>

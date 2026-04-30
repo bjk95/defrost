@@ -97,6 +97,19 @@ export const Icon = {
   Check: (p: SVGProps<SVGSVGElement>) => (
     <svg {...base} strokeWidth={1.8} {...p}><path d="M5 12.5 10 17.5 19 7.5" /></svg>
   ),
+  Plus: (p: SVGProps<SVGSVGElement>) => (
+    <svg {...base} strokeWidth={1.8} {...p}><path d="M12 5v14M5 12h14" /></svg>
+  ),
+  X: (p: SVGProps<SVGSVGElement>) => (
+    <svg {...base} strokeWidth={1.8} {...p}><path d="M6 6l12 12M18 6 6 18" /></svg>
+  ),
+  AlertTriangle: (p: SVGProps<SVGSVGElement>) => (
+    <svg {...base} {...p}>
+      <path d="M10.3 4 2.5 18a2 2 0 0 0 1.7 3h15.6a2 2 0 0 0 1.7-3L13.7 4a2 2 0 0 0-3.4 0z" />
+      <path d="M12 9v5" />
+      <path d="M12 17.5v.5" />
+    </svg>
+  ),
 };
 
 export function Logo({ size = 16 }: { size?: number }) {
