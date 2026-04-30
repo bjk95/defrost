@@ -14,12 +14,9 @@ import (
 	"github.com/bjk95/defrost/internal/runner"
 )
 
-// Adapter implements runner.Adapter for `inspect eval` invocations.
-// Recognised forms (see spec §3):
-//
-//   - direct:       inspect eval task.py
-//   - python -m:    python(3.x)? -m inspect_ai eval task.py
-//   - tool runner:  {poetry,uv,pipenv} run inspect eval task.py
+// Adapter implements runner.Adapter for `inspect eval` invocations. The
+// adapter recognises the direct binary, the `python -m inspect_ai eval` form,
+// and tool-runner forms (poetry/uv/pipenv run inspect eval).
 type Adapter struct{}
 
 var pythonRe = regexp.MustCompile(`^python(3(\.\d+)?)?$`)
@@ -34,13 +31,16 @@ func (a *Adapter) Matches(cmd []string) bool {
 	if len(cmd) == 0 {
 		return false
 	}
+	// Direct: inspect eval ... or /path/to/inspect eval ...
 	if filepath.Base(cmd[0]) == "inspect" {
 		return len(cmd) >= 2 && cmd[1] == "eval"
 	}
+	// python -m inspect_ai eval ...
 	if pythonRe.MatchString(cmd[0]) && len(cmd) >= 4 &&
 		cmd[1] == "-m" && cmd[2] == "inspect_ai" && cmd[3] == "eval" {
 		return true
 	}
+	// poetry run inspect eval ... / uv run inspect eval ...
 	if toolRunners[cmd[0]] && len(cmd) >= 4 &&
 		cmd[1] == "run" && filepath.Base(cmd[2]) == "inspect" && cmd[3] == "eval" {
 		return true
@@ -48,42 +48,30 @@ func (a *Adapter) Matches(cmd []string) bool {
 	return false
 }
 
-// hasUserLogDir reports whether the user has supplied --log-dir or
-// --log-dir=<v>. When set, defrost can't safely override it; we run
-// passthrough instead.
-func hasUserLogDir(args []string) bool {
+// hasFlag reports whether args contains either `--flag <v>` or
+// `--flag=<v>`. Used to detect user-supplied --log-dir / --log-format that
+// would conflict with defrost's auto-injection.
+func hasFlag(args []string, flag string) bool {
+	prefix := flag + "="
 	for _, a := range args {
-		if a == "--log-dir" || strings.HasPrefix(a, "--log-dir=") {
+		if a == flag || strings.HasPrefix(a, prefix) {
 			return true
 		}
 	}
 	return false
 }
 
-// hasUserLogFormat reports whether the user has supplied --log-format or
-// --log-format=<v>. The parser needs JSON; defrost won't override the
-// user's choice silently.
-func hasUserLogFormat(args []string) bool {
-	for _, a := range args {
-		if a == "--log-format" || strings.HasPrefix(a, "--log-format=") {
-			return true
-		}
-	}
-	return false
-}
-
-// buildArgs strips cmd[0] (the executable token) and appends the
-// auto-injection flags so Inspect writes parseable JSON into a
-// defrost-controlled directory.
+// buildArgs returns the args slice (excluding cmd[0]) with `--log-dir
+// <tempDir> --log-format json` appended. Caller must have verified the user
+// did not already supply these flags.
 func buildArgs(cmd []string, tempDir string) []string {
 	rest := append([]string{}, cmd[1:]...)
 	return append(rest, "--log-dir", tempDir, "--log-format", "json")
 }
 
-// passthroughRun executes cmd verbatim with stdio + signals wired,
-// returning the child exit code and no test results / metrics. Used when
-// the inspect adapter recognises the invocation but can't safely capture
-// results (user already supplied --log-dir or --log-format).
+// passthroughRun executes cmd verbatim with stdio and signals wired through,
+// returning the child exit code without parsing any results. Used when the
+// user supplied --log-dir or --log-format and defrost can't safely override.
 func passthroughRun(cmd []string) ([]models.TestResult, []*metricspb.Metric, int) {
 	c := exec.Command(cmd[0], cmd[1:]...)
 	code, err := runner.RunChild(c)
@@ -99,7 +87,7 @@ func (a *Adapter) Run(cmd []string) ([]models.TestResult, []*metricspb.Metric, i
 		return nil, nil, 2
 	}
 
-	if hasUserLogDir(cmd[1:]) || hasUserLogFormat(cmd[1:]) {
+	if hasFlag(cmd[1:], "--log-dir") || hasFlag(cmd[1:], "--log-format") {
 		fmt.Fprintln(os.Stderr,
 			"defrost: inspect --log-dir / --log-format present in argv; running passthrough (no per-test results will be recorded)")
 		return passthroughRun(cmd)
@@ -120,44 +108,55 @@ func (a *Adapter) Run(cmd []string) ([]models.TestResult, []*metricspb.Metric, i
 		return nil, nil, 1
 	}
 
-	files, err := filepath.Glob(filepath.Join(tempDir, "*.json"))
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "defrost: inspect glob log dir:", err)
+	results, metrics, parseErr := parseLogDir(tempDir)
+	if parseErr != nil {
+		fmt.Fprintln(os.Stderr, "defrost:", parseErr)
 		if exitCode == 0 {
 			exitCode = 1
 		}
 		return nil, nil, exitCode
 	}
-	if len(files) == 0 {
-		// Inspect may have failed before writing logs (e.g. import error
-		// in the task file). Preserve the child's exit code rather than
-		// rewriting to 1 — the user needs the original signal.
-		fmt.Fprintf(os.Stderr,
-			"defrost: inspect exited %d without writing JSON logs to %s; recording run with no per-test results\n",
-			exitCode, tempDir)
+	if len(results) == 0 {
+		fmt.Fprintln(os.Stderr,
+			"defrost: inspect produced no JSON log files in", tempDir,
+			"(child exit", exitCode, ")")
+		if exitCode == 0 {
+			exitCode = 1
+		}
 		return nil, nil, exitCode
 	}
 
-	var (
-		tests   []models.TestResult
-		metrics []*metricspb.Metric
-	)
-	for _, f := range files {
-		rd, err := os.Open(f)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "defrost: inspect open log file:", err)
-			continue
-		}
-		ts, ms, perr := ParseFile(rd)
-		rd.Close()
-		if perr != nil {
-			fmt.Fprintln(os.Stderr, "defrost:", perr)
-			continue
-		}
-		tests = append(tests, ts...)
-		metrics = append(metrics, ms...)
-	}
+	runner.ApplyRepoPrefix(results)
+	return results, metrics, exitCode
+}
 
-	runner.ApplyRepoPrefix(tests)
-	return tests, metrics, exitCode
+// parseLogDir scans dir for *.json files (Inspect's --log-format=json output)
+// and parses each one. Per-file decode failures are logged and skipped so a
+// single corrupt file doesn't drop the whole run. Returns error only on
+// directory listing failure.
+func parseLogDir(dir string) ([]models.TestResult, []*metricspb.Metric, error) {
+	matches, err := filepath.Glob(filepath.Join(dir, "*.json"))
+	if err != nil {
+		return nil, nil, fmt.Errorf("glob inspect log dir: %w", err)
+	}
+	var (
+		allTests   []models.TestResult
+		allMetrics []*metricspb.Metric
+	)
+	for _, path := range matches {
+		f, err := os.Open(path)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "defrost: inspect: open", path, ":", err)
+			continue
+		}
+		tests, metrics, parseErr := ParseFile(f)
+		f.Close()
+		if parseErr != nil {
+			fmt.Fprintln(os.Stderr, "defrost: inspect: parse", path, ":", parseErr)
+			continue
+		}
+		allTests = append(allTests, tests...)
+		allMetrics = append(allMetrics, metrics...)
+	}
+	return allTests, allMetrics, nil
 }

@@ -1,27 +1,22 @@
 {
   "eval": {
-    "task": "multi_scorer_task",
-    "model": "openai/gpt-4o-mini"
+    "task": "qa_eval",
+    "model": "anthropic/claude-3-5-sonnet"
   },
   "samples": [
     {
       "id": 1,
-      "output": { "completion": "Paris is the capital of France." },
+      "output": { "completion": "The capital is Paris." },
       "scores": {
         "accuracy": {
           "value": 1.0,
           "answer": "Paris",
-          "explanation": "Matches"
+          "explanation": "Correct"
         },
         "f1_score": {
           "value": 0.85,
-          "answer": "Paris is",
-          "explanation": "Token overlap 0.85"
-        },
-        "letter_grade": {
-          "value": "C",
           "answer": "Paris",
-          "explanation": "Letter — should be skipped"
+          "explanation": "Token overlap"
         }
       }
     }

@@ -17,3 +17,7 @@ docs/superpowers/
 
 # OS noise
 .DS_Store
+
+# Python bytecode (e.g. examples/inspect/__pycache__)
+__pycache__/
+*.pyc

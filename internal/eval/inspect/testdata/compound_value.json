@@ -1,0 +1,24 @@
+{
+  "eval": {
+    "task": "compound_eval",
+    "model": "openai/gpt-4o"
+  },
+  "samples": [
+    {
+      "id": 1,
+      "output": { "completion": "Paris" },
+      "scores": {
+        "multidim": {
+          "value": { "precision": 0.9, "recall": 0.8 },
+          "answer": "Paris",
+          "explanation": "Multi-dimensional"
+        },
+        "accuracy": {
+          "value": 0.95,
+          "answer": "Paris",
+          "explanation": "Accurate"
+        }
+      }
+    }
+  ]
+}

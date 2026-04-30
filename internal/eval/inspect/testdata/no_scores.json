@@ -1,12 +1,13 @@
 {
   "eval": {
-    "task": "no_scores_task",
-    "model": "mockllm/model"
+    "task": "empty_eval",
+    "model": "openai/gpt-4o"
   },
   "samples": [
     {
-      "id": 7,
-      "output": { "completion": "raw output, no scoring ran" }
+      "id": 1,
+      "output": { "completion": "anything" },
+      "scores": {}
     }
   ]
 }

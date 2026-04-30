@@ -14,8 +14,7 @@
         "match": {
           "value": 1.0,
           "answer": "Paris",
-          "explanation": "Correct",
-          "metadata": {}
+          "explanation": "Exact match"
         }
       }
     },
@@ -23,26 +22,14 @@
       "id": 2,
       "input": "Capital of Germany?",
       "target": "Berlin",
-      "output": { "completion": "Wrong" },
+      "output": { "completion": "London" },
       "scores": {
         "match": {
           "value": 0.0,
-          "answer": "Wrong",
-          "explanation": "Incorrect",
-          "metadata": {}
+          "answer": "London",
+          "explanation": "Mismatch"
         }
       }
     }
-  ],
-  "results": {
-    "scores": [
-      {
-        "name": "match",
-        "metrics": {
-          "mean": { "value": 0.5, "name": "mean" },
-          "stderr": { "value": 0.5, "name": "stderr" }
-        }
-      }
-    ]
-  }
+  ]
 }

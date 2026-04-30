@@ -1,27 +1,20 @@
-# Inspect AI dogfood
+# inspect-ai example
 
-Defrost dogfood for the Inspect AI adapter (Role A runner).
+Defrost-instrumented Inspect AI eval that dogfoods the adapter. Uses a
+deterministic mock solver (`mock_solver` in `task.py`) that reads each
+sample's `metadata.mock_answer` and reports it as the model output, so the
+eval runs in CI with predictable pass/fail outcomes and **no LLM API calls**.
 
-## Setup
+The dogfood ships 4 samples (2 pass, 2 intentional fail) all scored by
+Inspect's built-in `match()` scorer.
 
 ```sh
+# from this directory
 pip install inspect-ai
+inspect eval task.py                  # bare inspect
+defrost exec inspect eval task.py     # via defrost
 ```
 
-## Run
-
-```sh
-defrost exec inspect eval examples/inspect/task.py
-```
-
-## What it tests
-
-Two samples scored with Inspect's built-in `match()` scorer:
-
-| Sample | Mock answer | Target | Outcome |
-|---|---|---|---|
-| 1 | `Paris` | `Paris` | pass |
-| 2 | `London` | `Berlin` | fail (intentional, suppressed in CI) |
-
-A `mock_solver` returns each sample's `metadata.mock_answer`, so the run
-is fully hermetic — no LLM API calls.
+To run against a real LLM, drop `mock_solver()` from the `Task` definition,
+add a real `Solver` (or omit `solver=` to use Inspect's default `generate()`),
+and pass `--model openai/gpt-4o` (or similar) on the command line.

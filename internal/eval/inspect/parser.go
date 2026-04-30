@@ -6,7 +6,7 @@ import (
 	"io"
 	"os"
 	"sort"
-	"strconv"
+	"strings"
 	"time"
 
 	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
@@ -15,8 +15,14 @@ import (
 	"github.com/bjk95/defrost/internal/models"
 )
 
-// inspectDoc is the top-level JSON shape `inspect eval --log-format=json`
-// writes per task. We decode only the fields we use.
+// passThreshold is the cutoff a sample's numeric scorer must clear for the
+// sample to count as passed. Inspect AI's per-sample JSON does not carry the
+// scorer's threshold, and `match()`/binary scorers emit 0.0 or 1.0, so 0.5 is
+// the only value that classifies both binary and continuous scores correctly
+// without external configuration.
+const passThreshold = 0.5
+
+// inspectDoc is the subset of an Inspect AI JSON log we read.
 type inspectDoc struct {
 	Eval    inspectEval     `json:"eval"`
 	Samples []inspectSample `json:"samples"`
@@ -43,18 +49,10 @@ type inspectScore struct {
 	Explanation string `json:"explanation"`
 }
 
-// passThreshold is the heuristic boundary above which a numeric Inspect
-// score is treated as a pass. Inspect's binary scorers (`match`,
-// `includes`) emit 0.0 / 1.0; multi-grade scorers emit fractional scores.
-// A 0.5 cutoff matches Inspect's own default for the `at_least` reducer
-// and is the simplest rule that doesn't require per-scorer threshold
-// configuration. See spec §11.4.
-const passThreshold = 0.5
-
-// ParseFile reads a single Inspect AI JSON log file and emits per-sample
-// TestResults plus one *metricspb.Metric per (sample × numeric scorer).
-// Non-numeric scorers (Letter grades, compound objects) are skipped with
-// a stderr warning. Returns nil/nil/error only on JSON decode failure.
+// ParseFile reads a single Inspect AI JSON log and emits one TestResult per
+// sample plus one *metricspb.Metric per (sample, numeric scorer) pair. Scorers
+// whose value is non-numeric (Letter "C"/"I", compound objects) are skipped
+// with a stderr warning. Returns nil/nil/error only on JSON decode failure.
 func ParseFile(r io.Reader) ([]models.TestResult, []*metricspb.Metric, error) {
 	var doc inspectDoc
 	if err := json.NewDecoder(r).Decode(&doc); err != nil {
@@ -66,74 +64,73 @@ func ParseFile(r io.Reader) ([]models.TestResult, []*metricspb.Metric, error) {
 		metrics []*metricspb.Metric
 	)
 	for _, s := range doc.Samples {
-		tr, mm := mapSample(s, doc.Eval.Task, doc.Eval.Model, now)
+		tr, m := mapSample(s, doc.Eval.Task, doc.Eval.Model, now)
 		tests = append(tests, tr)
-		metrics = append(metrics, mm...)
+		metrics = append(metrics, m...)
 	}
 	return tests, metrics, nil
 }
 
+// mapSample produces the TestResult and per-scorer metrics for a single
+// sample. Pass/fail is the conjunction of all numeric scorers clearing
+// passThreshold; a sample with no numeric scorers is treated as passed (it
+// ran without scoring failures).
 func mapSample(s inspectSample, task, model string, now uint64) (models.TestResult, []*metricspb.Metric) {
-	caseName := sampleCaseName(s.ID)
+	caseName := sampleCaseName(s.ID, task)
 
-	// Iterate scorers in deterministic name order so the metric slice
-	// (and any output the test asserts on) is stable across runs.
-	keys := make([]string, 0, len(s.Scores))
+	scorerNames := make([]string, 0, len(s.Scores))
 	for k := range s.Scores {
-		keys = append(keys, k)
+		scorerNames = append(scorerNames, k)
 	}
-	sort.Strings(keys)
+	sort.Strings(scorerNames)
 
-	var (
-		metrics    []*metricspb.Metric
-		numericN   int
-		failingN   int
-	)
-	for _, k := range keys {
-		v := s.Scores[k]
-		score, ok := numericScore(v.Value)
+	pass := true
+	hasNumeric := false
+	var metrics []*metricspb.Metric
+	for _, name := range scorerNames {
+		score := s.Scores[name]
+		v, ok := numericScore(score.Value)
 		if !ok {
 			fmt.Fprintf(os.Stderr,
-				"defrost: inspect: skipping non-numeric scorer %q for %s\n",
-				k, caseName)
+				"defrost: inspect: skipping non-numeric scorer %q on %s (value=%v)\n",
+				name, caseName, score.Value)
 			continue
 		}
-		numericN++
-		if score < passThreshold {
-			failingN++
+		hasNumeric = true
+		if v < passThreshold {
+			pass = false
 		}
-		metrics = append(metrics, mapScore(k, score, v.Explanation, caseName, model, task, now))
+		metrics = append(metrics, buildMetric(name, score, caseName, task, model, v, now))
+	}
+	if !hasNumeric && len(scorerNames) == 0 {
+		fmt.Fprintf(os.Stderr,
+			"defrost: inspect: sample %s has no scorers; recording as passed\n",
+			caseName)
 	}
 
-	// A sample passes when at least one numeric scorer ran AND every numeric
-	// scorer is at/above the heuristic threshold. Zero numeric scorers means
-	// we have no evidence either way; mark as not-passed so the failure isn't
-	// silently masked.
-	passed := numericN > 0 && failingN == 0
-
-	return models.TestResult{
+	tr := models.TestResult{
 		Id:     caseName,
 		Ran:    true,
-		Passed: passed,
+		Passed: pass,
 		Output: s.Output.Completion,
-	}, metrics
+	}
+	return tr, metrics
 }
 
-func mapScore(name string, score float64, explanation, caseName, model, task string, now uint64) *metricspb.Metric {
+func buildMetric(name string, s inspectScore, caseName, task, model string, score float64, now uint64) *metricspb.Metric {
 	attrs := []*commonpb.KeyValue{
 		models.StringAttr("gen_ai.evaluation.name", name),
 		models.DoubleAttr("gen_ai.evaluation.score.value", score),
 		models.StringAttr("gen_ai.evaluation.score.label", passFailLabel(score >= passThreshold)),
-		models.StringAttr("gen_ai.evaluation.explanation", explanation),
+		models.StringAttr("gen_ai.evaluation.explanation", s.Explanation),
 		models.StringAttr("test.case.name", caseName),
-	}
-	if model != "" {
-		attrs = append(attrs, models.StringAttr("gen_ai.request.model", model))
 	}
 	if task != "" {
 		attrs = append(attrs, models.StringAttr("test.suite.name", task))
 	}
-
+	if model != "" {
+		attrs = append(attrs, models.StringAttr("gen_ai.request.model", model))
+	}
 	return &metricspb.Metric{
 		Name: "eval." + name,
 		Data: &metricspb.Metric_Gauge{Gauge: &metricspb.Gauge{
@@ -146,43 +143,69 @@ func mapScore(name string, score float64, explanation, caseName, model, task str
 	}
 }
 
-// numericScore extracts a float64 score from Inspect's loosely-typed
-// `value` field. Recognises floats, integers (decoded as float64 by
-// encoding/json into `any`), and booleans (`correct` scorers).
-// Letter grades (`"C"`/`"I"`) and compound objects return false so the
-// caller can skip them with a warning.
+// numericScore extracts a float64 from Inspect AI's loosely-typed
+// `scores[k].value`. Standard JSON decoding into `any` gives float64 for
+// numbers; integers and floats both arrive as float64. Strings ("C", "I"),
+// objects, arrays, and nulls return false so the caller can skip them.
 func numericScore(v any) (float64, bool) {
 	switch x := v.(type) {
 	case float64:
 		return x, true
-	case bool:
-		if x {
-			return 1.0, true
+	case json.Number:
+		f, err := x.Float64()
+		if err != nil {
+			return 0, false
 		}
-		return 0.0, true
+		return f, true
 	}
 	return 0, false
 }
 
-// sampleCaseName builds a stable case name from Inspect's sample id, which
-// the JSON schema allows to be either an int or a string. Integer ids are
-// decoded as float64 by encoding/json into `any`; render them without a
-// fractional part so two runs with the same dataset produce byte-equal
-// case ids.
-func sampleCaseName(id any) string {
+// sampleCaseName builds a deterministic case identifier of the form
+// `task="<task>",sample="<id>"`. Both fields are JSON-encoded so values
+// containing commas or quotes round-trip stably and the format matches the
+// Promptfoo adapter's key="value" convention. Task is included so multi-task
+// invocations don't collide on bare sample IDs.
+func sampleCaseName(id any, task string) string {
+	parts := make([]string, 0, 2)
+	if task != "" {
+		b, err := json.Marshal(task)
+		if err != nil {
+			parts = append(parts, fmt.Sprintf("task=%s", task))
+		} else {
+			parts = append(parts, fmt.Sprintf("task=%s", b))
+		}
+	}
+	parts = append(parts, fmt.Sprintf("sample=%s", encodeSampleID(id)))
+	return strings.Join(parts, ",")
+}
+
+// encodeSampleID renders Inspect's loosely-typed sample id as a stable
+// JSON-encoded string suitable for use in a case-name field. Integer ids
+// arrive from json.Unmarshal-into-any as float64; we render them without
+// decimal noise. Strings round-trip as JSON literals so embedded commas and
+// quotes don't break the case-name format.
+func encodeSampleID(id any) string {
 	switch v := id.(type) {
 	case nil:
-		return "sample_<unnamed>"
+		return `"<no-id>"`
 	case string:
-		return "sample_" + v
+		b, err := json.Marshal(v)
+		if err != nil {
+			return fmt.Sprintf("%q", v)
+		}
+		return string(b)
 	case float64:
 		if v == float64(int64(v)) {
-			return "sample_" + strconv.FormatInt(int64(v), 10)
+			return fmt.Sprintf("\"%d\"", int64(v))
 		}
-		return "sample_" + strconv.FormatFloat(v, 'g', -1, 64)
-	default:
-		return fmt.Sprintf("sample_%v", v)
+		return fmt.Sprintf("%q", strings.TrimRight(strings.TrimRight(fmt.Sprintf("%f", v), "0"), "."))
 	}
+	b, err := json.Marshal(id)
+	if err != nil {
+		return fmt.Sprintf("%q", fmt.Sprintf("%v", id))
+	}
+	return string(b)
 }
 
 func passFailLabel(pass bool) string {

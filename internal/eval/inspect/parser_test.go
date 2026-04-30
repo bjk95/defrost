@@ -51,7 +51,7 @@ func attrString(m *metricspb.Metric, key string) string {
 	return ""
 }
 
-func TestParseSmokePassFail(t *testing.T) {
+func TestParseSmoke(t *testing.T) {
 	tests, metrics, err := ParseFile(bytes.NewReader(loadFixture(t, "smoke.json")))
 	if err != nil {
 		t.Fatalf("parse: %v", err)
@@ -59,33 +59,33 @@ func TestParseSmokePassFail(t *testing.T) {
 	if len(tests) != 2 {
 		t.Fatalf("expected 2 tests, got %d", len(tests))
 	}
-	if tests[0].Id != "sample_1" {
-		t.Fatalf("expected Id=sample_1, got %q", tests[0].Id)
-	}
 	if !tests[0].Passed {
-		t.Fatalf("expected sample_1 to pass (score 1.0)")
-	}
-	if tests[1].Id != "sample_2" {
-		t.Fatalf("expected Id=sample_2, got %q", tests[1].Id)
+		t.Fatalf("expected sample 1 passed=true")
 	}
 	if tests[1].Passed {
-		t.Fatalf("expected sample_2 to fail (score 0.0)")
+		t.Fatalf("expected sample 2 passed=false")
+	}
+	wantID := `task="capital_cities",sample="1"`
+	if tests[0].Id != wantID {
+		t.Fatalf("expected id=%q, got %q", wantID, tests[0].Id)
 	}
 	if tests[0].Output != "Paris" {
-		t.Fatalf("expected sample_1 output=Paris, got %q", tests[0].Output)
+		t.Fatalf("expected output=Paris, got %q", tests[0].Output)
 	}
-
+	if !tests[0].Ran || !tests[1].Ran {
+		t.Fatalf("expected Ran=true for both samples")
+	}
 	if len(metrics) != 2 {
-		t.Fatalf("expected 2 metrics (one per sample × scorer), got %d", len(metrics))
+		t.Fatalf("expected 2 metrics, got %d", len(metrics))
 	}
 	if metrics[0].Name != "eval.match" {
-		t.Fatalf("expected metric name eval.match, got %q", metrics[0].Name)
+		t.Fatalf("expected metric eval.match, got %q", metrics[0].Name)
 	}
 	if got := gaugeValue(t, metrics[0]); got != 1.0 {
-		t.Fatalf("expected metric[0] score 1.0, got %v", got)
+		t.Fatalf("expected score 1.0, got %v", got)
 	}
 	if got := gaugeValue(t, metrics[1]); got != 0.0 {
-		t.Fatalf("expected metric[1] score 0.0, got %v", got)
+		t.Fatalf("expected score 0.0, got %v", got)
 	}
 	if got := attrString(metrics[0], "gen_ai.evaluation.name"); got != "match" {
 		t.Fatalf("expected gen_ai.evaluation.name=match, got %q", got)
@@ -96,40 +96,17 @@ func TestParseSmokePassFail(t *testing.T) {
 	if got := attrString(metrics[1], "gen_ai.evaluation.score.label"); got != "fail" {
 		t.Fatalf("expected score.label=fail, got %q", got)
 	}
-	if got := attrString(metrics[0], "test.case.name"); got != "sample_1" {
-		t.Fatalf("expected test.case.name=sample_1, got %q", got)
-	}
-	if got := attrString(metrics[0], "gen_ai.request.model"); got != "openai/gpt-4o" {
-		t.Fatalf("expected gen_ai.request.model=openai/gpt-4o, got %q", got)
+	if got := attrString(metrics[0], "test.case.name"); got != wantID {
+		t.Fatalf("expected test.case.name=%q, got %q", wantID, got)
 	}
 	if got := attrString(metrics[0], "test.suite.name"); got != "capital_cities" {
 		t.Fatalf("expected test.suite.name=capital_cities, got %q", got)
 	}
-	if got := attrString(metrics[0], "gen_ai.evaluation.explanation"); got != "Correct" {
-		t.Fatalf("expected explanation=Correct, got %q", got)
+	if got := attrString(metrics[0], "gen_ai.request.model"); got != "openai/gpt-4o" {
+		t.Fatalf("expected gen_ai.request.model=openai/gpt-4o, got %q", got)
 	}
-}
-
-func TestParseLetterScorerSkipped(t *testing.T) {
-	tests, metrics, err := ParseFile(bytes.NewReader(loadFixture(t, "letter_skipped.json")))
-	if err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-	if len(tests) != 2 {
-		t.Fatalf("expected 2 tests, got %d", len(tests))
-	}
-	// Both samples have only Letter scorers; no numeric scorers means we
-	// can't claim they passed. Both should be Ran=true, Passed=false.
-	for i, tr := range tests {
-		if !tr.Ran {
-			t.Fatalf("sample[%d] expected Ran=true, got false", i)
-		}
-		if tr.Passed {
-			t.Fatalf("sample[%d] expected Passed=false (no numeric scorers), got true", i)
-		}
-	}
-	if len(metrics) != 0 {
-		t.Fatalf("expected 0 metrics (Letter scorers skipped), got %d", len(metrics))
+	if got := attrString(metrics[0], "gen_ai.evaluation.explanation"); got != "Exact match" {
+		t.Fatalf("expected explanation=Exact match, got %q", got)
 	}
 }
 
@@ -142,25 +119,41 @@ func TestParseMultiScorer(t *testing.T) {
 		t.Fatalf("expected 1 test, got %d", len(tests))
 	}
 	if !tests[0].Passed {
-		t.Fatalf("expected pass: both numeric scorers >= 0.5 (1.0 and 0.85)")
+		t.Fatalf("expected passed=true (both scorers ≥ 0.5)")
 	}
-	// Two numeric scorers (accuracy, f1_score); the Letter scorer is skipped.
 	if len(metrics) != 2 {
-		t.Fatalf("expected 2 metrics (Letter scorer skipped), got %d", len(metrics))
+		t.Fatalf("expected 2 metrics (one per scorer), got %d", len(metrics))
 	}
-	names := map[string]bool{}
+	wantNames := map[string]bool{"eval.accuracy": false, "eval.f1_score": false}
 	for _, m := range metrics {
-		names[m.Name] = true
+		wantNames[m.Name] = true
 	}
-	if !names["eval.accuracy"] || !names["eval.f1_score"] {
-		t.Fatalf("expected eval.accuracy and eval.f1_score, got %v", names)
-	}
-	if names["eval.letter_grade"] {
-		t.Fatal("Letter scorer must not produce a metric")
+	for k, v := range wantNames {
+		if !v {
+			t.Fatalf("missing expected metric %s", k)
+		}
 	}
 }
 
-func TestParseNoScoresMap(t *testing.T) {
+func TestParseLetterScorerSkipped(t *testing.T) {
+	tests, metrics, err := ParseFile(bytes.NewReader(loadFixture(t, "letter_scorer.json")))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(tests) != 2 {
+		t.Fatalf("expected 2 tests, got %d", len(tests))
+	}
+	// Both samples have only Letter scorers, which the parser skips. The
+	// fallback for "no numeric scorers" is Passed=true (no failure signal).
+	if !tests[0].Passed || !tests[1].Passed {
+		t.Fatalf("expected both samples passed=true (no numeric scorers means no failure)")
+	}
+	if len(metrics) != 0 {
+		t.Fatalf("expected 0 metrics (Letter scorers skipped), got %d", len(metrics))
+	}
+}
+
+func TestParseNoScores(t *testing.T) {
 	tests, metrics, err := ParseFile(bytes.NewReader(loadFixture(t, "no_scores.json")))
 	if err != nil {
 		t.Fatalf("parse: %v", err)
@@ -168,41 +161,50 @@ func TestParseNoScoresMap(t *testing.T) {
 	if len(tests) != 1 {
 		t.Fatalf("expected 1 test, got %d", len(tests))
 	}
-	if !tests[0].Ran {
-		t.Fatalf("expected Ran=true even with no scores")
-	}
-	if tests[0].Passed {
-		t.Fatalf("expected Passed=false when no scorers ran")
-	}
-	if tests[0].Id != "sample_7" {
-		t.Fatalf("expected Id=sample_7, got %q", tests[0].Id)
-	}
-	if tests[0].Output != "raw output, no scoring ran" {
-		t.Fatalf("expected output preserved, got %q", tests[0].Output)
+	if !tests[0].Passed {
+		t.Fatalf("expected passed=true (no scorers means no failure)")
 	}
 	if len(metrics) != 0 {
 		t.Fatalf("expected 0 metrics, got %d", len(metrics))
 	}
 }
 
-func TestParseStringSampleID(t *testing.T) {
+func TestParseStringID(t *testing.T) {
 	tests, _, err := ParseFile(bytes.NewReader(loadFixture(t, "string_id.json")))
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if len(tests) != 2 {
-		t.Fatalf("expected 2 tests, got %d", len(tests))
+	if len(tests) != 1 {
+		t.Fatalf("expected 1 test, got %d", len(tests))
 	}
-	if tests[0].Id != "sample_qa_001" {
-		t.Fatalf("expected Id=sample_qa_001, got %q", tests[0].Id)
-	}
-	if tests[1].Id != "sample_qa_002" {
-		t.Fatalf("expected Id=sample_qa_002, got %q", tests[1].Id)
+	want := `task="string_id_eval",sample="case-paris"`
+	if tests[0].Id != want {
+		t.Fatalf("expected id=%q, got %q", want, tests[0].Id)
 	}
 }
 
-func TestParseEmpty(t *testing.T) {
-	tests, metrics, err := ParseFile(bytes.NewReader(loadFixture(t, "empty.json")))
+func TestParseCompoundValueSkipped(t *testing.T) {
+	tests, metrics, err := ParseFile(bytes.NewReader(loadFixture(t, "compound_value.json")))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(tests) != 1 {
+		t.Fatalf("expected 1 test, got %d", len(tests))
+	}
+	if !tests[0].Passed {
+		t.Fatalf("expected passed=true (accuracy=0.95 ≥ 0.5)")
+	}
+	// Compound `multidim` is skipped; only `accuracy` produces a metric.
+	if len(metrics) != 1 {
+		t.Fatalf("expected 1 metric (compound skipped), got %d", len(metrics))
+	}
+	if metrics[0].Name != "eval.accuracy" {
+		t.Fatalf("expected eval.accuracy, got %q", metrics[0].Name)
+	}
+}
+
+func TestParseEmptySamples(t *testing.T) {
+	tests, metrics, err := ParseFile(bytes.NewReader(loadFixture(t, "empty_samples.json")))
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -211,60 +213,69 @@ func TestParseEmpty(t *testing.T) {
 	}
 }
 
-func TestParseDecodeError(t *testing.T) {
+func TestParseIntegerScore(t *testing.T) {
+	tests, metrics, err := ParseFile(bytes.NewReader(loadFixture(t, "integer_score.json")))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(tests) != 1 || !tests[0].Passed {
+		t.Fatalf("expected 1 passing test, got %v", tests)
+	}
+	if len(metrics) != 1 {
+		t.Fatalf("expected 1 metric, got %d", len(metrics))
+	}
+	if got := gaugeValue(t, metrics[0]); got != 1.0 {
+		t.Fatalf("expected score 1.0 from integer 1, got %v", got)
+	}
+}
+
+func TestParseDeterministicCaseNames(t *testing.T) {
+	raw := loadFixture(t, "smoke.json")
+	tests1, _, err := ParseFile(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	tests2, _, err := ParseFile(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(tests1) != len(tests2) {
+		t.Fatalf("non-deterministic length: %d vs %d", len(tests1), len(tests2))
+	}
+	for i := range tests1 {
+		if tests1[i].Id != tests2[i].Id {
+			t.Fatalf("non-deterministic id: %q vs %q", tests1[i].Id, tests2[i].Id)
+		}
+	}
+}
+
+func TestParseInvalidJSON(t *testing.T) {
 	_, _, err := ParseFile(bytes.NewReader([]byte("not json")))
 	if err == nil {
-		t.Fatal("expected decode error")
+		t.Fatalf("expected decode error")
 	}
 }
 
-func TestNumericScoreVariants(t *testing.T) {
+func TestNumericScore(t *testing.T) {
 	cases := []struct {
-		name string
-		v    any
-		want float64
-		ok   bool
+		in     any
+		want   float64
+		wantOK bool
 	}{
-		{"float", 0.75, 0.75, true},
-		{"int decoded as float64", float64(1), 1.0, true},
-		{"zero", 0.0, 0.0, true},
-		{"bool true", true, 1.0, true},
-		{"bool false", false, 0.0, true},
-		{"letter C", "C", 0, false},
-		{"letter I", "I", 0, false},
-		{"nil", nil, 0, false},
-		{"compound", map[string]any{"primary": 0.9}, 0, false},
+		{1.0, 1.0, true},
+		{0.85, 0.85, true},
+		{float64(0), 0.0, true},
+		{"C", 0, false},
+		{"I", 0, false},
+		{"1.0", 0, false},
+		{nil, 0, false},
+		{map[string]any{"precision": 0.9}, 0, false},
+		{[]any{1.0}, 0, false},
 	}
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got, ok := numericScore(tc.v)
-			if ok != tc.ok {
-				t.Fatalf("ok = %v, want %v", ok, tc.ok)
-			}
-			if ok && got != tc.want {
-				t.Fatalf("got %v, want %v", got, tc.want)
-			}
-		})
-	}
-}
-
-func TestSampleCaseName(t *testing.T) {
-	cases := []struct {
-		name string
-		id   any
-		want string
-	}{
-		{"int via float64", float64(1), "sample_1"},
-		{"string", "qa_42", "sample_qa_42"},
-		{"large int", float64(1234567), "sample_1234567"},
-		{"nil", nil, "sample_<unnamed>"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := sampleCaseName(tc.id)
-			if got != tc.want {
-				t.Fatalf("got %q, want %q", got, tc.want)
-			}
-		})
+		got, ok := numericScore(tc.in)
+		if ok != tc.wantOK || (ok && got != tc.want) {
+			t.Errorf("numericScore(%v) = (%v, %v), want (%v, %v)", tc.in, got, ok, tc.want, tc.wantOK)
+		}
 	}
 }

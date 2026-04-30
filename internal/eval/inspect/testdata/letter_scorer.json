@@ -1,7 +1,7 @@
 {
   "eval": {
-    "task": "letter_grades",
-    "model": "anthropic/claude-3.5"
+    "task": "letter_eval",
+    "model": "openai/gpt-4o"
   },
   "samples": [
     {
@@ -11,18 +11,18 @@
         "exact_match": {
           "value": "C",
           "answer": "Paris",
-          "explanation": "Correct (Letter)"
+          "explanation": "Correct"
         }
       }
     },
     {
       "id": 2,
-      "output": { "completion": "Wrong" },
+      "output": { "completion": "Rome" },
       "scores": {
         "exact_match": {
           "value": "I",
-          "answer": "Wrong",
-          "explanation": "Incorrect (Letter)"
+          "answer": "Rome",
+          "explanation": "Incorrect"
         }
       }
     }

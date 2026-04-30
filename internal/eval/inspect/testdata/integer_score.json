@@ -1,17 +1,17 @@
 {
   "eval": {
-    "task": "string_id_eval",
+    "task": "integer_eval",
     "model": "openai/gpt-4o"
   },
   "samples": [
     {
-      "id": "case-paris",
+      "id": 1,
       "output": { "completion": "Paris" },
       "scores": {
-        "match": {
-          "value": 1.0,
+        "binary_match": {
+          "value": 1,
           "answer": "Paris",
-          "explanation": "Match"
+          "explanation": "Correct"
         }
       }
     }

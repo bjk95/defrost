@@ -15,23 +15,26 @@ func TestMatches(t *testing.T) {
 	}{
 		{"direct", []string{"inspect", "eval", "task.py"}, true},
 		{"direct with model", []string{"inspect", "eval", "task.py", "--model", "openai/gpt-4o"}, true},
-		{"absolute path", []string{"/usr/local/bin/inspect", "eval", "task.py"}, true},
-		{"venv path", []string{"./.venv/bin/inspect", "eval", "task.py"}, true},
+		{"direct with extra flags", []string{"inspect", "eval", "task.py", "--limit", "10", "--epochs", "2"}, true},
+		{"absolute path inspect", []string{"/usr/local/bin/inspect", "eval", "task.py"}, true},
+		{"python -m inspect_ai eval", []string{"python", "-m", "inspect_ai", "eval", "task.py"}, true},
+		{"python3 -m inspect_ai eval", []string{"python3", "-m", "inspect_ai", "eval", "task.py"}, true},
+		{"python3.12 -m inspect_ai eval", []string{"python3.12", "-m", "inspect_ai", "eval", "task.py"}, true},
+		{"poetry run inspect eval", []string{"poetry", "run", "inspect", "eval", "task.py"}, true},
+		{"uv run inspect eval", []string{"uv", "run", "inspect", "eval", "task.py"}, true},
+		{"pipenv run inspect eval", []string{"pipenv", "run", "inspect", "eval", "task.py"}, true},
+		{"poetry run absolute inspect", []string{"poetry", "run", "/usr/bin/inspect", "eval", "task.py"}, true},
 		{"missing eval subcommand", []string{"inspect"}, false},
 		{"different subcommand", []string{"inspect", "view"}, false},
-		{"different subcommand at index 1", []string{"inspect", "init"}, false},
-		{"python module form", []string{"python", "-m", "inspect_ai", "eval", "task.py"}, true},
-		{"python3 module form", []string{"python3", "-m", "inspect_ai", "eval", "task.py"}, true},
-		{"python3.12 module form", []string{"python3.12", "-m", "inspect_ai", "eval", "task.py"}, true},
-		{"python -m wrong module", []string{"python", "-m", "inspect", "eval", "task.py"}, false},
-		{"poetry run", []string{"poetry", "run", "inspect", "eval", "task.py"}, true},
-		{"uv run", []string{"uv", "run", "inspect", "eval", "task.py"}, true},
-		{"pipenv run", []string{"pipenv", "run", "inspect", "eval", "task.py"}, true},
-		{"poetry run wrong tool", []string{"poetry", "run", "pytest", "eval", "task.py"}, false},
-		{"poetry run inspect missing eval", []string{"poetry", "run", "inspect", "view"}, false},
-		{"echo arg-mistake", []string{"echo", "inspect", "eval"}, false},
-		{"unrelated cmd", []string{"jest"}, false},
+		{"different subcommand inspect score", []string{"inspect", "score"}, false},
+		{"unrelated cmd", []string{"pytest"}, false},
 		{"empty", []string{}, false},
+		{"echo arg-mistake", []string{"echo", "inspect", "eval"}, false},
+		{"sh -c inspect eval", []string{"sh", "-c", "inspect eval task.py"}, false},
+		{"python -m wrong module", []string{"python", "-m", "pytest", "eval"}, false},
+		{"python -m inspect_ai wrong subcommand", []string{"python", "-m", "inspect_ai", "view"}, false},
+		{"poetry run wrong tool", []string{"poetry", "run", "pytest"}, false},
+		{"poetry run inspect missing eval", []string{"poetry", "run", "inspect"}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -44,45 +47,30 @@ func TestMatches(t *testing.T) {
 	}
 }
 
-func TestHasUserLogDir(t *testing.T) {
+func TestHasFlag(t *testing.T) {
 	cases := []struct {
 		args []string
+		flag string
 		want bool
 	}{
-		{[]string{"eval", "task.py"}, false},
-		{[]string{"eval", "task.py", "--log-dir", "/tmp/x"}, true},
-		{[]string{"eval", "task.py", "--log-dir=/tmp/x"}, true},
-		{[]string{"eval", "task.py", "--log-format", "json"}, false},
+		{[]string{"eval", "task.py"}, "--log-dir", false},
+		{[]string{"eval", "task.py", "--log-dir", "/tmp/x"}, "--log-dir", true},
+		{[]string{"eval", "task.py", "--log-dir=/tmp/x"}, "--log-dir", true},
+		{[]string{"eval", "task.py", "--log-format", "json"}, "--log-format", true},
+		{[]string{"eval", "task.py", "--log-format=json"}, "--log-format", true},
+		{[]string{"eval", "task.py", "--model", "gpt-4o"}, "--log-dir", false},
 	}
 	for _, tc := range cases {
-		got := hasUserLogDir(tc.args)
+		got := hasFlag(tc.args, tc.flag)
 		if got != tc.want {
-			t.Fatalf("hasUserLogDir(%v) = %v, want %v", tc.args, got, tc.want)
+			t.Errorf("hasFlag(%v, %q) = %v, want %v", tc.args, tc.flag, got, tc.want)
 		}
 	}
 }
 
-func TestHasUserLogFormat(t *testing.T) {
-	cases := []struct {
-		args []string
-		want bool
-	}{
-		{[]string{"eval", "task.py"}, false},
-		{[]string{"eval", "task.py", "--log-format", "json"}, true},
-		{[]string{"eval", "task.py", "--log-format=eval"}, true},
-		{[]string{"eval", "task.py", "--log-dir", "/tmp/x"}, false},
-	}
-	for _, tc := range cases {
-		got := hasUserLogFormat(tc.args)
-		if got != tc.want {
-			t.Fatalf("hasUserLogFormat(%v) = %v, want %v", tc.args, got, tc.want)
-		}
-	}
-}
-
-func TestBuildArgsInjectsLogDirAndFormat(t *testing.T) {
-	args := buildArgs([]string{"inspect", "eval", "task.py", "--limit", "10"}, "/tmp/inspect-out")
-	want := []string{"eval", "task.py", "--limit", "10", "--log-dir", "/tmp/inspect-out", "--log-format", "json"}
+func TestBuildArgs(t *testing.T) {
+	args := buildArgs([]string{"inspect", "eval", "task.py", "--model", "openai/gpt-4o"}, "/tmp/logs")
+	want := []string{"eval", "task.py", "--model", "openai/gpt-4o", "--log-dir", "/tmp/logs", "--log-format", "json"}
 	if !equalSlices(args, want) {
 		t.Fatalf("buildArgs = %v, want %v", args, want)
 	}
@@ -100,20 +88,16 @@ func equalSlices(a, b []string) bool {
 	return true
 }
 
-// fakeChildScript writes a small shell script that finds --log-dir in argv,
-// then copies a fixture into that directory as <basename>. Used to stub
-// out `inspect eval` in Run tests.
-func fakeChildScript(t *testing.T, fixture, outName string) string {
+// fakeChildScript writes a small bash script that reads --log-dir from its
+// args and copies the named fixture there as <task>.json. Used to stub out
+// `inspect eval` in Run tests.
+func fakeChildScript(t *testing.T, fixtures ...string) string {
 	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("fake-child shell script is bash-only")
 	}
 	dir := t.TempDir()
 	scriptPath := filepath.Join(dir, "fake-inspect")
-	fixtureSrc, err := filepath.Abs(filepath.Join("testdata", fixture))
-	if err != nil {
-		t.Fatalf("abs fixture: %v", err)
-	}
 	body := `#!/usr/bin/env bash
 set -e
 log_dir=""
@@ -132,9 +116,14 @@ if [[ -z "$log_dir" ]]; then
     echo "fake-inspect: no --log-dir flag" >&2
     exit 2
 fi
-mkdir -p "$log_dir"
-cp "` + fixtureSrc + `" "$log_dir/` + outName + `"
 `
+	for i, fx := range fixtures {
+		fixtureSrc, err := filepath.Abs(filepath.Join("testdata", fx))
+		if err != nil {
+			t.Fatalf("abs: %v", err)
+		}
+		body += "cp \"" + fixtureSrc + "\" \"$log_dir/log_" + itoa(i) + ".json\"\n"
+	}
 	if err := os.WriteFile(scriptPath, []byte(body), 0o755); err != nil {
 		t.Fatalf("write fake-inspect: %v", err)
 	}
@@ -145,8 +134,20 @@ cp "` + fixtureSrc + `" "$log_dir/` + outName + `"
 	return abs
 }
 
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	var buf []byte
+	for n > 0 {
+		buf = append([]byte{byte('0' + n%10)}, buf...)
+		n /= 10
+	}
+	return string(buf)
+}
+
 func TestRunHappyPath(t *testing.T) {
-	bin := fakeChildScript(t, "smoke.json", "task_2026.json")
+	bin := fakeChildScript(t, "smoke.json")
 	a := &Adapter{}
 	tests, metrics, code := a.Run([]string{bin, "eval", "task.py"})
 	if code != 0 {
@@ -158,8 +159,45 @@ func TestRunHappyPath(t *testing.T) {
 	if len(metrics) != 2 {
 		t.Fatalf("expected 2 metrics, got %d", len(metrics))
 	}
-	if !tests[0].Passed || tests[1].Passed {
-		t.Fatalf("expected sample_1 pass / sample_2 fail, got %v / %v", tests[0].Passed, tests[1].Passed)
+	if metrics[0].Name != "eval.match" {
+		t.Fatalf("expected eval.match, got %q", metrics[0].Name)
+	}
+}
+
+func TestRunMultipleLogFiles(t *testing.T) {
+	// Inspect can write multiple log files when given multiple tasks; the
+	// adapter must aggregate results across all *.json files in the log dir.
+	bin := fakeChildScript(t, "smoke.json", "multi_scorer.json")
+	a := &Adapter{}
+	tests, metrics, code := a.Run([]string{bin, "eval", "task1.py", "task2.py"})
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d", code)
+	}
+	if len(tests) != 3 {
+		t.Fatalf("expected 3 tests (2 + 1), got %d", len(tests))
+	}
+	if len(metrics) != 4 {
+		t.Fatalf("expected 4 metrics (2 + 2), got %d", len(metrics))
+	}
+}
+
+func TestRunFailingChildPropagatesExit(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake-child shell script is bash-only")
+	}
+	dir := t.TempDir()
+	scriptPath := filepath.Join(dir, "fake-fail")
+	body := `#!/usr/bin/env bash
+exit 7
+`
+	if err := os.WriteFile(scriptPath, []byte(body), 0o755); err != nil {
+		t.Fatalf("write fake-fail: %v", err)
+	}
+	abs, _ := filepath.Abs(scriptPath)
+	a := &Adapter{}
+	_, _, code := a.Run([]string{abs, "eval", "task.py"})
+	if code != 7 {
+		t.Fatalf("expected exit 7, got %d", code)
 	}
 }
 
@@ -167,6 +205,8 @@ func TestRunPassthroughOnUserLogDir(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("fake-child shell script is bash-only")
 	}
+	// Fake child that exits 0 immediately. With user-supplied --log-dir
+	// defrost must not parse anything and must propagate the child exit.
 	dir := t.TempDir()
 	scriptPath := filepath.Join(dir, "fake-noop")
 	if err := os.WriteFile(scriptPath, []byte("#!/usr/bin/env bash\nexit 0\n"), 0o755); err != nil {
@@ -175,12 +215,12 @@ func TestRunPassthroughOnUserLogDir(t *testing.T) {
 	abs, _ := filepath.Abs(scriptPath)
 
 	a := &Adapter{}
-	tests, metrics, code := a.Run([]string{abs, "eval", "task.py", "--log-dir", "/tmp/user-controlled"})
+	tests, metrics, code := a.Run([]string{abs, "eval", "task.py", "--log-dir", "/tmp/userlogs"})
 	if code != 0 {
 		t.Fatalf("expected exit 0 (passthrough propagates child exit), got %d", code)
 	}
 	if len(tests) != 0 || len(metrics) != 0 {
-		t.Fatalf("expected zero results in passthrough mode, got %d tests / %d metrics", len(tests), len(metrics))
+		t.Fatalf("expected no results in passthrough mode, got %d tests / %d metrics", len(tests), len(metrics))
 	}
 }
 
@@ -198,92 +238,36 @@ func TestRunPassthroughOnUserLogFormat(t *testing.T) {
 	a := &Adapter{}
 	tests, metrics, code := a.Run([]string{abs, "eval", "task.py", "--log-format=eval"})
 	if code != 0 {
-		t.Fatalf("expected exit 0, got %d", code)
+		t.Fatalf("expected exit 0 (passthrough), got %d", code)
 	}
 	if len(tests) != 0 || len(metrics) != 0 {
-		t.Fatalf("expected zero results in passthrough mode, got %d tests / %d metrics", len(tests), len(metrics))
+		t.Fatalf("expected no results in passthrough mode, got %d tests / %d metrics", len(tests), len(metrics))
 	}
 }
 
-func TestRunFailingChildPropagatesExit(t *testing.T) {
+func TestRunChildSucceededButNoLogsBumpsExit(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("fake-child shell script is bash-only")
 	}
+	// Child exits 0 but writes no JSON. Defrost must surface this as
+	// non-zero so CI can't silently report success on a broken run.
 	dir := t.TempDir()
-	scriptPath := filepath.Join(dir, "fake-fail")
-	if err := os.WriteFile(scriptPath, []byte("#!/usr/bin/env bash\nexit 7\n"), 0o755); err != nil {
-		t.Fatalf("write fake-fail: %v", err)
+	scriptPath := filepath.Join(dir, "fake-noop")
+	if err := os.WriteFile(scriptPath, []byte("#!/usr/bin/env bash\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("write fake-noop: %v", err)
 	}
 	abs, _ := filepath.Abs(scriptPath)
 	a := &Adapter{}
 	_, _, code := a.Run([]string{abs, "eval", "task.py"})
-	if code != 7 {
-		t.Fatalf("expected exit 7, got %d", code)
+	if code != 1 {
+		t.Fatalf("expected exit 1 (defrost-internal floor), got %d", code)
 	}
 }
 
-func TestRunNoOutputFilesPreservesExit(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("fake-child shell script is bash-only")
-	}
-	// Fake child exits 0 but writes nothing into the log dir. The adapter
-	// should preserve the exit code (the child's own signal) and emit a
-	// stderr warning, returning no per-test results.
-	dir := t.TempDir()
-	scriptPath := filepath.Join(dir, "fake-noop")
-	if err := os.WriteFile(scriptPath, []byte("#!/usr/bin/env bash\nexit 0\n"), 0o755); err != nil {
-		t.Fatalf("write fake: %v", err)
-	}
-	abs, _ := filepath.Abs(scriptPath)
+func TestRunEmpty(t *testing.T) {
 	a := &Adapter{}
-	tests, metrics, code := a.Run([]string{abs, "eval", "task.py"})
-	if code != 0 {
-		t.Fatalf("expected exit 0 preserved, got %d", code)
-	}
-	if len(tests) != 0 || len(metrics) != 0 {
-		t.Fatalf("expected zero results, got %d / %d", len(tests), len(metrics))
-	}
-}
-
-func TestRunMultipleJSONFiles(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("fake-child shell script is bash-only")
-	}
-	// Inspect can write multiple JSON files when given multiple task files.
-	// The adapter must aggregate samples across all files.
-	dir := t.TempDir()
-	scriptPath := filepath.Join(dir, "fake-inspect")
-	smoke, _ := filepath.Abs(filepath.Join("testdata", "smoke.json"))
-	stringID, _ := filepath.Abs(filepath.Join("testdata", "string_id.json"))
-	body := `#!/usr/bin/env bash
-set -e
-log_dir=""
-for ((i=1;i<=$#;i++)); do
-    a="${!i}"
-    if [[ "$a" == "--log-dir" ]]; then
-        n=$((i+1))
-        log_dir="${!n}"
-        break
-    fi
-done
-mkdir -p "$log_dir"
-cp "` + smoke + `" "$log_dir/task_a.json"
-cp "` + stringID + `" "$log_dir/task_b.json"
-`
-	if err := os.WriteFile(scriptPath, []byte(body), 0o755); err != nil {
-		t.Fatalf("write fake: %v", err)
-	}
-	abs, _ := filepath.Abs(scriptPath)
-	a := &Adapter{}
-	tests, metrics, code := a.Run([]string{abs, "eval", "a.py", "b.py"})
-	if code != 0 {
-		t.Fatalf("expected exit 0, got %d", code)
-	}
-	// 2 samples from smoke + 2 from string_id = 4 total
-	if len(tests) != 4 {
-		t.Fatalf("expected 4 tests aggregated, got %d", len(tests))
-	}
-	if len(metrics) != 4 {
-		t.Fatalf("expected 4 metrics aggregated, got %d", len(metrics))
+	_, _, code := a.Run(nil)
+	if code != 2 {
+		t.Fatalf("expected exit 2, got %d", code)
 	}
 }

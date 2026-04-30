@@ -47,9 +47,9 @@ func HandleExecution(cmd []string, opts ExecOpts) int {
 
 	reg := runner.NewRegistry()
 	reg.Register(golang.Adapter{})
-	// inspect registers before pytest because `python -m inspect_ai eval ...`
-	// could otherwise be claimed by a future broad python matcher; the
-	// inspect_ai module form is strict and unambiguous.
+	// inspect registers before pytest because both can match `<tool> run <bin>`
+	// shapes, and inspect's matcher is the stricter one (it requires the
+	// `eval` subcommand). Strict matchers go first.
 	reg.Register(&inspect.Adapter{})
 	reg.Register(pytest.Adapter{})
 	// promptfoo registers before jest because jest's yarn-script matcher reads
