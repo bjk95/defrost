@@ -141,6 +141,20 @@ func TestExec_SuppressionsReadError_ExitUnchanged(t *testing.T) {
 	}
 }
 
+func TestExec_NoResultsNonZeroCode_NotSuppressed(t *testing.T) {
+	repoDir := makeRepo(t)
+	writeDevSuppressions(t, repoDir, []string{"anything"})
+
+	stub := stubAdapter{
+		results: nil,
+		code:    1,
+	}
+	got := runExecWithAdapter(t, stub, repoDir)
+	if got != 1 {
+		t.Errorf("no results + non-zero code must preserve exit: want 1, got %d", got)
+	}
+}
+
 func TestExec_BuildOnlyFailure_NotSuppressed(t *testing.T) {
 	repoDir := makeRepo(t)
 	// "buildErr" is the only ID present; suppress it. We must NOT rewrite
