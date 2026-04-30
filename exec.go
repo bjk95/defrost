@@ -18,6 +18,7 @@ import (
 	"github.com/bjk95/defrost/internal/persist"
 	"github.com/bjk95/defrost/internal/python/pytest"
 	"github.com/bjk95/defrost/internal/runner"
+	"github.com/bjk95/defrost/internal/runner/passthrough"
 )
 
 // defrostVersion is stamped into the Resource attribute service.version.
@@ -51,9 +52,15 @@ func HandleExecution(cmd []string, opts ExecOpts) int {
 	// happens to be jest-shaped. Strict matchers go first.
 	reg.Register(&promptfoo.Adapter{})
 	reg.Register(&jest.Adapter{})
+	// Passthrough must be registered last: it matches everything, so
+	// anything ahead of it gets first crack at recognising the cmd.
+	reg.Register(passthrough.Adapter{})
 
 	a := reg.Find(cmd)
 	if a == nil {
+		// Unreachable while the passthrough adapter is registered, but kept
+		// as a safety net so a future registry change can't silently turn
+		// "no adapter" into a panic.
 		fmt.Fprintf(os.Stderr, "exec: unsupported test command: %q\n", cmd[0])
 		return 2
 	}
@@ -132,6 +139,7 @@ func execWith(a runner.Adapter, cmd []string, opts ExecOpts) int {
 	// when, what commit, what exit code — the runs you most want to
 	// debug are precisely the ones with no per-test data.
 	if opts.Persist && !persistFailed {
+		metrics = append(metrics, persist.RunDurationMetric(run, cmd, opts.RepoDir, time.Now()))
 		if err := persistRun(pOpts, run, results, metrics, code); err != nil {
 			fmt.Fprintln(os.Stderr, "persist: failed:", err)
 			// A persist failure should surface even when the test command

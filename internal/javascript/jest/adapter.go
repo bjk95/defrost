@@ -186,19 +186,25 @@ func looksLikeJestScript(value string) bool {
 }
 
 func (a *Adapter) Run(cmd []string) ([]models.TestResult, []*metricspb.Metric, int) {
+	// Conditions where we can't safely inject --json/--outputFile or
+	// can't capture results at all (watch mode). Surface a warning and
+	// fall through to passthrough rather than refusing to run — defrost
+	// is a wrapper, the user's command should still execute.
 	if hasUserJSONFlag(cmd) {
-		fmt.Fprintln(os.Stderr, "defrost: jest adapter requires control of --json and --outputFile; remove those flags")
-		return nil, nil, 2
+		fmt.Fprintln(os.Stderr,
+			"defrost: jest --json/--outputFile present in argv; running passthrough (no per-test results will be recorded)")
+		return passthroughRun(cmd)
 	}
 	if hasUserWatchFlag(cmd) {
-		fmt.Fprintln(os.Stderr, "defrost: jest adapter is not compatible with --watch / --watchAll")
-		return nil, nil, 2
+		fmt.Fprintln(os.Stderr,
+			"defrost: jest --watch/--watchAll present; running passthrough (no per-test results will be recorded)")
+		return passthroughRun(cmd)
 	}
 	if a.formD && !a.scriptOK {
 		fmt.Fprintf(os.Stderr,
-			"defrost: scripts.%s in package.json doesn't look like a direct jest invocation; run jest via 'npx jest …' or rewrite the script\n",
+			"defrost: scripts.%s in package.json isn't a direct jest invocation; running passthrough (no per-test results will be recorded). For per-test results, run jest via 'npx jest …' or simplify the script.\n",
 			a.scriptName)
-		return nil, nil, 2
+		return passthroughRun(cmd)
 	}
 
 	f, err := os.CreateTemp("", "defrost-jest-*.json")
@@ -213,35 +219,64 @@ func (a *Adapter) Run(cmd []string) ([]models.TestResult, []*metricspb.Metric, i
 	args := buildArgs(cmd, path)
 
 	child := exec.Command(cmd[0], args...)
-	child.Stdout = os.Stdout
-	child.Stderr = os.Stderr
-
-	runErr := child.Run()
-	exitCode := 0
-	switch e := runErr.(type) {
-	case nil:
-		// success
-	case *exec.ExitError:
-		exitCode = e.ExitCode()
-	default:
-		fmt.Fprintln(os.Stderr, "defrost:", runErr)
+	exitCode, err := runner.RunChild(child)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "defrost:", err)
 		return nil, nil, 1
 	}
 
 	cwd, err := os.Getwd()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "defrost:", err)
-		return nil, nil, 1
+		return nil, nil, exitCode
 	}
+	return parseOrPreserve(path, cwd, exitCode)
+}
 
-	results, parseErr := ParseFile(path, cwd)
-	if parseErr != nil {
-		fmt.Fprintln(os.Stderr, "defrost:", parseErr)
-		return nil, nil, 1
+// parseOrPreserve reads jest's JSON output and returns the parsed test
+// results paired with the child's exit code. When the output file is
+// missing/empty (child crashed before writing) or the JSON can't be
+// parsed, the exit code is preserved and a warning is logged — the
+// adapter never overwrites a meaningful child exit with a synthetic
+// parse-error 1, since that would mask the real failure signal.
+func parseOrPreserve(path, cwd string, exitCode int) ([]models.TestResult, []*metricspb.Metric, int) {
+	if !fileNonEmpty(path) {
+		fmt.Fprintf(os.Stderr,
+			"defrost: jest exited %d without writing JSON output; recording run with no per-test results\n",
+			exitCode)
+		return nil, nil, exitCode
+	}
+	results, err := ParseFile(path, cwd)
+	if err != nil {
+		fmt.Fprintf(os.Stderr,
+			"defrost: parse jest output: %v; recording run with no per-test results\n",
+			err)
+		return nil, nil, exitCode
 	}
 	runner.ApplyRepoPrefix(results)
-
 	return results, nil, exitCode
+}
+
+func fileNonEmpty(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	return info.Size() > 0
+}
+
+// passthroughRun executes cmd verbatim with stdio + signals wired,
+// returning the child exit code and no test results. Used when the jest
+// adapter recognises the invocation form but can't safely capture
+// results (user-supplied --json, --watch, or non-direct script shape).
+func passthroughRun(cmd []string) ([]models.TestResult, []*metricspb.Metric, int) {
+	c := exec.Command(cmd[0], cmd[1:]...)
+	code, err := runner.RunChild(c)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "defrost:", err)
+		return nil, nil, 1
+	}
+	return nil, nil, code
 }
 
 // buildArgs returns the args to pass to cmd[0], with --json and

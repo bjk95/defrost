@@ -1,6 +1,10 @@
 package pytest
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestAdapterMatches(t *testing.T) {
 	cases := []struct {
@@ -34,5 +38,47 @@ func TestAdapterMatches(t *testing.T) {
 				t.Fatalf("Matches(%v) = %v, want %v", tc.cmd, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestParseOrPreserve_MissingFile_PreservesExitCode(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "nope.xml")
+
+	results, _, code := parseOrPreserve(missing, 5)
+	if results != nil {
+		t.Errorf("expected nil results, got %v", results)
+	}
+	if code != 5 {
+		t.Errorf("got code %d, want 5 (pytest exit must be preserved)", code)
+	}
+}
+
+func TestParseOrPreserve_EmptyFile_PreservesExitCode(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "empty.xml")
+	if err := os.WriteFile(path, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	results, _, code := parseOrPreserve(path, 2)
+	if results != nil {
+		t.Errorf("expected nil results, got %v", results)
+	}
+	if code != 2 {
+		t.Errorf("got code %d, want 2", code)
+	}
+}
+
+func TestParseOrPreserve_MalformedXML_PreservesExitCode(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "broken.xml")
+	if err := os.WriteFile(path, []byte("<garbage"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	results, _, code := parseOrPreserve(path, 3)
+	if results != nil {
+		t.Errorf("expected nil results, got %v", results)
+	}
+	if code != 3 {
+		t.Errorf("got code %d, want 3", code)
 	}
 }

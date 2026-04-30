@@ -44,8 +44,18 @@ func (Adapter) Matches(cmd []string) bool {
 
 func (Adapter) Run(cmd []string) ([]models.TestResult, []*metricspb.Metric, int) {
 	if hasUserJunitxml(cmd) {
-		fmt.Fprintln(os.Stderr, "defrost: pytest adapter requires control of --junitxml; remove your --junitxml flag")
-		return nil, nil, 2
+		// User-controlled --junitxml means we can't inject our own without
+		// silently overriding their config. Run their command unchanged
+		// and skip per-test parsing rather than refusing to run.
+		fmt.Fprintln(os.Stderr,
+			"defrost: pytest --junitxml present in argv; running passthrough (no per-test results will be recorded)")
+		c := exec.Command(cmd[0], cmd[1:]...)
+		code, err := runner.RunChild(c)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "defrost:", err)
+			return nil, nil, 1
+		}
+		return nil, nil, code
 	}
 
 	f, err := os.CreateTemp("", "defrost-pytest-*.xml")
@@ -65,29 +75,45 @@ func (Adapter) Run(cmd []string) ([]models.TestResult, []*metricspb.Metric, int)
 	)
 
 	child := exec.Command(cmd[0], args...)
-	child.Stdout = os.Stdout
-	child.Stderr = os.Stderr
-
-	runErr := child.Run()
-	exitCode := 0
-	switch e := runErr.(type) {
-	case nil:
-		// success
-	case *exec.ExitError:
-		exitCode = e.ExitCode()
-	default:
-		fmt.Fprintln(os.Stderr, "defrost:", runErr)
+	exitCode, err := runner.RunChild(child)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "defrost:", err)
 		return nil, nil, 1
 	}
 
-	results, parseErr := ParseFile(path)
-	if parseErr != nil {
-		fmt.Fprintln(os.Stderr, "defrost:", parseErr)
-		return nil, nil, 1
+	return parseOrPreserve(path, exitCode)
+}
+
+// parseOrPreserve reads pytest's JUnit XML and returns the parsed test
+// results paired with the child's exit code. Pytest exits 5 when no
+// tests were collected and exits non-zero on internal errors (config
+// error, plugin crash); in both cases the XML may be missing or empty.
+// Preserve pytest's exit code rather than overwriting with a synthetic
+// 1 — that's the only signal the user has and we mustn't overwrite it.
+func parseOrPreserve(path string, exitCode int) ([]models.TestResult, []*metricspb.Metric, int) {
+	if !fileNonEmpty(path) {
+		fmt.Fprintf(os.Stderr,
+			"defrost: pytest exited %d without writing JUnit XML; recording run with no per-test results\n",
+			exitCode)
+		return nil, nil, exitCode
+	}
+	results, err := ParseFile(path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr,
+			"defrost: parse pytest output: %v; recording run with no per-test results\n",
+			err)
+		return nil, nil, exitCode
 	}
 	runner.ApplyRepoPrefix(results)
-
 	return results, nil, exitCode
+}
+
+func fileNonEmpty(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	return info.Size() > 0
 }
 
 func hasUserJunitxml(cmd []string) bool {

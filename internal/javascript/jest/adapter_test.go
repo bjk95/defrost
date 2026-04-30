@@ -357,6 +357,51 @@ func TestBuildArgs(t *testing.T) {
 	}
 }
 
+func TestParseOrPreserve_MissingFile_PreservesExitCode(t *testing.T) {
+	dir := t.TempDir()
+	missing := filepath.Join(dir, "nope.json")
+
+	results, _, code := parseOrPreserve(missing, dir, 7)
+	if results != nil {
+		t.Errorf("expected nil results, got %v", results)
+	}
+	if code != 7 {
+		t.Errorf("got code %d, want 7 (child exit must be preserved)", code)
+	}
+}
+
+func TestParseOrPreserve_EmptyFile_PreservesExitCode(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "empty.json")
+	if err := os.WriteFile(path, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	results, _, code := parseOrPreserve(path, dir, 2)
+	if results != nil {
+		t.Errorf("expected nil results, got %v", results)
+	}
+	if code != 2 {
+		t.Errorf("got code %d, want 2", code)
+	}
+}
+
+func TestParseOrPreserve_MalformedJSON_PreservesExitCode(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "broken.json")
+	if err := os.WriteFile(path, []byte("not jest json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	results, _, code := parseOrPreserve(path, dir, 4)
+	if results != nil {
+		t.Errorf("expected nil results, got %v", results)
+	}
+	if code != 4 {
+		t.Errorf("got code %d, want 4", code)
+	}
+}
+
 func TestHasUserJSONFlag(t *testing.T) {
 	cases := []struct {
 		cmd  []string

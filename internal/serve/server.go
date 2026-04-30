@@ -76,10 +76,17 @@ func New(opts persist.Options, assets fs.FS) http.Handler {
 }
 
 type runDTO struct {
-	RunID     string `json:"run_id"`
-	Timestamp string `json:"ts"`
-	Commit    string `json:"commit,omitempty"`
-	Branch    string `json:"branch,omitempty"`
+	RunID       string   `json:"run_id"`
+	Timestamp   string   `json:"ts"`
+	Commit      string   `json:"commit,omitempty"`
+	Parent      string   `json:"parent,omitempty"`
+	Branch      string   `json:"branch,omitempty"`
+	PR          int      `json:"pr,omitempty"`
+	AuthorEmail string   `json:"author_email,omitempty"`
+	AuthorName  string   `json:"author_name,omitempty"`
+	Cmd         []string `json:"cmd,omitempty"`
+	OS          string   `json:"os,omitempty"`
+	Arch        string   `json:"arch,omitempty"`
 }
 
 type cellDTO struct {
@@ -144,11 +151,25 @@ func buildGridResponse(ds Dataset) gridResponse {
 		if span == nil {
 			continue
 		}
+		prStr := models.ResourceString(rs.Resource, "vcs.repository.change.id")
+		pr := 0
+		if prStr != "" {
+			var n int
+			_, _ = fmtSscanf(prStr, &n)
+			pr = n
+		}
 		out.Runs = append(out.Runs, runDTO{
-			RunID:     runIDOf(rs),
-			Timestamp: nanosToRFC3339(int64(span.StartTimeUnixNano)),
-			Commit:    models.ResourceString(rs.Resource, "vcs.repository.ref.revision"),
-			Branch:    models.ResourceString(rs.Resource, "vcs.repository.ref.name"),
+			RunID:       runIDOf(rs),
+			Timestamp:   nanosToRFC3339(int64(span.StartTimeUnixNano)),
+			Commit:      models.ResourceString(rs.Resource, "vcs.repository.ref.revision"),
+			Parent:      models.ResourceString(rs.Resource, "defrost.parent_commit"),
+			Branch:      models.ResourceString(rs.Resource, "vcs.repository.ref.name"),
+			PR:          pr,
+			AuthorEmail: models.ResourceString(rs.Resource, "defrost.author_email"),
+			AuthorName:  models.ResourceString(rs.Resource, "defrost.author_name"),
+			Cmd:         readStringArrayAttr(rs.Resource.GetAttributes(), "defrost.cmd"),
+			OS:          models.ResourceString(rs.Resource, "host.os.type"),
+			Arch:        models.ResourceString(rs.Resource, "host.arch"),
 		})
 	}
 	for tid, traces := range ds.TestSpans {
