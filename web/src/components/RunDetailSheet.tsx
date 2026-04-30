@@ -35,9 +35,12 @@ export function RunDetailSheet() {
 
   return (
     <Sheet open={open} onOpenChange={(v) => { if (!v) close(); }}>
-      <SheetContent className="w-[640px] sm:max-w-[640px] overflow-y-auto">
+      <SheetContent className="w-[640px] sm:max-w-[640px] overflow-y-auto p-6">
         {detail.isError && (
           <p className="text-red-600">failed to load: {(detail.error as Error).message}</p>
+        )}
+        {detail.isPending && !detail.isError && (
+          <p className="text-sm text-muted-foreground">loading…</p>
         )}
         {detail.data && (
           <>

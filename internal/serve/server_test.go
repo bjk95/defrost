@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 	"testing/fstest"
 
@@ -127,8 +128,8 @@ func TestServer_GetTestRun_404OnUnknown(t *testing.T) {
 	}
 }
 
-func TestServer_GetTestRun_HandlesEncodedTestIDs(t *testing.T) {
-	// Real test IDs are url.PathEscape'd: github.com/x/p/TestA → github.com%2Fx%2Fp%2FTestA
+func TestServer_GetTestRun_HandlesDoubleEncodedTestIDs(t *testing.T) {
+	// Map key is the on-disk single-encoded ID:
 	encodedTID := "github.com%2Fx%2Fp%2FTestA"
 	ds := Dataset{
 		Runs: []persist.RunRecord{
@@ -145,13 +146,15 @@ func TestServer_GetTestRun_HandlesEncodedTestIDs(t *testing.T) {
 	})
 	defer srv.Close()
 
-	resp, err := http.Get(srv.URL + "/api/test/" + encodedTID + "/run/run-1")
+	// SPA sends the encoded ID through encodeURIComponent → double-encoded:
+	doubleEncodedTID := url.PathEscape(encodedTID)
+	resp, err := http.Get(srv.URL + "/api/test/" + doubleEncodedTID + "/run/run-1")
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
-		t.Fatalf("status: want 200, got %d", resp.StatusCode)
+		t.Fatalf("status: want 200, got %d (URL: %s)", resp.StatusCode, "/api/test/"+doubleEncodedTID+"/run/run-1")
 	}
 }
 
