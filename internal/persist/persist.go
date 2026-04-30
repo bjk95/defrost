@@ -94,6 +94,13 @@ type Backend interface {
 	// to populate the heatmap grid in a single read instead of N.
 	// Returns nil slices/maps when there is no data yet.
 	LoadAll() (rootSpans []*tracepb.ResourceSpans, byEncodedName map[string][]*tracepb.ResourceSpans, err error)
+
+	// LoadAllMetrics returns every persisted metric data point across
+	// all metrics/*.ndjson files. Each element is a ResourceMetrics
+	// containing exactly one Metric with one data point — the storage
+	// shape produced by InsertNewRun. Returns nil when there is no
+	// metrics data on disk.
+	LoadAllMetrics() ([]*metricspb.ResourceMetrics, error)
 }
 
 // New returns the Backend implied by opts. Dev mode selects the local
@@ -462,6 +469,36 @@ func (b *gitBackend) LoadAll() ([]*tracepb.ResourceSpans, map[string][]*tracepb.
 	return readAllSpans(workDir)
 }
 
+func (b *gitBackend) LoadAllMetrics() ([]*metricspb.ResourceMetrics, error) {
+	branch := b.opts.DataBranch
+	if branch == "" {
+		branch = DefaultDataBranch
+	}
+	remoteURL, err := resolveTargetURL(b.opts)
+	if err != nil {
+		return nil, err
+	}
+	exists, err := branchExistsOnRemote(remoteURL, branch)
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, nil
+	}
+
+	workDir, err := os.MkdirTemp("", "defrost-read-")
+	if err != nil {
+		return nil, fmt.Errorf("mktemp: %w", err)
+	}
+	defer os.RemoveAll(workDir)
+	_ = os.Remove(workDir)
+
+	if _, err := runGit("", "clone", "--quiet", "--depth=1", "--single-branch", "--branch", branch, remoteURL, workDir); err != nil {
+		return nil, fmt.Errorf("clone data branch: %w", err)
+	}
+	return readAllMetrics(workDir)
+}
+
 // fileBackend writes spans/metrics to a plain directory; no git operations.
 type fileBackend struct{ dir string }
 
@@ -500,6 +537,16 @@ func (b *fileBackend) LoadAll() ([]*tracepb.ResourceSpans, map[string][]*tracepb
 		return nil, nil, err
 	}
 	return readAllSpans(b.dir)
+}
+
+func (b *fileBackend) LoadAllMetrics() ([]*metricspb.ResourceMetrics, error) {
+	if _, err := os.Stat(b.dir); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return readAllMetrics(b.dir)
 }
 
 // --- write helpers ---
@@ -662,6 +709,53 @@ func parseSpansNDJSON(r io.Reader) ([]*tracepb.ResourceSpans, error) {
 			return nil, fmt.Errorf("parse ndjson line: %w", err)
 		}
 		out = append(out, rs)
+	}
+	return out, sc.Err()
+}
+
+func readAllMetrics(dir string) ([]*metricspb.ResourceMetrics, error) {
+	metricsDir := filepath.Join(dir, "metrics")
+	files, err := os.ReadDir(metricsDir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var out []*metricspb.ResourceMetrics
+	for _, f := range files {
+		if f.IsDir() || !strings.HasSuffix(f.Name(), ".ndjson") {
+			continue
+		}
+		full := filepath.Join(metricsDir, f.Name())
+		fh, err := os.Open(full)
+		if err != nil {
+			return nil, err
+		}
+		records, err := parseMetricsNDJSON(fh)
+		fh.Close()
+		if err != nil {
+			return nil, fmt.Errorf("parse %s: %w", full, err)
+		}
+		out = append(out, records...)
+	}
+	return out, nil
+}
+
+func parseMetricsNDJSON(r io.Reader) ([]*metricspb.ResourceMetrics, error) {
+	var out []*metricspb.ResourceMetrics
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 64*1024), 8*1024*1024)
+	for sc.Scan() {
+		line := bytes.TrimSpace(sc.Bytes())
+		if len(line) == 0 {
+			continue
+		}
+		rm := &metricspb.ResourceMetrics{}
+		if err := protojson.Unmarshal(line, rm); err != nil {
+			return nil, fmt.Errorf("parse ndjson line: %w", err)
+		}
+		out = append(out, rm)
 	}
 	return out, sc.Err()
 }

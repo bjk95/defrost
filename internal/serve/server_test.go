@@ -9,6 +9,7 @@ import (
 	"testing/fstest"
 
 	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
+	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
 	resourcepb "go.opentelemetry.io/proto/otlp/resource/v1"
 	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
 
@@ -210,6 +211,235 @@ func TestServer_GetTestRun_HandlesDoubleEncodedTestIDs(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
 		t.Fatalf("status: want 200, got %d (URL: %s)", resp.StatusCode, "/api/test/"+doubleEncodedTID+"/run/run-1")
+	}
+}
+
+func TestServer_GetMetrics_TranslatesGaugeAndHistogram(t *testing.T) {
+	runID := "run-1"
+	traceID := models.DeriveTraceID(runID)
+
+	rootResource := &resourcepb.Resource{Attributes: []*commonpb.KeyValue{
+		models.StringAttr("defrost.run_id", runID),
+	}}
+	root := &tracepb.ResourceSpans{
+		Resource: rootResource,
+		ScopeSpans: []*tracepb.ScopeSpans{{
+			Spans: []*tracepb.Span{{
+				Name:              "defrost.run",
+				StartTimeUnixNano: 1735_689_600_000_000_000, // 2026-01-01T00:00:00Z
+			}},
+		}},
+	}
+
+	gauge := &metricspb.ResourceMetrics{
+		ScopeMetrics: []*metricspb.ScopeMetrics{{
+			Metrics: []*metricspb.Metric{{
+				Name: "eval.factuality",
+				Unit: "{score}",
+				Data: &metricspb.Metric_Gauge{Gauge: &metricspb.Gauge{
+					DataPoints: []*metricspb.NumberDataPoint{{
+						Attributes: []*commonpb.KeyValue{models.StringAttr("eval.model", "claude-sonnet-4.5")},
+						Value:      &metricspb.NumberDataPoint_AsDouble{AsDouble: 0.91},
+						Exemplars:  []*metricspb.Exemplar{{TraceId: traceID}},
+					}},
+				}},
+			}},
+		}},
+	}
+	hist := &metricspb.ResourceMetrics{
+		ScopeMetrics: []*metricspb.ScopeMetrics{{
+			Metrics: []*metricspb.Metric{{
+				Name: "http.server.request.duration",
+				Unit: "ms",
+				Data: &metricspb.Metric_Histogram{Histogram: &metricspb.Histogram{
+					AggregationTemporality: metricspb.AggregationTemporality_AGGREGATION_TEMPORALITY_DELTA,
+					DataPoints: []*metricspb.HistogramDataPoint{{
+						Count:          7,
+						ExplicitBounds: []float64{1, 5, 10},
+						BucketCounts:   []uint64{2, 3, 1, 1},
+						Exemplars:      []*metricspb.Exemplar{{TraceId: traceID}},
+					}},
+				}},
+			}},
+		}},
+	}
+
+	ds := Dataset{Roots: []*tracepb.ResourceSpans{root}, Metrics: []*metricspb.ResourceMetrics{gauge, hist}}
+	srv := newTestServer(t, ds, fstest.MapFS{
+		"web/dist/index.html": &fstest.MapFile{Data: []byte("<!doctype html>")},
+	})
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/metrics")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("status: %d", resp.StatusCode)
+	}
+
+	var body struct {
+		Metrics []struct {
+			Name       string `json:"name"`
+			Instrument string `json:"instrument"`
+			Points     []struct {
+				RunID   string             `json:"run_id"`
+				Attrs   map[string]string  `json:"attrs"`
+				Value   *float64           `json:"value"`
+				Count   *uint64            `json:"count"`
+				Buckets []struct {
+					LE    *float64 `json:"le"`
+					Count uint64   `json:"count"`
+				} `json:"buckets"`
+			} `json:"points"`
+		} `json:"metrics"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(body.Metrics) != 2 {
+		t.Fatalf("want 2 metrics, got %d", len(body.Metrics))
+	}
+
+	// Gauges sort first.
+	g := body.Metrics[0]
+	if g.Name != "eval.factuality" || g.Instrument != "gauge" {
+		t.Errorf("first metric: %+v", g)
+	}
+	if len(g.Points) != 1 || g.Points[0].RunID != runID {
+		t.Errorf("gauge point run_id missing: %+v", g.Points)
+	}
+	if g.Points[0].Value == nil || *g.Points[0].Value != 0.91 {
+		t.Errorf("gauge value: %+v", g.Points[0].Value)
+	}
+	if g.Points[0].Attrs["eval.model"] != "claude-sonnet-4.5" {
+		t.Errorf("gauge attr: %+v", g.Points[0].Attrs)
+	}
+
+	h := body.Metrics[1]
+	if h.Name != "http.server.request.duration" || h.Instrument != "histogram" {
+		t.Errorf("second metric: %+v", h)
+	}
+	if len(h.Points) != 1 {
+		t.Fatalf("want 1 hist point, got %d", len(h.Points))
+	}
+	if h.Points[0].Count == nil || *h.Points[0].Count != 7 {
+		t.Errorf("hist count: %+v", h.Points[0].Count)
+	}
+	if len(h.Points[0].Buckets) != 4 {
+		t.Fatalf("want 4 buckets (incl. +Inf), got %d", len(h.Points[0].Buckets))
+	}
+	// Last bucket should encode +Inf as null LE.
+	if last := h.Points[0].Buckets[3]; last.LE != nil {
+		t.Errorf("+Inf bucket LE should be null, got %v", *last.LE)
+	}
+}
+
+func TestServer_GetMetrics_DropsDataPointsWithoutKeptRun(t *testing.T) {
+	runID := "run-kept"
+
+	root := &tracepb.ResourceSpans{
+		Resource: &resourcepb.Resource{Attributes: []*commonpb.KeyValue{
+			models.StringAttr("defrost.run_id", runID),
+		}},
+		ScopeSpans: []*tracepb.ScopeSpans{{
+			Spans: []*tracepb.Span{{Name: "defrost.run", StartTimeUnixNano: 1}},
+		}},
+	}
+	// Exemplar trace_id for an unknown run — should be filtered out.
+	stranger := &metricspb.ResourceMetrics{
+		ScopeMetrics: []*metricspb.ScopeMetrics{{
+			Metrics: []*metricspb.Metric{{
+				Name: "stale.metric",
+				Data: &metricspb.Metric_Gauge{Gauge: &metricspb.Gauge{
+					DataPoints: []*metricspb.NumberDataPoint{{
+						Value:     &metricspb.NumberDataPoint_AsDouble{AsDouble: 1.0},
+						Exemplars: []*metricspb.Exemplar{{TraceId: models.DeriveTraceID("run-stranger")}},
+					}},
+				}},
+			}},
+		}},
+	}
+	ds := Dataset{Roots: []*tracepb.ResourceSpans{root}, Metrics: []*metricspb.ResourceMetrics{stranger}}
+	srv := newTestServer(t, ds, fstest.MapFS{
+		"web/dist/index.html": &fstest.MapFile{Data: []byte("<!doctype html>")},
+	})
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/metrics")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+	var body struct {
+		Metrics []json.RawMessage `json:"metrics"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(body.Metrics) != 0 {
+		t.Errorf("want 0 metrics (data point belongs to dropped run), got %d", len(body.Metrics))
+	}
+}
+
+func TestServer_GetMetrics_TimeWindowFallbackForExemplarlessPoints(t *testing.T) {
+	// Run window: [1000, 2000].
+	root := &tracepb.ResourceSpans{
+		Resource: &resourcepb.Resource{Attributes: []*commonpb.KeyValue{
+			models.StringAttr("defrost.run_id", "run-1"),
+		}},
+		ScopeSpans: []*tracepb.ScopeSpans{{
+			Spans: []*tracepb.Span{{
+				Name:              "defrost.run",
+				StartTimeUnixNano: 1000,
+				EndTimeUnixNano:   2000,
+			}},
+		}},
+	}
+	// No exemplars; time falls inside the run window. Mirrors the
+	// auto-emitted defrost.run.<cmd> gauge shape on disk.
+	pointInWindow := &metricspb.ResourceMetrics{
+		ScopeMetrics: []*metricspb.ScopeMetrics{{
+			Metrics: []*metricspb.Metric{{
+				Name: "defrost.run.go test",
+				Data: &metricspb.Metric_Gauge{Gauge: &metricspb.Gauge{
+					DataPoints: []*metricspb.NumberDataPoint{{
+						TimeUnixNano: 1500,
+						Value:        &metricspb.NumberDataPoint_AsDouble{AsDouble: 12345},
+					}},
+				}},
+			}},
+		}},
+	}
+
+	ds := Dataset{Roots: []*tracepb.ResourceSpans{root}, Metrics: []*metricspb.ResourceMetrics{pointInWindow}}
+	srv := newTestServer(t, ds, fstest.MapFS{
+		"web/dist/index.html": &fstest.MapFile{Data: []byte("<!doctype html>")},
+	})
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/metrics")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+	var body struct {
+		Metrics []struct {
+			Name   string `json:"name"`
+			Points []struct {
+				RunID string `json:"run_id"`
+			} `json:"points"`
+		} `json:"metrics"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(body.Metrics) != 1 || len(body.Metrics[0].Points) != 1 {
+		t.Fatalf("want 1 metric/1 point via time fallback, got %+v", body.Metrics)
+	}
+	if body.Metrics[0].Points[0].RunID != "run-1" {
+		t.Errorf("expected run-1 attribution, got %q", body.Metrics[0].Points[0].RunID)
 	}
 }
 

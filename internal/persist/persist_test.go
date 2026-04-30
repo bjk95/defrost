@@ -421,6 +421,76 @@ func TestLoadAll_ReturnsRootSpansAndTestSpansGroupedByEncodedName(t *testing.T) 
 	}
 }
 
+func TestLoadAllMetrics_RoundTripsEveryDataPoint(t *testing.T) {
+	requireGit(t)
+	repoDir, _ := makeFixture(t)
+
+	run := newRunContext("run-1", "1111111111111111", "main")
+	traces := WrapSpansInResource(run.Resource, []*tracepb.Span{NewRootSpan(run)})
+
+	gauge := 0.93
+	metrics := []*metricspb.Metric{
+		{
+			Name: "eval.factuality",
+			Unit: "{score}",
+			Data: &metricspb.Metric_Gauge{Gauge: &metricspb.Gauge{
+				DataPoints: []*metricspb.NumberDataPoint{{
+					TimeUnixNano: uint64(run.StartTimeUnixNano) + 1,
+					Value:        &metricspb.NumberDataPoint_AsDouble{AsDouble: gauge},
+				}},
+			}},
+		},
+		{
+			Name: "http.server.request.count",
+			Unit: "{request}",
+			Data: &metricspb.Metric_Sum{Sum: &metricspb.Sum{
+				IsMonotonic:            true,
+				AggregationTemporality: metricspb.AggregationTemporality_AGGREGATION_TEMPORALITY_DELTA,
+				DataPoints: []*metricspb.NumberDataPoint{{
+					TimeUnixNano: uint64(run.StartTimeUnixNano) + 1,
+					Value:        &metricspb.NumberDataPoint_AsInt{AsInt: 42},
+				}},
+			}},
+		},
+	}
+	wrapped := WrapMetricsInResource(MetricResource(run), metrics)
+	if err := New(Options{RepoDir: repoDir}).InsertNewRun(traces, wrapped); err != nil {
+		t.Fatalf("InsertNewRun: %v", err)
+	}
+
+	loaded, err := New(Options{RepoDir: repoDir}).LoadAllMetrics()
+	if err != nil {
+		t.Fatalf("LoadAllMetrics: %v", err)
+	}
+	if len(loaded) != 2 {
+		t.Fatalf("want 2 ResourceMetrics, got %d", len(loaded))
+	}
+	gotNames := map[string]bool{}
+	for _, rm := range loaded {
+		m := MetricFromResourceMetrics(rm)
+		if m == nil {
+			continue
+		}
+		gotNames[m.Name] = true
+	}
+	if !gotNames["eval.factuality"] || !gotNames["http.server.request.count"] {
+		t.Errorf("missing metric names in %v", gotNames)
+	}
+}
+
+func TestLoadAllMetrics_NoBranch_ReturnsEmpty(t *testing.T) {
+	requireGit(t)
+	repoDir, _ := makeFixture(t)
+
+	loaded, err := New(Options{RepoDir: repoDir}).LoadAllMetrics()
+	if err != nil {
+		t.Fatalf("LoadAllMetrics: %v", err)
+	}
+	if len(loaded) != 0 {
+		t.Errorf("expected 0 metrics, got %d", len(loaded))
+	}
+}
+
 func TestLoadAll_NoBranch_ReturnsEmpty(t *testing.T) {
 	requireGit(t)
 	repoDir, _ := makeFixture(t)

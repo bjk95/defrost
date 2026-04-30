@@ -9,6 +9,7 @@ import { TestDetailPage } from "@/pages/TestDetailPage";
 import { RunsPage } from "@/pages/RunsPage";
 import { RunDetailPage } from "@/pages/RunDetailPage";
 import { SuppressionsPage } from "@/pages/SuppressionsPage";
+import { MetricsPage } from "@/pages/MetricsPage";
 
 const THEME_KEY = "defrost.theme.v1";
 
@@ -36,9 +37,10 @@ export default function App() {
   const [theme, setTheme] = useTheme();
   const location = useLocation();
   const onSuppressions = location.pathname.startsWith("/suppressions");
+  const onMetrics = location.pathname.startsWith("/metrics");
   const onRuns =
     location.pathname.startsWith("/runs") || location.pathname === "/run";
-  const onTests = !onSuppressions && !onRuns;
+  const onTests = !onSuppressions && !onRuns && !onMetrics;
 
   const { data } = useQuery({ queryKey: ["tests"], queryFn: getTests });
   const suppressionCount = useSuppressionCount();
@@ -80,6 +82,7 @@ export default function App() {
         <nav style={{ display: "flex", gap: 2, marginLeft: 12 }}>
           <NavLink to="/" active={onTests}>Tests</NavLink>
           <NavLink to="/runs" active={onRuns}>Runs</NavLink>
+          <NavLink to="/metrics" active={onMetrics}>Metrics</NavLink>
           <NavLink to="/suppressions" active={onSuppressions}>
             <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
               Suppressions
@@ -155,6 +158,7 @@ export default function App() {
           <Route path="/runs" element={<RunsPage />} />
           <Route path="/run" element={<RunDetailPage />} />
           <Route path="/suppressions" element={<SuppressionsPage />} />
+          <Route path="/metrics" element={<MetricsPage />} />
         </Routes>
       </main>
     </div>
