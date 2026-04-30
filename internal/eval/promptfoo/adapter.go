@@ -173,18 +173,9 @@ func (a *Adapter) Run(cmd []string) ([]models.TestResult, []*metricspb.Metric, i
 	args := buildArgs(cmd, tempPath)
 
 	child := exec.Command(cmd[0], args...)
-	child.Stdout = os.Stdout
-	child.Stderr = os.Stderr
-
-	runErr := child.Run()
-	exitCode := 0
-	switch e := runErr.(type) {
-	case nil:
-		// success
-	case *exec.ExitError:
-		exitCode = e.ExitCode()
-	default:
-		fmt.Fprintln(os.Stderr, "defrost:", runErr)
+	exitCode, err := runner.RunChild(child)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "defrost:", err)
 		return nil, nil, 1
 	}
 
