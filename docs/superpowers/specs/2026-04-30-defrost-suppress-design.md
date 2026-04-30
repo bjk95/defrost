@@ -242,13 +242,9 @@ defrost exec go test ./...
 - Unreachable data branch on `exec`: log to stderr, do not rewrite the exit
   code. The test result is the more important signal.
 - Concurrent writes: reconcile via push retry + closure re-application. After
-  `maxPushAttempts` failures, surface the error. Implementation note: the
-  retry loop has no direct integration test because triggering a real
-  non-fast-forward race requires a workdir whose clone predates a competing
-  push, which `UpdateSuppressions` does not expose (the clone happens
-  internally). The retry shape mirrors the already-tested `pushWithRetry`
-  with a closure replay added; if a real bug surfaces, refactor an inner
-  helper that takes a pre-staged workdir and add the test then.
+  `maxPushAttempts` failures, surface the error. Tested via
+  `updateSuppressionsInWorkDir`, which takes a pre-staged workdir so the
+  test can simulate a clone whose tip predates a competing push.
 - Malformed `suppressions.json`: hard error on read. Defrost should not silently
   treat a corrupt list as empty (which would un-suppress everything).
 - `--no-remote` on a repo with no origin: works the same as for `exec` —
