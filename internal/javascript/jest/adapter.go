@@ -241,14 +241,18 @@ func (a *Adapter) Run(cmd []string) ([]models.TestResult, int) {
 }
 
 // buildArgs returns the args to pass to cmd[0], with --json and
-// --outputFile=<path> appended. For npm/pnpm invocations, a "--" separator
-// is inserted before the injected flags if not already present.
+// --outputFile=<path> appended. For package-runner script invocations
+// (`npm test`, `pnpm test`, `pnpm run X`), a "--" separator is inserted
+// before the injected flags if not already present so the script-runner
+// forwards them to jest. Direct binary execution (`pnpm jest …`) and yarn
+// (any form) forward args as-is and do not need the separator — adding
+// one would make jest see "--" as a positional terminator and treat
+// `--json` / `--outputFile` as positional args.
 func buildArgs(cmd []string, jsonPath string) []string {
 	rest := append([]string{}, cmd[1:]...)
 	jsonFlags := []string{"--json", "--outputFile=" + jsonPath}
 
-	needsSeparator := cmd[0] == "npm" || cmd[0] == "pnpm"
-	if !needsSeparator {
+	if !needsSeparator(cmd) {
 		return append(rest, jsonFlags...)
 	}
 
@@ -258,6 +262,23 @@ func buildArgs(cmd []string, jsonPath string) []string {
 		}
 	}
 	return append(rest, append([]string{"--"}, jsonFlags...)...)
+}
+
+// needsSeparator returns true when cmd is a package-runner script
+// invocation that requires a `--` token before user-injected flags so the
+// runner forwards them to the underlying script. npm only enters this
+// adapter via script forms (npm test / npm run X), so it always needs the
+// separator. pnpm enters either via direct binary exec (`pnpm jest …`,
+// no separator) or via script forms (`pnpm test` / `pnpm run X`,
+// separator). yarn forwards args directly in all forms.
+func needsSeparator(cmd []string) bool {
+	switch cmd[0] {
+	case "npm":
+		return true
+	case "pnpm":
+		return len(cmd) < 2 || cmd[1] != "jest"
+	}
+	return false
 }
 
 func hasUserJSONFlag(cmd []string) bool {

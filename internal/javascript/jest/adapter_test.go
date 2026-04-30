@@ -293,6 +293,70 @@ func TestLooksLikeJestScript(t *testing.T) {
 	}
 }
 
+func TestBuildArgs(t *testing.T) {
+	const path = "/tmp/x.json"
+	cases := []struct {
+		name string
+		cmd  []string
+		want []string
+	}{
+		{
+			"direct jest forwards as-is (no separator)",
+			[]string{"jest", "tests/"},
+			[]string{"tests/", "--json", "--outputFile=" + path},
+		},
+		{
+			"yarn forwards as-is in all forms (no separator)",
+			[]string{"yarn", "test"},
+			[]string{"test", "--json", "--outputFile=" + path},
+		},
+		{
+			"yarn jest direct (no separator)",
+			[]string{"yarn", "jest", "tests/"},
+			[]string{"jest", "tests/", "--json", "--outputFile=" + path},
+		},
+		{
+			"pnpm jest direct exec — no separator (pnpm forwards args verbatim)",
+			[]string{"pnpm", "jest", "tests/"},
+			[]string{"jest", "tests/", "--json", "--outputFile=" + path},
+		},
+		{
+			"pnpm test (script form) — needs separator",
+			[]string{"pnpm", "test"},
+			[]string{"test", "--", "--json", "--outputFile=" + path},
+		},
+		{
+			"pnpm run X (script form) — needs separator",
+			[]string{"pnpm", "run", "test"},
+			[]string{"run", "test", "--", "--json", "--outputFile=" + path},
+		},
+		{
+			"npm test (script form) — needs separator",
+			[]string{"npm", "test"},
+			[]string{"test", "--", "--json", "--outputFile=" + path},
+		},
+		{
+			"npm test with existing -- — append after, don't double-insert",
+			[]string{"npm", "test", "--", "tests/"},
+			[]string{"test", "--", "tests/", "--json", "--outputFile=" + path},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := buildArgs(tc.cmd, path)
+			if len(got) != len(tc.want) {
+				t.Fatalf("got %v, want %v", got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Errorf("got[%d]=%q, want[%d]=%q (full: got=%v want=%v)", i, got[i], i, tc.want[i], got, tc.want)
+				}
+			}
+		})
+	}
+}
+
 func TestHasUserJSONFlag(t *testing.T) {
 	cases := []struct {
 		cmd  []string
