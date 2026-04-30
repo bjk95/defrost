@@ -1,36 +1,85 @@
-"""Session-scoped collector for RAGAS evaluation results.
+"""Set-and-forget capture for RAGAS evaluation results.
 
-Drop this file (or merge its contents) into your repo's conftest.py to make
-``ragas.evaluate`` results visible to defrost. Each test that runs
-``ragas.evaluate(...)`` extends ``ragas_rows`` with the dataset's rows;
-``pytest_sessionfinish`` writes the aggregated array to
-``$DEFROST_RAGAS_OUT`` once per session.
+Drop this file (or merge its contents) into your repo's top-level
+conftest.py and never touch it again. At conftest import time, before any
+test module is loaded, ``ragas.evaluate`` (and ``ragas.aevaluate`` when
+present) is monkey-patched to record each result's rows into a
+session-scoped accumulator. ``pytest_sessionfinish`` writes the
+aggregated JSON array to ``$DEFROST_RAGAS_OUT`` once at the end of the
+run.
 
-The hook is a no-op when the env var is unset, so the same conftest is
-safe to keep checked in: ``pytest`` runs identically with or without
-``defrost exec``.
+User tests are unchanged from how they'd be written without defrost:
+
+    from ragas import evaluate
+    from ragas.metrics import faithfulness
+
+    def test_rag():
+        result = evaluate(dataset, metrics=[faithfulness])
+        assert result["faithfulness"] > 0.7
+
+No imports from defrost. No fixture parameters. No per-test glue.
+
+The hook is a no-op when ``DEFROST_RAGAS_OUT`` is unset, so the same
+conftest is safe to keep checked in: ``pytest`` runs identically with or
+without the ``defrost exec`` wrapper.
 """
 
 import json
 import os
 
-import pytest
-
 _rows: list[dict] = []
+_patched = False
 
 
-@pytest.fixture
-def ragas_rows() -> list[dict]:
-    """Append result rows here from inside tests.
-
-    Usage::
-
-        def test_rag(ragas_rows):
-            result = evaluate(dataset, metrics=[faithfulness])
-            ragas_rows.extend(result.to_pandas().to_dict(orient="records"))
-            assert result["faithfulness"] > 0.7
+def _capture(result) -> None:
+    """Append result rows to the session aggregator. Defensive: any failure
+    here must not break the user's test, so we swallow exceptions silently —
+    the worst outcome is a missing data point, not a failed run.
     """
-    return _rows
+    try:
+        _rows.extend(result.to_pandas().to_dict(orient="records"))
+    except Exception:
+        pass
+
+
+def _install_capture() -> None:
+    """Monkey-patch ragas.evaluate so every call across the test suite is
+    recorded. Runs once at conftest import, before pytest collects any test
+    modules — so ``from ragas import evaluate`` at a test module's top
+    level binds to the wrapped function rather than the original.
+    """
+    global _patched
+    if _patched:
+        return
+    try:
+        import ragas
+    except ImportError:
+        return
+
+    if callable(getattr(ragas, "evaluate", None)):
+        orig = ragas.evaluate
+
+        def wrapped(*args, **kwargs):
+            result = orig(*args, **kwargs)
+            _capture(result)
+            return result
+
+        ragas.evaluate = wrapped
+
+    if callable(getattr(ragas, "aevaluate", None)):
+        orig_async = ragas.aevaluate
+
+        async def wrapped_async(*args, **kwargs):
+            result = await orig_async(*args, **kwargs)
+            _capture(result)
+            return result
+
+        ragas.aevaluate = wrapped_async
+
+    _patched = True
+
+
+_install_capture()
 
 
 def pytest_sessionfinish(session, exitstatus):
