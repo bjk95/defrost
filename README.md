@@ -9,8 +9,7 @@ travels with the code — no database, no SaaS, no API keys.
 
 ## What you get
 
-- **Persisted history** — every test run, eval, and metric is recorded automatically. Clone the repo, get the history.
-- **Universal instrumentation** — push metrics from any language using a standard OpenTelemetry SDK. No defrost client library to install.
+- **Persisted history** — every test run is recorded automatically. Clone the repo, get the history.
 - **Suppression** — mark known-failing tests as suppressed so red CI goes green without skipping them in source.
 - **Local dashboard** — `defrost serve` opens your testing, evals, and metrics dashboard at `http://localhost:6969`.
 
@@ -43,27 +42,13 @@ defrost serve
 | Python | pytest (JUnit XML) | `defrost exec pytest path/` |
 | JavaScript / TypeScript | jest | `defrost exec npm test` |
 
-## Pushing metrics from your tests
-
-Use your normal OpenTelemetry SDK. `defrost exec` exports the standard OTLP
-environment variables to the child process, so a default-configured SDK
-exports to defrost with no extra wiring:
-
-```python
-# Python example — works the same in Go, Node, Rust, Java, ...
-counter = meter.create_counter("eval.score")
-counter.add(score, {"model": "claude-opus-4-7", "suite": "summarization"})
-```
-
-Counters, gauges, sums, and histograms are all captured.
-
 ## Commands
 
 ### `defrost exec <cmd...>`
 
-Runs the test command, captures any metrics emitted during the run, and
-records everything. Exits with the child's exit code — unless every failing
-test is on the suppression list, in which case the exit is rewritten to 0.
+Runs the test command, parses results, and records them. Exits with the
+child's exit code — unless every failing test is on the suppression list, in
+which case the exit is rewritten to 0.
 
 ### `defrost history <test_id>`
 
@@ -92,16 +77,12 @@ anything) or `--dev` (write to `.defrost-dev/` instead of the data branch).
 
 For the curious — you do not need to know any of this to use defrost.
 
-The data branch is shaped like OpenTelemetry. One `defrost exec` invocation
-is one trace; the run is the root span; each test is a child span. Metrics
-emitted during the run are persisted as OTel metric data points alongside.
-
 ```
 _defrost branch
-├── traces/<span_name>.ndjson    # one OTel span per line
-├── metrics/<metric_name>.ndjson # one OTel metric data point per line
+├── runs/<run_id>.json       # one file per defrost exec invocation
+├── tests/<test_id>.ndjson   # one line per recorded test result, append-only
 └── suppressions.json
 ```
 
-`traces/` and `metrics/` files use Git's `merge=union` attribute so
-concurrent writers append without conflicts.
+`tests/*.ndjson` files use Git's `merge=union` attribute so concurrent
+writers append without conflicts.
