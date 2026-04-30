@@ -90,6 +90,11 @@ func execWith(a runner.Adapter, cmd []string, opts ExecOpts) int {
 		fmt.Printf("%+v\n", r)
 	}
 
+	if len(results) > 0 {
+		pass, fail, skip := tallyResults(results)
+		fmt.Fprintf(os.Stderr, "defrost: results: %d pass, %d fail, %d skip\n", pass, fail, skip)
+	}
+
 	var metrics []models.MetricEntry
 	if receiver != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), drainGrace)
@@ -147,8 +152,6 @@ func maybeRewriteExitCode(code int, results []models.TestResult, pOpts persist.O
 		}
 	}
 
-	pass, fail, skip := tallyResults(results)
-	fmt.Fprintf(os.Stderr, "defrost: results: %d pass, %d fail, %d skip\n", pass, fail, skip)
 	fmt.Fprintf(os.Stderr, "defrost: checking suppression list for %d failing test(s)\n", len(failingIDs))
 
 	suppressed, err := persist.New(pOpts).GetSuppressions()
