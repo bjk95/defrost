@@ -35,15 +35,21 @@ func (r *Receiver) Start() (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("otlp receiver: bind: %w", err)
 	}
-	r.port = ln.Addr().(*net.TCPAddr).Port
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/metrics", r.handleMetrics)
-	r.server = &http.Server{
+	srv := &http.Server{
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
-	go func() { _ = r.server.Serve(ln) }()
-	return r.port, nil
+	port := ln.Addr().(*net.TCPAddr).Port
+
+	r.mu.Lock()
+	r.port = port
+	r.server = srv
+	r.mu.Unlock()
+
+	go func() { _ = srv.Serve(ln) }()
+	return port, nil
 }
 
 // Shutdown stops accepting new connections, waits for in-flight handlers
@@ -57,13 +63,22 @@ func (r *Receiver) Shutdown(ctx context.Context) ([]*cmetricspb.ExportMetricsSer
 	}
 	r.closed = true
 	server := r.server
+	r.mu.Unlock()
+
+	// Drain in-flight handlers BEFORE capturing the buffer. server.Shutdown
+	// blocks until every active handleMetrics call returns; once it does,
+	// no new handler can run, so capturing r.buf afterwards is exhaustive.
+	var err error
+	if server != nil {
+		err = server.Shutdown(ctx)
+	}
+
+	r.mu.Lock()
 	out := r.buf
 	r.buf = nil
 	r.mu.Unlock()
-	if server == nil {
-		return out, nil
-	}
-	return out, server.Shutdown(ctx)
+
+	return out, err
 }
 
 func (r *Receiver) handleMetrics(w http.ResponseWriter, req *http.Request) {
