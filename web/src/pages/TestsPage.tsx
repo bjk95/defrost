@@ -19,6 +19,7 @@ import {
 } from "@/components/Primitives";
 import { Icon } from "@/components/Icons";
 import { SearchInput, Segmented } from "@/components/Controls";
+import { TestsEmpty } from "@/components/EmptyStates";
 
 type StatusFilter = "all" | "failing" | "flaky";
 type WindowSize = "10" | "20" | "50";
@@ -55,24 +56,7 @@ export function TestsPage() {
     );
   }
   if (!data) return null;
-  if (data.runs.length === 0) {
-    return (
-      <p style={{ color: "var(--fg-muted)", fontSize: 13 }}>
-        No test runs yet — run{" "}
-        <code
-          style={{
-            background: "var(--bg-muted)",
-            padding: "1px 5px",
-            borderRadius: 4,
-            fontFamily: "var(--font-mono)",
-          }}
-        >
-          defrost exec go test ./...
-        </code>{" "}
-        to record some.
-      </p>
-    );
-  }
+  if (data.runs.length === 0) return <TestsEmpty />;
 
   return (
     <TestsPageInner

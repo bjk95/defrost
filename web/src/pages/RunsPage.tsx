@@ -7,6 +7,7 @@ import type { RunSummary, TestRow } from "@/types";
 import { Avatar } from "@/components/Primitives";
 import { Icon } from "@/components/Icons";
 import { SearchInput, Segmented } from "@/components/Controls";
+import { RunsEmpty } from "@/components/EmptyStates";
 
 type RunFilter = "all" | "fail" | "pass";
 
@@ -51,6 +52,7 @@ export function RunsPage() {
       </p>
     );
   }
+  if (runs.length === 0) return <RunsEmpty />;
 
   return (
     <div>

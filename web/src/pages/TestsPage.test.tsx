@@ -35,7 +35,7 @@ describe("TestsPage", () => {
   it("shows the empty state when no runs exist", async () => {
     vi.mocked(api.getTests).mockResolvedValue({ runs: [], tests: [] });
     renderWithProviders(<TestsPage />);
-    await waitFor(() => screen.getByText(/no test runs yet/i));
+    await waitFor(() => screen.getByText(/no tests recorded yet/i));
   });
 
   // Regression: branch and leaf at the same tree path used to share React

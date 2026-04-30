@@ -45,6 +45,6 @@ describe("MetricsPage", () => {
   it("shows the empty state when no metrics have been ingested", async () => {
     vi.mocked(api.getMetrics).mockResolvedValue([]);
     renderWithProviders(<MetricsPage />);
-    await waitFor(() => screen.getByText(/no metrics ingested yet/i));
+    await waitFor(() => screen.getByText(/no metrics emitted yet/i));
   });
 });
