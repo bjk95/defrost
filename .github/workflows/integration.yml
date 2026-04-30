@@ -342,7 +342,6 @@ jobs:
           ./defrost suppress add \
             'examples/inspect¬task="capital_cities",sample="germany-fail"' \
             'examples/inspect¬task="capital_cities",sample="empty-fail"'
-          ./defrost suppress list
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
