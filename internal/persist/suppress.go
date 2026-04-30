@@ -175,6 +175,14 @@ func (b *gitBackend) UpdateSuppressions(mutate func([]string) []string, msg stri
 	// JSON would corrupt the file, so we replay the user's intent against
 	// the latest tree instead. Two concurrent add calls for different IDs
 	// both land in the final list this way.
+	//
+	// Note: this loop has no direct integration test. The race requires a
+	// workdir whose clone predates a competing push, which UpdateSuppressions
+	// cannot expose to a test without refactoring the clone out into a
+	// caller-supplied workdir. The shape mirrors pushWithRetry (which IS
+	// tested by TestPushWithRetry_RebasesOnConflict) with a closure replay
+	// added. If this ever causes a real bug, refactor an inner helper that
+	// takes a pre-staged workdir and add the test then.
 	var lastErr error
 	for attempt := 1; attempt <= maxPushAttempts; attempt++ {
 		err := pushBranch(workDir, branch)
