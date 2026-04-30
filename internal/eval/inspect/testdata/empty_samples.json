@@ -1,0 +1,7 @@
+{
+  "eval": {
+    "task": "empty",
+    "model": "openai/gpt-4o"
+  },
+  "samples": []
+}

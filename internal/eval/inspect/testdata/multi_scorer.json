@@ -1,0 +1,24 @@
+{
+  "eval": {
+    "task": "qa_eval",
+    "model": "anthropic/claude-3-5-sonnet"
+  },
+  "samples": [
+    {
+      "id": 1,
+      "output": { "completion": "The capital is Paris." },
+      "scores": {
+        "accuracy": {
+          "value": 1.0,
+          "answer": "Paris",
+          "explanation": "Correct"
+        },
+        "f1_score": {
+          "value": 0.85,
+          "answer": "Paris",
+          "explanation": "Token overlap"
+        }
+      }
+    }
+  ]
+}

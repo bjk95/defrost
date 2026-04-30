@@ -1,0 +1,19 @@
+{
+  "eval": {
+    "task": "integer_eval",
+    "model": "openai/gpt-4o"
+  },
+  "samples": [
+    {
+      "id": 1,
+      "output": { "completion": "Paris" },
+      "scores": {
+        "binary_match": {
+          "value": 1,
+          "answer": "Paris",
+          "explanation": "Correct"
+        }
+      }
+    }
+  ]
+}

@@ -10,6 +10,7 @@ import (
 	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
 	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
 
+	"github.com/bjk95/defrost/internal/eval/inspect"
 	"github.com/bjk95/defrost/internal/eval/promptfoo"
 	"github.com/bjk95/defrost/internal/golang"
 	"github.com/bjk95/defrost/internal/javascript/jest"
@@ -46,6 +47,10 @@ func HandleExecution(cmd []string, opts ExecOpts) int {
 
 	reg := runner.NewRegistry()
 	reg.Register(golang.Adapter{})
+	// inspect registers before pytest because both can match `<tool> run <bin>`
+	// shapes, and inspect's matcher is the stricter one (it requires the
+	// `eval` subcommand). Strict matchers go first.
+	reg.Register(&inspect.Adapter{})
 	reg.Register(pytest.Adapter{})
 	// promptfoo registers before jest because jest's yarn-script matcher reads
 	// ./package.json and would claim `yarn promptfoo eval` when scripts.promptfoo
