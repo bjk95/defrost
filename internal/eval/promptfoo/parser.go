@@ -26,8 +26,14 @@ type promptfooResult struct {
 	Success       bool                  `json:"success"`
 	Response      promptfooResponse     `json:"response"`
 	Provider      promptfooProvider     `json:"provider"`
+	Prompt        promptfooPrompt       `json:"prompt"`
 	Vars          map[string]any        `json:"vars"`
 	GradingResult promptfooGradingShape `json:"gradingResult"`
+}
+
+type promptfooPrompt struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
 }
 
 type promptfooResponse struct {
@@ -77,16 +83,20 @@ func Parse(r io.Reader) ([]models.TestResult, []*metricspb.Metric, error) {
 	)
 	for i, r := range doc.Results.Results {
 		provider := providerLabel(r.Provider)
-		caseName := caseName(r.Vars, i, provider)
+		prompt := promptIdentity(r.Prompt)
+		caseName := caseName(r.Vars, i, provider, prompt)
 		tests = append(tests, mapResult(r, caseName))
 		for _, c := range r.GradingResult.ComponentResults {
-			metrics = append(metrics, mapComponentResult(c, caseName, provider, now))
+			metric := mapComponentResult(c, caseName, provider, now)
+			if metric != nil {
+				metrics = append(metrics, metric)
+			}
 		}
 	}
 	return tests, metrics, nil
 }
 
-func caseName(vars map[string]any, idx int, providerLabel string) string {
+func caseName(vars map[string]any, idx int, providerLabel, promptID string) string {
 	var parts []string
 	if len(vars) == 0 {
 		parts = []string{fmt.Sprintf("<unnamed>#%d", idx)}
@@ -96,7 +106,7 @@ func caseName(vars map[string]any, idx int, providerLabel string) string {
 			keys = append(keys, k)
 		}
 		sort.Strings(keys)
-		parts = make([]string, 0, len(keys)+1)
+		parts = make([]string, 0, len(keys)+2)
 		for _, k := range keys {
 			b, err := json.Marshal(vars[k])
 			if err != nil {
@@ -106,6 +116,14 @@ func caseName(vars map[string]any, idx int, providerLabel string) string {
 				continue
 			}
 			parts = append(parts, fmt.Sprintf("%s=%s", k, b))
+		}
+	}
+	if promptID != "" {
+		b, err := json.Marshal(promptID)
+		if err != nil {
+			parts = append(parts, fmt.Sprintf("prompt=%s", promptID))
+		} else {
+			parts = append(parts, fmt.Sprintf("prompt=%s", b))
 		}
 	}
 	if providerLabel != "" {
@@ -120,6 +138,17 @@ func caseName(vars map[string]any, idx int, providerLabel string) string {
 		}
 	}
 	return strings.Join(parts, ",")
+}
+
+// promptIdentity returns the most readable identifier for a prompt:
+// label if present, else id (which promptfoo computes as a hash and is
+// always populated when a prompt was used). Returns "" when neither is
+// present, in which case the case name omits prompt info.
+func promptIdentity(p promptfooPrompt) string {
+	if p.Label != "" {
+		return p.Label
+	}
+	return p.ID
 }
 
 func providerLabel(p promptfooProvider) string {
@@ -170,6 +199,13 @@ func mapResult(r promptfooResult, caseName string) models.TestResult {
 
 func mapComponentResult(c promptfooComponentResult, caseName, model string, timeUnixNano uint64) *metricspb.Metric {
 	criterion := assertionMetricName(c.Assertion)
+	if criterion == "" {
+		// Composite/parent component result without assertion metadata.
+		// Skip — leaf nodes underneath produce their own metrics, and
+		// emitting `eval.` with an empty name would collapse unrelated
+		// scores into one stream.
+		return nil
+	}
 	score := c.Score
 
 	attrs := []*commonpb.KeyValue{

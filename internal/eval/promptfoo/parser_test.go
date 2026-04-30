@@ -279,6 +279,52 @@ func TestParseStructuredResponseOutput(t *testing.T) {
 	}
 }
 
+func TestParseSameVarsDifferentPromptsGetDistinctIds(t *testing.T) {
+	tests, _, err := Parse(bytes.NewReader(loadFixture(t, "multi_prompt.json")))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(tests) != 3 {
+		t.Fatalf("expected 3 tests, got %d", len(tests))
+	}
+	ids := map[string]struct{}{}
+	for _, tr := range tests {
+		ids[tr.Id] = struct{}{}
+	}
+	if len(ids) != 3 {
+		t.Fatalf("identical vars/provider across three prompts must produce distinct ids; got %v", tests)
+	}
+	// First two use labels; third falls back to id.
+	if !strings.Contains(tests[0].Id, `prompt="concise"`) {
+		t.Fatalf("expected prompt label in id, got %q", tests[0].Id)
+	}
+	if !strings.Contains(tests[1].Id, `prompt="verbose"`) {
+		t.Fatalf("expected prompt label in id, got %q", tests[1].Id)
+	}
+	if !strings.Contains(tests[2].Id, `prompt="ghi789"`) {
+		t.Fatalf("expected prompt id fallback, got %q", tests[2].Id)
+	}
+}
+
+func TestParseSkipsComponentsWithoutAssertionType(t *testing.T) {
+	tests, metrics, err := Parse(bytes.NewReader(loadFixture(t, "composite_assertion.json")))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(tests) != 1 {
+		t.Fatalf("expected 1 test, got %d", len(tests))
+	}
+	// One leaf assertion produces one metric. The wrapper with empty
+	// assertion metadata must be skipped to avoid emitting `eval.` with
+	// no criterion.
+	if len(metrics) != 1 {
+		t.Fatalf("expected 1 metric (leaf only), got %d", len(metrics))
+	}
+	if metrics[0].Name != "eval.contains" {
+		t.Fatalf("expected leaf metric name eval.contains, got %q", metrics[0].Name)
+	}
+}
+
 func TestParseSameVarsDifferentProvidersGetDistinctIds(t *testing.T) {
 	tests, _, err := Parse(bytes.NewReader(loadFixture(t, "cross_product.json")))
 	if err != nil {
