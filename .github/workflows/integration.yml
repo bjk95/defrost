@@ -230,3 +230,61 @@ jobs:
         with:
           name: typescript-out
           path: examples/typescript/out.txt
+
+  promptfoo:
+    name: promptfoo example
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    if: ${{ secrets.OPENAI_API_KEY != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install promptfoo
+        run: npm install -g promptfoo@latest
+
+      - name: Build defrost
+        run: go build -o defrost .
+
+      - name: Run defrost against examples/promptfoo
+        id: run
+        run: |
+          set +e
+          cd examples/promptfoo
+          ../../defrost exec promptfoo eval -c promptfooconfig.yaml --no-cache --no-persist > out.txt 2>&1
+          echo "exit=$?" >> "$GITHUB_OUTPUT"
+          exit 0
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+
+      - name: Assert result count matches expected
+        run: |
+          line=$(grep -E '^defrost: results:' examples/promptfoo/out.txt | tail -1)
+          if [ -z "$line" ]; then
+            echo "FAIL: no 'defrost: results:' line found"
+            cat examples/promptfoo/out.txt
+            exit 1
+          fi
+          echo "summary: $line"
+          counts=$(echo "$line" | sed -E 's/^defrost: results: ([0-9]+) pass, ([0-9]+) fail, ([0-9]+) skip$/\1 \2 \3/')
+          set -- $counts
+          total=$(( $1 + $2 + $3 ))
+          if [ "$total" -ne 4 ]; then
+            echo "FAIL: expected 4 results total, got $total ($1 pass, $2 fail, $3 skip)"
+            cat examples/promptfoo/out.txt
+            exit 1
+          fi
+
+      - name: Upload defrost output for debugging
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: promptfoo-out
+          path: examples/promptfoo/out.txt

@@ -1,0 +1,24 @@
+description: Defrost smoke test for the promptfoo adapter
+
+prompts:
+  - 'What is the capital of {{country}}? Answer in one word.'
+
+providers:
+  - id: openai:gpt-4o-mini
+    label: openai:gpt-4o-mini
+
+tests:
+  - vars:
+      country: France
+    assert:
+      - type: contains
+        value: Paris
+      - type: llm-rubric
+        value: A single-word answer
+  - vars:
+      country: Germany
+    assert:
+      - type: contains
+        value: Berlin
+      - type: llm-rubric
+        value: A single-word answer
