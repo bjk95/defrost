@@ -60,8 +60,12 @@ func execWith(a runner.Adapter, cmd []string, opts ExecOpts) int {
 	}
 
 	if opts.Persist && len(results) > 0 {
-		if err := persistResults(opts, cmd, results); err != nil {
+		if err := persistResults(pOpts, cmd, results); err != nil {
 			fmt.Fprintln(os.Stderr, "persist: failed:", err)
+			// A persist failure should surface even when the test command
+			// itself succeeded — otherwise CI silently loses data and no
+			// one notices. If tests already failed, keep that exit code
+			// (it's the more important signal).
 			if code == 0 {
 				code = 1
 			}
@@ -109,14 +113,7 @@ func collectFailingTestIDs(results []models.TestResult) []string {
 	return out
 }
 
-func persistResults(opts ExecOpts, cmd []string, results []models.TestResult) error {
-	pOpts := persist.Options{
-		RepoDir:    opts.RepoDir,
-		DataBranch: opts.DataBranch,
-		AuthToken:  os.Getenv("GITHUB_TOKEN"),
-		NoRemote:   opts.NoRemote,
-		Dev:        opts.Dev,
-	}
+func persistResults(pOpts persist.Options, cmd []string, results []models.TestResult) error {
 	run, err := persist.DetectRun(pOpts, cmd)
 	if err != nil {
 		return fmt.Errorf("detect run: %w", err)
