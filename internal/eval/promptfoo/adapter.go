@@ -78,11 +78,30 @@ func buildArgs(cmd []string, jsonPath string) []string {
 	return append(rest, "--output", jsonPath)
 }
 
+// passthroughRun executes cmd verbatim with stdio + signals wired,
+// returning the child exit code and no test results / metrics. Used when
+// the promptfoo adapter recognises the invocation but can't safely
+// capture results (user-supplied non-JSON --output target).
+func passthroughRun(cmd []string) ([]models.TestResult, []*metricspb.Metric, int) {
+	c := exec.Command(cmd[0], cmd[1:]...)
+	code, err := runner.RunChild(c)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "defrost:", err)
+		return nil, nil, 1
+	}
+	return nil, nil, code
+}
+
 func (a *Adapter) Run(cmd []string) ([]models.TestResult, []*metricspb.Metric, int) {
 	if len(cmd) == 0 {
 		return nil, nil, 2
 	}
 	userPath := userOutputPath(cmd[1:])
+	if userPath != "" && !strings.HasSuffix(strings.ToLower(userPath), ".json") {
+		fmt.Fprintln(os.Stderr,
+			"defrost: promptfoo --output does not target a .json file; running passthrough (no per-test results will be recorded)")
+		return passthroughRun(cmd)
+	}
 	tempPath := userPath
 	if tempPath == "" {
 		f, err := os.CreateTemp("", "defrost-promptfoo-*.json")

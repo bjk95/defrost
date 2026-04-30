@@ -206,6 +206,32 @@ func TestRunUserSuppliedOutputClearsStaleContent(t *testing.T) {
 	}
 }
 
+func TestRunPassthroughOnNonJSONUserOutput(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake-child shell script is bash-only")
+	}
+	// Fake child that exits 0 — we only care that defrost ran it as
+	// passthrough rather than trying to parse the user's HTML output.
+	dir := t.TempDir()
+	scriptPath := filepath.Join(dir, "fake-child")
+	if err := os.WriteFile(scriptPath, []byte("#!/usr/bin/env bash\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("write fake: %v", err)
+	}
+	abs, _ := filepath.Abs(scriptPath)
+
+	a := &Adapter{}
+	tests, metrics, code := a.Run([]string{abs, "eval", "--output", "report.html"})
+	if code != 0 {
+		t.Fatalf("expected exit 0 (passthrough propagates child exit), got %d", code)
+	}
+	if len(tests) != 0 {
+		t.Fatalf("expected no test results in passthrough mode, got %d", len(tests))
+	}
+	if len(metrics) != 0 {
+		t.Fatalf("expected no metrics in passthrough mode, got %d", len(metrics))
+	}
+}
+
 func TestRunChildSucceededButNoOutputFileBumpsExit(t *testing.T) {
 	// Fake child that exits 0 but never writes the output file. Defrost
 	// must surface this as a non-zero exit so a CI run can't silently
