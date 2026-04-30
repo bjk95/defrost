@@ -73,3 +73,17 @@ func TestAttrString_FoundAndAbsent(t *testing.T) {
 		t.Errorf("absent: %q", got)
 	}
 }
+
+func TestDoubleAttr(t *testing.T) {
+	kv := DoubleAttr("eval.score", 0.87)
+	if kv.Key != "eval.score" {
+		t.Fatalf("expected key eval.score, got %q", kv.Key)
+	}
+	dv, ok := kv.Value.Value.(*commonpb.AnyValue_DoubleValue)
+	if !ok {
+		t.Fatalf("expected DoubleValue payload, got %T", kv.Value.Value)
+	}
+	if dv.DoubleValue != 0.87 {
+		t.Fatalf("expected 0.87, got %v", dv.DoubleValue)
+	}
+}

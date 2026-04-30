@@ -1,0 +1,204 @@
+package promptfoo
+
+import (
+	"bytes"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
+	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
+)
+
+func loadFixture(t *testing.T, name string) []byte {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("testdata", name))
+	if err != nil {
+		t.Fatalf("read fixture %s: %v", name, err)
+	}
+	return raw
+}
+
+// gaugeValue returns the AsDouble value of a single-data-point gauge metric.
+// Fails the test if m isn't a gauge with exactly one numeric data point.
+func gaugeValue(t *testing.T, m *metricspb.Metric) float64 {
+	t.Helper()
+	g, ok := m.Data.(*metricspb.Metric_Gauge)
+	if !ok {
+		t.Fatalf("expected gauge, got %T", m.Data)
+	}
+	if len(g.Gauge.DataPoints) != 1 {
+		t.Fatalf("expected 1 data point, got %d", len(g.Gauge.DataPoints))
+	}
+	dp := g.Gauge.DataPoints[0]
+	dv, ok := dp.Value.(*metricspb.NumberDataPoint_AsDouble)
+	if !ok {
+		t.Fatalf("expected AsDouble, got %T", dp.Value)
+	}
+	return dv.AsDouble
+}
+
+// attrString returns the string value of the named attribute on the gauge's
+// data point, or "" if missing or non-string.
+func attrString(m *metricspb.Metric, key string) string {
+	g, _ := m.Data.(*metricspb.Metric_Gauge)
+	if g == nil || len(g.Gauge.DataPoints) == 0 {
+		return ""
+	}
+	for _, kv := range g.Gauge.DataPoints[0].Attributes {
+		if kv.Key == key {
+			if sv, ok := kv.Value.Value.(*commonpb.AnyValue_StringValue); ok {
+				return sv.StringValue
+			}
+		}
+	}
+	return ""
+}
+
+// attrDouble returns the double value of the named attribute on the gauge's
+// data point, plus a bool indicating presence.
+func attrDouble(m *metricspb.Metric, key string) (float64, bool) {
+	g, _ := m.Data.(*metricspb.Metric_Gauge)
+	if g == nil || len(g.Gauge.DataPoints) == 0 {
+		return 0, false
+	}
+	for _, kv := range g.Gauge.DataPoints[0].Attributes {
+		if kv.Key == key {
+			if dv, ok := kv.Value.Value.(*commonpb.AnyValue_DoubleValue); ok {
+				return dv.DoubleValue, true
+			}
+		}
+	}
+	return 0, false
+}
+
+func TestParseSingleAssertion(t *testing.T) {
+	tests, metrics, err := Parse(bytes.NewReader(loadFixture(t, "single_assertion.json")))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(tests) != 1 {
+		t.Fatalf("expected 1 test result, got %d", len(tests))
+	}
+	if !tests[0].Passed {
+		t.Fatalf("expected Passed=true, got false")
+	}
+	if tests[0].Id != "country=France" {
+		t.Fatalf("expected Id=country=France, got %q", tests[0].Id)
+	}
+	if len(metrics) != 1 {
+		t.Fatalf("expected 1 metric, got %d", len(metrics))
+	}
+	m := metrics[0]
+	if m.Name != "eval.contains" {
+		t.Fatalf("expected metric name eval.contains, got %q", m.Name)
+	}
+	if got := gaugeValue(t, m); got != 1.0 {
+		t.Fatalf("expected score 1.0, got %v", got)
+	}
+	if got := attrString(m, "gen_ai.evaluation.name"); got != "contains" {
+		t.Fatalf("expected gen_ai.evaluation.name=contains, got %q", got)
+	}
+	if got := attrString(m, "gen_ai.evaluation.score.label"); got != "pass" {
+		t.Fatalf("expected gen_ai.evaluation.score.label=pass, got %q", got)
+	}
+	if got := attrString(m, "test.case.name"); got != "country=France" {
+		t.Fatalf("expected test.case.name=country=France, got %q", got)
+	}
+	if got := attrString(m, "gen_ai.request.model"); got != "openai:gpt-4o" {
+		t.Fatalf("expected gen_ai.request.model=openai:gpt-4o, got %q", got)
+	}
+}
+
+func TestParseMultiAssertion(t *testing.T) {
+	tests, metrics, err := Parse(bytes.NewReader(loadFixture(t, "multi_assertion.json")))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(tests) != 1 {
+		t.Fatalf("expected 1 test, got %d", len(tests))
+	}
+	if tests[0].Passed {
+		t.Fatalf("expected Passed=false")
+	}
+	if !strings.Contains(tests[0].Output, "Missing source citation") {
+		t.Fatalf("expected failure reason in Output, got %q", tests[0].Output)
+	}
+	if len(metrics) != 3 {
+		t.Fatalf("expected 3 metrics, got %d", len(metrics))
+	}
+	wantNames := map[string]bool{"eval.contains": false, "eval.llm-rubric": false, "eval.factuality": false}
+	for _, m := range metrics {
+		wantNames[m.Name] = true
+	}
+	for k, v := range wantNames {
+		if !v {
+			t.Fatalf("missing expected metric name %s", k)
+		}
+	}
+}
+
+func TestParseMultiTest(t *testing.T) {
+	tests, metrics, err := Parse(bytes.NewReader(loadFixture(t, "multi_test.json")))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(tests) != 3 {
+		t.Fatalf("expected 3 tests, got %d", len(tests))
+	}
+	if len(metrics) != 3 {
+		t.Fatalf("expected 3 metrics (one per test, one assertion each), got %d", len(metrics))
+	}
+	pass, fail := 0, 0
+	for _, tr := range tests {
+		if tr.Passed {
+			pass++
+		} else {
+			fail++
+		}
+	}
+	if pass != 2 || fail != 1 {
+		t.Fatalf("expected 2 pass / 1 fail, got %d/%d", pass, fail)
+	}
+}
+
+func TestParseWithThreshold(t *testing.T) {
+	_, metrics, err := Parse(bytes.NewReader(loadFixture(t, "with_threshold.json")))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(metrics) != 1 {
+		t.Fatalf("expected 1 metric, got %d", len(metrics))
+	}
+	got, ok := attrDouble(metrics[0], "defrost.eval.threshold")
+	if !ok {
+		t.Fatalf("expected defrost.eval.threshold attribute")
+	}
+	if got != 0.85 {
+		t.Fatalf("expected threshold=0.85, got %v", got)
+	}
+}
+
+func TestParseWithMetricOverride(t *testing.T) {
+	_, metrics, err := Parse(bytes.NewReader(loadFixture(t, "with_metric_override.json")))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(metrics) != 1 {
+		t.Fatalf("expected 1 metric, got %d", len(metrics))
+	}
+	if metrics[0].Name != "eval.relevance" {
+		t.Fatalf("expected name eval.relevance (from metric override), got %q", metrics[0].Name)
+	}
+}
+
+func TestParseEmpty(t *testing.T) {
+	tests, metrics, err := Parse(bytes.NewReader(loadFixture(t, "empty.json")))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(tests) != 0 || len(metrics) != 0 {
+		t.Fatalf("expected zero results, got %d tests / %d metrics", len(tests), len(metrics))
+	}
+}
