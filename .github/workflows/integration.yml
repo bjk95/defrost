@@ -22,8 +22,16 @@ jobs:
       - name: Build defrost
         run: go build -o defrost .
 
+      - name: Configure git auth for defrost persist
+        run: |
+          git config --global url."https://x-access-token:${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Run defrost against go unit tests
-        run: ./defrost exec --no-persist go test -json -race ./...
+        run: ./defrost exec go test -json -race ./...
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   python:
     name: pytest example
