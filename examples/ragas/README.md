@@ -4,33 +4,39 @@
 Retrieval-Augmented Generation pipelines. Unlike Promptfoo, it has no CLI
 and no auto-dump — `ragas.evaluate(...)` returns scores in memory and
 nothing is written to disk by default. Defrost can't observe RAGAS results
-without a single-line user opt-in.
+without a small user opt-in.
 
 ## Usage
 
+Add three lines after `ragas.evaluate(...)` in your test:
+
 ```python
+import os
 from ragas import evaluate
 from ragas.metrics import faithfulness, answer_relevancy
-import defrost_ragas
 
 def test_rag_scores():
     result = evaluate(dataset, metrics=[faithfulness, answer_relevancy])
-    defrost_ragas.write_results(result)
+    if path := os.environ.get("DEFROST_RAGAS_OUT"):
+        result.to_pandas().to_json(path, orient="records")
     assert result["faithfulness"] > 0.7
 ```
 
-When defrost wraps the test run (`defrost exec pytest examples/ragas/`),
-`defrost_ragas.write_results` serialises the evaluation result to a
-defrost-controlled tempfile that the RAGAS plugin reads in teardown. When
-the same test runs outside defrost, the helper sees no
-`DEFROST_RAGAS_OUT` env var and is a no-op — so test files stay portable.
+`DEFROST_RAGAS_OUT` is only set when defrost wraps the test run, so the
+`to_json` call is a no-op under plain `pytest`. The same test file runs
+cleanly inside and outside defrost — no defrost-specific imports, no
+helper module to install or vendor.
 
-## How the helper is shipped
+## Why this shape
 
-`defrost_ragas.py` is embedded in the defrost binary and dropped into a
-tempdir on `PYTHONPATH` for the duration of the test run. Users do not
-copy or `pip install` anything; they only need to add the `import
-defrost_ragas` line and the `write_results(...)` call.
+`EvaluationResult.to_pandas().to_json(path, orient="records")` is built
+into RAGAS — defrost ships zero Python code. The output is a JSON array
+where each element is a dataset row with all DataFrame columns flattened
+(input columns plus one float column per scorer). Defrost's parser
+identifies score columns by excluding known input/reference column names
+(`question`, `answer`, `contexts`, `ground_truth`, `user_input`,
+`response`, `reference`, etc.) and emits one OTLP gauge per remaining
+numeric column.
 
 ## Metrics emitted
 

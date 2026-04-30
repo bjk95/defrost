@@ -1,0 +1,10 @@
+[
+  {
+    "question": "Old-style RAGAS 0.1.x column names.",
+    "answer": "x",
+    "contexts": ["c"],
+    "ground_truths": ["gt"],
+    "faithfulness": 0.7,
+    "answer_relevancy": 0.8
+  }
+]

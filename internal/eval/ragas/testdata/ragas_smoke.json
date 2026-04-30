@@ -1,26 +1,26 @@
-{
-  "ragas_version": "0.1.21",
-  "rows": [
-    {
-      "row_index": 0,
-      "question": "What is the capital of France?",
-      "scores": {
-        "faithfulness": 0.85,
-        "answer_relevancy": 0.91
-      }
-    },
-    {
-      "row_index": 1,
-      "question": "Who wrote Hamlet?",
-      "scores": {
-        "faithfulness": 0.0,
-        "answer_relevancy": 0.68
-      }
-    },
-    {
-      "row_index": 2,
-      "question": "Empty row.",
-      "scores": {}
-    }
-  ]
-}
+[
+  {
+    "user_input": "What is the capital of France?",
+    "response": "Paris.",
+    "retrieved_contexts": ["France's capital is Paris."],
+    "reference": "Paris",
+    "faithfulness": 0.85,
+    "answer_relevancy": 0.91
+  },
+  {
+    "user_input": "Who wrote Hamlet?",
+    "response": "Shakespeare.",
+    "retrieved_contexts": ["William Shakespeare wrote Hamlet."],
+    "reference": "William Shakespeare",
+    "faithfulness": 0.0,
+    "answer_relevancy": 0.68
+  },
+  {
+    "user_input": "Empty scoring row.",
+    "response": "",
+    "retrieved_contexts": [],
+    "reference": "",
+    "faithfulness": null,
+    "answer_relevancy": null
+  }
+]

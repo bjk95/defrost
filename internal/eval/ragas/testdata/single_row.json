@@ -1,12 +1,9 @@
-{
-  "ragas_version": "0.1.21",
-  "rows": [
-    {
-      "row_index": 0,
-      "question": "What is the capital of France?",
-      "scores": {
-        "faithfulness": 0.95
-      }
-    }
-  ]
-}
+[
+  {
+    "question": "What is the capital of France?",
+    "answer": "Paris.",
+    "contexts": ["France's capital is Paris."],
+    "ground_truth": "Paris",
+    "faithfulness": 0.95
+  }
+]

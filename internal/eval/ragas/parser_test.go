@@ -70,12 +70,11 @@ func TestParseSmoke(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	// Two rows × two metrics = 4 metrics. Row 2 has empty scores, contributes none.
+	// Two rows × two metrics = 4 metrics. Row 2 has null scores, contributes none.
 	if len(metrics) != 4 {
 		t.Fatalf("expected 4 metrics, got %d", len(metrics))
 	}
 
-	// Index by (case, metric name) so tests don't depend on map iteration order.
 	type key struct {
 		caseName string
 		name     string
@@ -111,6 +110,11 @@ func TestParseSmoke(t *testing.T) {
 	if _, ok := byKey[key{"ragas_row_1", "eval.answer_relevancy"}]; !ok {
 		t.Fatalf("missing row 1 answer_relevancy metric")
 	}
+
+	// Row 2's null scores must not have produced metrics.
+	if _, ok := byKey[key{"ragas_row_2", "eval.faithfulness"}]; ok {
+		t.Fatalf("null score in row 2 should not have produced a metric")
+	}
 }
 
 func TestParseSingleRow(t *testing.T) {
@@ -130,6 +134,46 @@ func TestParseSingleRow(t *testing.T) {
 	}
 	if got := attrString(m, "test.case.name"); got != "ragas_row_0" {
 		t.Fatalf("test.case.name = %q, want ragas_row_0", got)
+	}
+}
+
+func TestParseSkipsKnownInputColumns(t *testing.T) {
+	// `question`, `answer`, `contexts`, `ground_truth` carry user input
+	// and references — never scores. The parser must not emit metrics
+	// named eval.question, eval.answer, etc.
+	metrics, err := Parse(bytes.NewReader(loadFixture(t, "single_row.json")))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	for _, m := range metrics {
+		if strings.HasPrefix(m.Name, "eval.question") ||
+			strings.HasPrefix(m.Name, "eval.answer") && m.Name != "eval.answer_relevancy" ||
+			strings.HasPrefix(m.Name, "eval.contexts") ||
+			strings.HasPrefix(m.Name, "eval.ground_truth") {
+			t.Fatalf("input column leaked as metric: %q", m.Name)
+		}
+	}
+}
+
+func TestParseHandlesLegacyColumnNames(t *testing.T) {
+	// RAGAS 0.1.x used `question`/`answer`/`ground_truths`. 0.2.x renamed
+	// these to `user_input`/`response`/`reference`. The parser must
+	// recognise both as inputs (not score columns).
+	metrics, err := Parse(bytes.NewReader(loadFixture(t, "legacy_columns.json")))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(metrics) != 2 {
+		t.Fatalf("expected 2 metrics, got %d (%v)", len(metrics), metricNames(metrics))
+	}
+	wantNames := map[string]bool{"eval.faithfulness": false, "eval.answer_relevancy": false}
+	for _, m := range metrics {
+		wantNames[m.Name] = true
+	}
+	for k, v := range wantNames {
+		if !v {
+			t.Fatalf("missing expected metric %q", k)
+		}
 	}
 }
 
@@ -171,8 +215,8 @@ func TestParseInvalidJSON(t *testing.T) {
 
 func TestParseDeterministicOrdering(t *testing.T) {
 	// Within a single fixture, two parse calls must emit metrics in the
-	// same order. RAGAS scores live in a JSON object whose iteration order
-	// is non-deterministic by Go's spec, so the parser must sort keys.
+	// same order. JSON object iteration in Go is randomised, so the
+	// parser must sort keys before mapping them to metrics.
 	raw := loadFixture(t, "ragas_smoke.json")
 	a, err := Parse(bytes.NewReader(raw))
 	if err != nil {
@@ -193,4 +237,12 @@ func TestParseDeterministicOrdering(t *testing.T) {
 			t.Fatalf("case name ordering not stable at %d", i)
 		}
 	}
+}
+
+func metricNames(ms []*metricspb.Metric) []string {
+	out := make([]string, len(ms))
+	for i, m := range ms {
+		out[i] = m.Name
+	}
+	return out
 }
