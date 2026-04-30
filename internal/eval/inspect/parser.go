@@ -53,7 +53,14 @@ type inspectScore struct {
 // sample plus one *metricspb.Metric per (sample, numeric scorer) pair. Scorers
 // whose value is non-numeric (Letter "C"/"I", compound objects) are skipped
 // with a stderr warning. Returns nil/nil/error only on JSON decode failure.
-func ParseFile(r io.Reader) ([]models.TestResult, []*metricspb.Metric, error) {
+//
+// scope qualifies emitted metric names so two task files in the same repo
+// can't collapse into one series. The adapter passes
+// `<repo-rel-cwd>.<task-file>` (with `.` separator); the JSON's `eval.task`
+// field is appended after `scope` and before the scorer leaf inside this
+// function. An empty scope produces names of the form `eval.<task>.<scorer>`
+// and is intended for direct unit tests of ParseFile.
+func ParseFile(r io.Reader, scope string) ([]models.TestResult, []*metricspb.Metric, error) {
 	var doc inspectDoc
 	if err := json.NewDecoder(r).Decode(&doc); err != nil {
 		return nil, nil, fmt.Errorf("parse inspect json: %w", err)
@@ -64,7 +71,7 @@ func ParseFile(r io.Reader) ([]models.TestResult, []*metricspb.Metric, error) {
 		metrics []*metricspb.Metric
 	)
 	for _, s := range doc.Samples {
-		tr, m := mapSample(s, doc.Eval.Task, doc.Eval.Model, now)
+		tr, m := mapSample(s, doc.Eval.Task, doc.Eval.Model, scope, now)
 		tests = append(tests, tr)
 		metrics = append(metrics, m...)
 	}
@@ -75,7 +82,7 @@ func ParseFile(r io.Reader) ([]models.TestResult, []*metricspb.Metric, error) {
 // sample. Pass/fail is the conjunction of all numeric scorers clearing
 // passThreshold; a sample with no numeric scorers is treated as passed (it
 // ran without scoring failures).
-func mapSample(s inspectSample, task, model string, now uint64) (models.TestResult, []*metricspb.Metric) {
+func mapSample(s inspectSample, task, model, scope string, now uint64) (models.TestResult, []*metricspb.Metric) {
 	caseName := sampleCaseName(s.ID, task)
 
 	scorerNames := make([]string, 0, len(s.Scores))
@@ -100,7 +107,7 @@ func mapSample(s inspectSample, task, model string, now uint64) (models.TestResu
 		if v < passThreshold {
 			pass = false
 		}
-		metrics = append(metrics, buildMetric(name, score, caseName, task, model, v, now))
+		metrics = append(metrics, buildMetric(name, score, caseName, task, model, scope, v, now))
 	}
 	if !hasNumeric && len(scorerNames) == 0 {
 		fmt.Fprintf(os.Stderr,
@@ -117,7 +124,7 @@ func mapSample(s inspectSample, task, model string, now uint64) (models.TestResu
 	return tr, metrics
 }
 
-func buildMetric(name string, s inspectScore, caseName, task, model string, score float64, now uint64) *metricspb.Metric {
+func buildMetric(name string, s inspectScore, caseName, task, model, scope string, score float64, now uint64) *metricspb.Metric {
 	attrs := []*commonpb.KeyValue{
 		models.StringAttr("gen_ai.evaluation.name", name),
 		models.DoubleAttr("gen_ai.evaluation.score.value", score),
@@ -131,8 +138,22 @@ func buildMetric(name string, s inspectScore, caseName, task, model string, scor
 	if model != "" {
 		attrs = append(attrs, models.StringAttr("gen_ai.request.model", model))
 	}
+
+	// Fully-qualified metric name: eval.<scope>.<task>.<scorer>, with empty
+	// segments dropped. See the spec at
+	// docs/specs/2026-04-30-inspect-ai-adapter.md §6.
+	segs := make([]string, 0, 3)
+	if scope != "" {
+		segs = append(segs, scope)
+	}
+	if task != "" {
+		segs = append(segs, task)
+	}
+	segs = append(segs, name)
+	metricName := "eval." + strings.Join(segs, ".")
+
 	return &metricspb.Metric{
-		Name: "eval." + name,
+		Name: metricName,
 		Data: &metricspb.Metric_Gauge{Gauge: &metricspb.Gauge{
 			DataPoints: []*metricspb.NumberDataPoint{{
 				TimeUnixNano: now,

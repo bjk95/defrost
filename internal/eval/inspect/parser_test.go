@@ -52,7 +52,7 @@ func attrString(m *metricspb.Metric, key string) string {
 }
 
 func TestParseSmoke(t *testing.T) {
-	tests, metrics, err := ParseFile(bytes.NewReader(loadFixture(t, "smoke.json")))
+	tests, metrics, err := ParseFile(bytes.NewReader(loadFixture(t, "smoke.json")), "")
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -78,8 +78,8 @@ func TestParseSmoke(t *testing.T) {
 	if len(metrics) != 2 {
 		t.Fatalf("expected 2 metrics, got %d", len(metrics))
 	}
-	if metrics[0].Name != "eval.match" {
-		t.Fatalf("expected metric eval.match, got %q", metrics[0].Name)
+	if metrics[0].Name != "eval.capital_cities.match" {
+		t.Fatalf("expected metric eval.capital_cities.match, got %q", metrics[0].Name)
 	}
 	if got := gaugeValue(t, metrics[0]); got != 1.0 {
 		t.Fatalf("expected score 1.0, got %v", got)
@@ -111,7 +111,7 @@ func TestParseSmoke(t *testing.T) {
 }
 
 func TestParseMultiScorer(t *testing.T) {
-	tests, metrics, err := ParseFile(bytes.NewReader(loadFixture(t, "multi_scorer.json")))
+	tests, metrics, err := ParseFile(bytes.NewReader(loadFixture(t, "multi_scorer.json")), "")
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -124,7 +124,7 @@ func TestParseMultiScorer(t *testing.T) {
 	if len(metrics) != 2 {
 		t.Fatalf("expected 2 metrics (one per scorer), got %d", len(metrics))
 	}
-	wantNames := map[string]bool{"eval.accuracy": false, "eval.f1_score": false}
+	wantNames := map[string]bool{"eval.qa_eval.accuracy": false, "eval.qa_eval.f1_score": false}
 	for _, m := range metrics {
 		wantNames[m.Name] = true
 	}
@@ -136,7 +136,7 @@ func TestParseMultiScorer(t *testing.T) {
 }
 
 func TestParseLetterScorerSkipped(t *testing.T) {
-	tests, metrics, err := ParseFile(bytes.NewReader(loadFixture(t, "letter_scorer.json")))
+	tests, metrics, err := ParseFile(bytes.NewReader(loadFixture(t, "letter_scorer.json")), "")
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -154,7 +154,7 @@ func TestParseLetterScorerSkipped(t *testing.T) {
 }
 
 func TestParseNoScores(t *testing.T) {
-	tests, metrics, err := ParseFile(bytes.NewReader(loadFixture(t, "no_scores.json")))
+	tests, metrics, err := ParseFile(bytes.NewReader(loadFixture(t, "no_scores.json")), "")
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -170,7 +170,7 @@ func TestParseNoScores(t *testing.T) {
 }
 
 func TestParseStringID(t *testing.T) {
-	tests, _, err := ParseFile(bytes.NewReader(loadFixture(t, "string_id.json")))
+	tests, _, err := ParseFile(bytes.NewReader(loadFixture(t, "string_id.json")), "")
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -184,7 +184,7 @@ func TestParseStringID(t *testing.T) {
 }
 
 func TestParseCompoundValueSkipped(t *testing.T) {
-	tests, metrics, err := ParseFile(bytes.NewReader(loadFixture(t, "compound_value.json")))
+	tests, metrics, err := ParseFile(bytes.NewReader(loadFixture(t, "compound_value.json")), "")
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -198,13 +198,13 @@ func TestParseCompoundValueSkipped(t *testing.T) {
 	if len(metrics) != 1 {
 		t.Fatalf("expected 1 metric (compound skipped), got %d", len(metrics))
 	}
-	if metrics[0].Name != "eval.accuracy" {
-		t.Fatalf("expected eval.accuracy, got %q", metrics[0].Name)
+	if metrics[0].Name != "eval.compound_eval.accuracy" {
+		t.Fatalf("expected eval.compound_eval.accuracy, got %q", metrics[0].Name)
 	}
 }
 
 func TestParseEmptySamples(t *testing.T) {
-	tests, metrics, err := ParseFile(bytes.NewReader(loadFixture(t, "empty_samples.json")))
+	tests, metrics, err := ParseFile(bytes.NewReader(loadFixture(t, "empty_samples.json")), "")
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -214,7 +214,7 @@ func TestParseEmptySamples(t *testing.T) {
 }
 
 func TestParseIntegerScore(t *testing.T) {
-	tests, metrics, err := ParseFile(bytes.NewReader(loadFixture(t, "integer_score.json")))
+	tests, metrics, err := ParseFile(bytes.NewReader(loadFixture(t, "integer_score.json")), "")
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -231,11 +231,11 @@ func TestParseIntegerScore(t *testing.T) {
 
 func TestParseDeterministicCaseNames(t *testing.T) {
 	raw := loadFixture(t, "smoke.json")
-	tests1, _, err := ParseFile(bytes.NewReader(raw))
+	tests1, _, err := ParseFile(bytes.NewReader(raw), "")
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	tests2, _, err := ParseFile(bytes.NewReader(raw))
+	tests2, _, err := ParseFile(bytes.NewReader(raw), "")
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -249,8 +249,30 @@ func TestParseDeterministicCaseNames(t *testing.T) {
 	}
 }
 
+func TestParseQualifiesMetricNameWithScope(t *testing.T) {
+	_, metrics, err := ParseFile(
+		bytes.NewReader(loadFixture(t, "smoke.json")),
+		"examples/inspect.task.py",
+	)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(metrics) != 2 {
+		t.Fatalf("expected 2 metrics, got %d", len(metrics))
+	}
+	want := "eval.examples/inspect.task.py.capital_cities.match"
+	if metrics[0].Name != want {
+		t.Fatalf("metric name = %q, want %q", metrics[0].Name, want)
+	}
+	// gen_ai.evaluation.name stays the un-scoped scorer key so OTel
+	// consumers can still aggregate by scorer type across tasks.
+	if got := attrString(metrics[0], "gen_ai.evaluation.name"); got != "match" {
+		t.Fatalf("gen_ai.evaluation.name = %q, want %q", got, "match")
+	}
+}
+
 func TestParseInvalidJSON(t *testing.T) {
-	_, _, err := ParseFile(bytes.NewReader([]byte("not json")))
+	_, _, err := ParseFile(bytes.NewReader([]byte("not json")), "")
 	if err == nil {
 		t.Fatalf("expected decode error")
 	}

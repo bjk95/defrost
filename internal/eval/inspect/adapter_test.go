@@ -76,6 +76,45 @@ func TestBuildArgs(t *testing.T) {
 	}
 }
 
+func TestUserTaskFile(t *testing.T) {
+	cases := []struct {
+		cmd  []string
+		want string
+	}{
+		{[]string{"inspect", "eval", "task.py"}, "task.py"},
+		{[]string{"inspect", "eval", "task.py", "--model", "gpt-4o"}, "task.py"},
+		{[]string{"python", "-m", "inspect_ai", "eval", "tasks/qa.py"}, "tasks/qa.py"},
+		{[]string{"poetry", "run", "inspect", "eval", "task.py"}, "task.py"},
+		{[]string{"inspect", "eval"}, ""},                         // missing positional
+		{[]string{"inspect", "eval", "--model", "gpt-4o"}, ""},    // flag where task file should be
+		{[]string{"inspect", "view"}, ""},                         // no eval subcommand
+	}
+	for _, tc := range cases {
+		got := userTaskFile(tc.cmd)
+		if got != tc.want {
+			t.Fatalf("userTaskFile(%v) = %q, want %q", tc.cmd, got, tc.want)
+		}
+	}
+}
+
+func TestJoinScope(t *testing.T) {
+	cases := []struct {
+		parts []string
+		want  string
+	}{
+		{[]string{"examples/inspect", "task.py"}, "examples/inspect.task.py"},
+		{[]string{"", "task.py"}, "task.py"},
+		{[]string{"examples/inspect", ""}, "examples/inspect"},
+		{[]string{"", ""}, ""},
+	}
+	for _, tc := range cases {
+		got := joinScope(tc.parts...)
+		if got != tc.want {
+			t.Fatalf("joinScope(%v) = %q, want %q", tc.parts, got, tc.want)
+		}
+	}
+}
+
 func equalSlices(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
@@ -148,6 +187,13 @@ func itoa(n int) string {
 
 func TestRunHappyPath(t *testing.T) {
 	bin := fakeChildScript(t, "smoke.json")
+
+	// Pin cwd outside any git repo so RepoRelCwd() returns "" and the
+	// metric scope is driven entirely by the user-supplied task file.
+	dir := t.TempDir()
+	t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(dir))
+	t.Chdir(dir)
+
 	a := &Adapter{}
 	tests, metrics, code := a.Run([]string{bin, "eval", "task.py"})
 	if code != 0 {
@@ -159,8 +205,9 @@ func TestRunHappyPath(t *testing.T) {
 	if len(metrics) != 2 {
 		t.Fatalf("expected 2 metrics, got %d", len(metrics))
 	}
-	if metrics[0].Name != "eval.match" {
-		t.Fatalf("expected eval.match, got %q", metrics[0].Name)
+	want := "eval.task.py.capital_cities.match"
+	if metrics[0].Name != want {
+		t.Fatalf("expected %s, got %q", want, metrics[0].Name)
 	}
 }
 

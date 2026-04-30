@@ -71,8 +71,14 @@ type promptfooAssertion struct {
 // per-result TestResult plus one *metricspb.Metric (gauge, single data
 // point) per assertion's componentResult.
 //
+// scope qualifies emitted metric names so two configs in the same repo
+// can't collapse into one series. The adapter passes
+// `<repo-rel-cwd>.<config-path>` (with `.` separator); empty segments are
+// already stripped by the caller. An empty scope produces unscoped names
+// (`eval.<criterion>`) and is intended for direct unit tests of Parse.
+//
 // Returns nil/nil/error only on JSON decode failure.
-func Parse(r io.Reader) ([]models.TestResult, []*metricspb.Metric, error) {
+func Parse(r io.Reader, scope string) ([]models.TestResult, []*metricspb.Metric, error) {
 	var doc promptfooDoc
 	if err := json.NewDecoder(r).Decode(&doc); err != nil {
 		return nil, nil, fmt.Errorf("parse promptfoo json: %w", err)
@@ -88,7 +94,7 @@ func Parse(r io.Reader) ([]models.TestResult, []*metricspb.Metric, error) {
 		caseName := caseName(r.Vars, i, provider, prompt)
 		tests = append(tests, mapResult(r, caseName))
 		for _, c := range r.GradingResult.ComponentResults {
-			metric := mapComponentResult(c, caseName, provider, now)
+			metric := mapComponentResult(c, caseName, provider, scope, now)
 			if metric != nil {
 				metrics = append(metrics, metric)
 			}
@@ -206,7 +212,7 @@ func mapResult(r promptfooResult, caseName string) models.TestResult {
 	}
 }
 
-func mapComponentResult(c promptfooComponentResult, caseName, model string, timeUnixNano uint64) *metricspb.Metric {
+func mapComponentResult(c promptfooComponentResult, caseName, model, scope string, timeUnixNano uint64) *metricspb.Metric {
 	criterion := assertionMetricName(c.Assertion)
 	if criterion == "" {
 		// Composite/parent component result without assertion metadata.
@@ -231,8 +237,13 @@ func mapComponentResult(c promptfooComponentResult, caseName, model string, time
 		attrs = append(attrs, models.DoubleAttr("defrost.eval.threshold", *c.Assertion.Threshold))
 	}
 
+	name := "eval." + criterion
+	if scope != "" {
+		name = "eval." + scope + "." + criterion
+	}
+
 	return &metricspb.Metric{
-		Name: "eval." + criterion,
+		Name: name,
 		Data: &metricspb.Metric_Gauge{Gauge: &metricspb.Gauge{
 			DataPoints: []*metricspb.NumberDataPoint{{
 				TimeUnixNano: timeUnixNano,

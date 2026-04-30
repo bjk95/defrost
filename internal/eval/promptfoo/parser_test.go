@@ -74,7 +74,7 @@ func attrDouble(m *metricspb.Metric, key string) (float64, bool) {
 }
 
 func TestParseSingleAssertion(t *testing.T) {
-	tests, metrics, err := Parse(bytes.NewReader(loadFixture(t, "single_assertion.json")))
+	tests, metrics, err := Parse(bytes.NewReader(loadFixture(t, "single_assertion.json")), "")
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -112,7 +112,7 @@ func TestParseSingleAssertion(t *testing.T) {
 }
 
 func TestParseMultiAssertion(t *testing.T) {
-	tests, metrics, err := Parse(bytes.NewReader(loadFixture(t, "multi_assertion.json")))
+	tests, metrics, err := Parse(bytes.NewReader(loadFixture(t, "multi_assertion.json")), "")
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -140,7 +140,7 @@ func TestParseMultiAssertion(t *testing.T) {
 }
 
 func TestParseMultiTest(t *testing.T) {
-	tests, metrics, err := Parse(bytes.NewReader(loadFixture(t, "multi_test.json")))
+	tests, metrics, err := Parse(bytes.NewReader(loadFixture(t, "multi_test.json")), "")
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -164,7 +164,7 @@ func TestParseMultiTest(t *testing.T) {
 }
 
 func TestParseWithThreshold(t *testing.T) {
-	_, metrics, err := Parse(bytes.NewReader(loadFixture(t, "with_threshold.json")))
+	_, metrics, err := Parse(bytes.NewReader(loadFixture(t, "with_threshold.json")), "")
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -181,7 +181,7 @@ func TestParseWithThreshold(t *testing.T) {
 }
 
 func TestParseWithMetricOverride(t *testing.T) {
-	_, metrics, err := Parse(bytes.NewReader(loadFixture(t, "with_metric_override.json")))
+	_, metrics, err := Parse(bytes.NewReader(loadFixture(t, "with_metric_override.json")), "")
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -194,7 +194,7 @@ func TestParseWithMetricOverride(t *testing.T) {
 }
 
 func TestParseEmpty(t *testing.T) {
-	tests, metrics, err := Parse(bytes.NewReader(loadFixture(t, "empty.json")))
+	tests, metrics, err := Parse(bytes.NewReader(loadFixture(t, "empty.json")), "")
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -209,11 +209,11 @@ func TestParseNestedVarsDeterministic(t *testing.T) {
 	// across multiple Parse invocations — to keep history continuity
 	// working for promptfoo configs that pass structured vars.
 	raw := loadFixture(t, "nested_vars.json")
-	tests1, _, err := Parse(bytes.NewReader(raw))
+	tests1, _, err := Parse(bytes.NewReader(raw), "")
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	tests2, _, err := Parse(bytes.NewReader(raw))
+	tests2, _, err := Parse(bytes.NewReader(raw), "")
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -233,7 +233,7 @@ func TestParseNestedVarsDeterministic(t *testing.T) {
 }
 
 func TestParseEmptyVarsKeepsCasesDistinct(t *testing.T) {
-	tests, metrics, err := Parse(bytes.NewReader(loadFixture(t, "empty_vars_collision.json")))
+	tests, metrics, err := Parse(bytes.NewReader(loadFixture(t, "empty_vars_collision.json")), "")
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -258,7 +258,7 @@ func TestParseEmptyVarsKeepsCasesDistinct(t *testing.T) {
 }
 
 func TestParseStructuredResponseOutput(t *testing.T) {
-	tests, _, err := Parse(bytes.NewReader(loadFixture(t, "structured_output.json")))
+	tests, _, err := Parse(bytes.NewReader(loadFixture(t, "structured_output.json")), "")
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -280,7 +280,7 @@ func TestParseStructuredResponseOutput(t *testing.T) {
 }
 
 func TestParseSameVarsDifferentPromptsGetDistinctIds(t *testing.T) {
-	tests, _, err := Parse(bytes.NewReader(loadFixture(t, "multi_prompt.json")))
+	tests, _, err := Parse(bytes.NewReader(loadFixture(t, "multi_prompt.json")), "")
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -309,7 +309,7 @@ func TestParseSameVarsDifferentPromptsGetDistinctIds(t *testing.T) {
 }
 
 func TestParseSkipsComponentsWithoutAssertionType(t *testing.T) {
-	tests, metrics, err := Parse(bytes.NewReader(loadFixture(t, "composite_assertion.json")))
+	tests, metrics, err := Parse(bytes.NewReader(loadFixture(t, "composite_assertion.json")), "")
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -327,8 +327,30 @@ func TestParseSkipsComponentsWithoutAssertionType(t *testing.T) {
 	}
 }
 
+func TestParseQualifiesMetricNameWithScope(t *testing.T) {
+	_, metrics, err := Parse(
+		bytes.NewReader(loadFixture(t, "single_assertion.json")),
+		"examples/promptfoo.promptfooconfig.yaml",
+	)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(metrics) != 1 {
+		t.Fatalf("expected 1 metric, got %d", len(metrics))
+	}
+	want := "eval.examples/promptfoo.promptfooconfig.yaml.contains"
+	if metrics[0].Name != want {
+		t.Fatalf("metric name = %q, want %q", metrics[0].Name, want)
+	}
+	// gen_ai.evaluation.name stays the un-scoped criterion so OTel
+	// consumers can still aggregate by metric type across configs.
+	if got := attrString(metrics[0], "gen_ai.evaluation.name"); got != "contains" {
+		t.Fatalf("gen_ai.evaluation.name = %q, want %q", got, "contains")
+	}
+}
+
 func TestParseSameVarsDifferentProvidersGetDistinctIds(t *testing.T) {
-	tests, _, err := Parse(bytes.NewReader(loadFixture(t, "cross_product.json")))
+	tests, _, err := Parse(bytes.NewReader(loadFixture(t, "cross_product.json")), "")
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}

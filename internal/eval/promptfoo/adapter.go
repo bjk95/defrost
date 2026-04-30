@@ -123,6 +123,36 @@ func parseExecBase(tok string) string {
 	return base
 }
 
+// joinScope joins non-empty path segments with "." for use as the
+// repo-unique prefix in metric names emitted by this adapter.
+func joinScope(parts ...string) string {
+	var out []string
+	for _, p := range parts {
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return strings.Join(out, ".")
+}
+
+// userConfigPath returns the first `-c` / `--config` / `--config=<v>`
+// value in args, or "" if none is supplied. Promptfoo's default when
+// the flag is omitted is `promptfooconfig.yaml` in the cwd; callers
+// substitute that themselves.
+func userConfigPath(args []string) string {
+	for i, a := range args {
+		switch {
+		case a == "--config" || a == "-c":
+			if i+1 < len(args) {
+				return args[i+1]
+			}
+		case strings.HasPrefix(a, "--config="):
+			return strings.TrimPrefix(a, "--config=")
+		}
+	}
+	return ""
+}
+
 // userOutputPaths returns every `--output` / `-o` / `--output=<v>` value
 // in args, in order. Promptfoo accepts multiple output flags producing
 // different formats simultaneously (json + html + csv etc.).
@@ -234,7 +264,13 @@ func (a *Adapter) Run(cmd []string) ([]models.TestResult, []*metricspb.Metric, i
 	}
 	defer f.Close()
 
-	tests, metrics, parseErr := Parse(f)
+	configPath := userConfigPath(cmd[1:])
+	if configPath == "" {
+		configPath = "promptfooconfig.yaml"
+	}
+	scope := joinScope(runner.RepoRelCwd(), configPath)
+
+	tests, metrics, parseErr := Parse(f, scope)
 	if parseErr != nil {
 		fmt.Fprintln(os.Stderr, "defrost:", parseErr)
 		if exitCode == 0 {
