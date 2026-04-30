@@ -126,6 +126,7 @@ func execWith(a runner.Adapter, cmd []string, opts ExecOpts) int {
 	// when, what commit, what exit code — the runs you most want to
 	// debug are precisely the ones with no per-test data.
 	if opts.Persist && !persistFailed {
+		metrics = append(metrics, persist.RunDurationMetric(run, cmd, opts.RepoDir, time.Now()))
 		if err := persistRun(pOpts, run, results, metrics, code); err != nil {
 			fmt.Fprintln(os.Stderr, "persist: failed:", err)
 			// A persist failure should surface even when the test command
