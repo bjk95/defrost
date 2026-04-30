@@ -104,7 +104,13 @@ func execWith(a runner.Adapter, cmd []string, opts ExecOpts) int {
 	}
 
 	persistFailed := false
-	if opts.Persist && (len(results) > 0 || len(metrics) > 0) {
+	// Always persist when --persist is on, even with zero results and zero
+	// metrics. Schema 3 models the run as the `defrost.run` root span; a
+	// compile/setup failure that produces no test cases still needs a
+	// history entry recording who, when, what commit, what exit code —
+	// the runs you most want to debug are precisely the ones with no
+	// per-test data.
+	if opts.Persist {
 		if err := persistRun(pOpts, run, results, metrics, code); err != nil {
 			fmt.Fprintln(os.Stderr, "persist: failed:", err)
 			// A persist failure should surface even when the test command
@@ -207,6 +213,14 @@ func tallyResults(results []models.TestResult) (pass, fail, skip int) {
 // for the child. On bind failure we log and return (nil, no-op) so the
 // run continues without metric collection. Returns a restore function the
 // caller MUST call to clear the exported env vars regardless of outcome.
+//
+// Both the generic (OTEL_EXPORTER_OTLP_*) and the per-signal metrics
+// (OTEL_EXPORTER_OTLP_METRICS_*) env vars are set, because OTLP gives
+// per-signal vars higher precedence — if a user already has
+// OTEL_EXPORTER_OTLP_METRICS_ENDPOINT pointed at their own collector, our
+// generic override is silently ignored and metrics ship to the wrong
+// place. Setting both ensures defrost's localhost endpoint always wins
+// for the metrics signal in this child process.
 func startReceiver() (*otlp.Receiver, func()) {
 	r := otlp.New()
 	port, err := r.Start()
@@ -215,20 +229,35 @@ func startReceiver() (*otlp.Receiver, func()) {
 		return nil, func() {}
 	}
 	endpoint := fmt.Sprintf("http://127.0.0.1:%d", port)
-	prevEndpoint, hadEndpoint := os.LookupEnv("OTEL_EXPORTER_OTLP_ENDPOINT")
-	prevProtocol, hadProtocol := os.LookupEnv("OTEL_EXPORTER_OTLP_PROTOCOL")
-	os.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", endpoint)
-	os.Setenv("OTEL_EXPORTER_OTLP_PROTOCOL", "http/protobuf")
+
+	type envVar struct {
+		key       string
+		prevValue string
+		hadPrev   bool
+	}
+	overrides := []envVar{
+		{key: "OTEL_EXPORTER_OTLP_ENDPOINT"},
+		{key: "OTEL_EXPORTER_OTLP_PROTOCOL"},
+		{key: "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT"},
+		{key: "OTEL_EXPORTER_OTLP_METRICS_PROTOCOL"},
+	}
+	values := map[string]string{
+		"OTEL_EXPORTER_OTLP_ENDPOINT":         endpoint,
+		"OTEL_EXPORTER_OTLP_PROTOCOL":         "http/protobuf",
+		"OTEL_EXPORTER_OTLP_METRICS_ENDPOINT": endpoint + "/v1/metrics",
+		"OTEL_EXPORTER_OTLP_METRICS_PROTOCOL": "http/protobuf",
+	}
+	for i := range overrides {
+		overrides[i].prevValue, overrides[i].hadPrev = os.LookupEnv(overrides[i].key)
+		os.Setenv(overrides[i].key, values[overrides[i].key])
+	}
 	restore := func() {
-		if hadEndpoint {
-			os.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", prevEndpoint)
-		} else {
-			os.Unsetenv("OTEL_EXPORTER_OTLP_ENDPOINT")
-		}
-		if hadProtocol {
-			os.Setenv("OTEL_EXPORTER_OTLP_PROTOCOL", prevProtocol)
-		} else {
-			os.Unsetenv("OTEL_EXPORTER_OTLP_PROTOCOL")
+		for _, e := range overrides {
+			if e.hadPrev {
+				os.Setenv(e.key, e.prevValue)
+			} else {
+				os.Unsetenv(e.key)
+			}
 		}
 	}
 	return r, restore
