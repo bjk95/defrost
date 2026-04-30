@@ -17,7 +17,7 @@ func TestLoad_SortsRunsNewestFirstAndCapsAtFifty(t *testing.T) {
 	for i := 0; i < 60; i++ {
 		roots = append(roots, &tracepb.ResourceSpans{
 			Resource: &resourcepb.Resource{Attributes: []*commonpb.KeyValue{
-				models.StringAttr("defrost.run_id", idFor(i)),
+				models.StringAttr("cicd.pipeline.run.id", idFor(i)),
 			}},
 			ScopeSpans: []*tracepb.ScopeSpans{{
 				Spans: []*tracepb.Span{{
@@ -47,7 +47,7 @@ func TestLoad_SortsRunsNewestFirstAndCapsAtFifty(t *testing.T) {
 	if len(ds.Roots) != 50 {
 		t.Errorf("want 50 roots after cap, got %d", len(ds.Roots))
 	}
-	if rid := models.ResourceString(ds.Roots[0].Resource, "defrost.run_id"); rid != idFor(59) {
+	if rid := models.ResourceString(ds.Roots[0].Resource, "cicd.pipeline.run.id"); rid != idFor(59) {
 		t.Errorf("want newest root first, got %q", rid)
 	}
 	// Span whose run_id is no longer in the capped set must be dropped.
@@ -58,16 +58,17 @@ func TestLoad_SortsRunsNewestFirstAndCapsAtFifty(t *testing.T) {
 	if survivor == nil {
 		t.Fatal("survivor span unexpectedly nil")
 	}
-	if rid := models.AttrString(survivor.Attributes, "defrost.run_id"); rid != idFor(59) {
+	if rid := models.ResourceString(ds.TestSpans["tid-A"][0].Resource, "cicd.pipeline.run.id"); rid != idFor(59) {
 		t.Errorf("want surviving span to reference run %q, got %q", idFor(59), rid)
 	}
+	_ = survivor
 }
 
 func TestLoad_PassesMetricsThroughUnfiltered(t *testing.T) {
 	roots := []*tracepb.ResourceSpans{
 		{
 			Resource: &resourcepb.Resource{Attributes: []*commonpb.KeyValue{
-				models.StringAttr("defrost.run_id", "run-1"),
+				models.StringAttr("cicd.pipeline.run.id", "run-1"),
 			}},
 			ScopeSpans: []*tracepb.ScopeSpans{{
 				Spans: []*tracepb.Span{{Name: "defrost.run", StartTimeUnixNano: 10}},
@@ -126,12 +127,14 @@ func TestLoad_PassesMetricsThroughUnfiltered(t *testing.T) {
 
 func testRSWithRun(runID, status string, startNs uint64) *tracepb.ResourceSpans {
 	return &tracepb.ResourceSpans{
+		Resource: &resourcepb.Resource{Attributes: []*commonpb.KeyValue{
+			models.StringAttr("cicd.pipeline.run.id", runID),
+		}},
 		ScopeSpans: []*tracepb.ScopeSpans{{
 			Spans: []*tracepb.Span{{
 				Name:              "pkg.TestA",
 				StartTimeUnixNano: startNs,
 				Attributes: []*commonpb.KeyValue{
-					models.StringAttr("defrost.run_id", runID),
 					models.StringAttr("test.case.result.status", status),
 				},
 			}},

@@ -22,7 +22,7 @@ func stubDataset() Dataset {
 		Roots: []*tracepb.ResourceSpans{
 			{
 				Resource: &resourcepb.Resource{Attributes: []*commonpb.KeyValue{
-					models.StringAttr("defrost.run_id", "run-2"),
+					models.StringAttr("cicd.pipeline.run.id", "run-2"),
 					models.StringAttr("vcs.repository.ref.revision", "deadbee"),
 					models.StringAttr("vcs.repository.ref.name", "main"),
 				}},
@@ -35,7 +35,7 @@ func stubDataset() Dataset {
 			},
 			{
 				Resource: &resourcepb.Resource{Attributes: []*commonpb.KeyValue{
-					models.StringAttr("defrost.run_id", "run-1"),
+					models.StringAttr("cicd.pipeline.run.id", "run-1"),
 					models.StringAttr("vcs.repository.ref.revision", "cafebab"),
 					models.StringAttr("vcs.repository.ref.name", "main"),
 				}},
@@ -62,7 +62,6 @@ func makeTestRS(name, runID, status string, startNs, endNs uint64, output string
 		StartTimeUnixNano: startNs,
 		EndTimeUnixNano:   endNs,
 		Attributes: []*commonpb.KeyValue{
-			models.StringAttr("defrost.run_id", runID),
 			models.StringAttr("test.case.result.status", status),
 		},
 	}
@@ -73,6 +72,9 @@ func makeTestRS(name, runID, status string, startNs, endNs uint64, output string
 		}}
 	}
 	return &tracepb.ResourceSpans{
+		Resource: &resourcepb.Resource{Attributes: []*commonpb.KeyValue{
+			models.StringAttr("cicd.pipeline.run.id", runID),
+		}},
 		ScopeSpans: []*tracepb.ScopeSpans{{Spans: []*tracepb.Span{span}}},
 	}
 }
@@ -188,7 +190,7 @@ func TestServer_GetTestRun_HandlesDoubleEncodedTestIDs(t *testing.T) {
 	ds := Dataset{
 		Roots: []*tracepb.ResourceSpans{{
 			Resource: &resourcepb.Resource{Attributes: []*commonpb.KeyValue{
-				models.StringAttr("defrost.run_id", "run-1"),
+				models.StringAttr("cicd.pipeline.run.id", "run-1"),
 			}},
 			ScopeSpans: []*tracepb.ScopeSpans{{
 				Spans: []*tracepb.Span{{Name: "defrost.run", StartTimeUnixNano: 1}},
@@ -219,7 +221,7 @@ func TestServer_GetMetrics_TranslatesGaugeAndHistogram(t *testing.T) {
 	traceID := models.DeriveTraceID(runID)
 
 	rootResource := &resourcepb.Resource{Attributes: []*commonpb.KeyValue{
-		models.StringAttr("defrost.run_id", runID),
+		models.StringAttr("cicd.pipeline.run.id", runID),
 	}}
 	root := &tracepb.ResourceSpans{
 		Resource: rootResource,
@@ -341,7 +343,7 @@ func TestServer_GetMetrics_DropsDataPointsWithoutKeptRun(t *testing.T) {
 
 	root := &tracepb.ResourceSpans{
 		Resource: &resourcepb.Resource{Attributes: []*commonpb.KeyValue{
-			models.StringAttr("defrost.run_id", runID),
+			models.StringAttr("cicd.pipeline.run.id", runID),
 		}},
 		ScopeSpans: []*tracepb.ScopeSpans{{
 			Spans: []*tracepb.Span{{Name: "defrost.run", StartTimeUnixNano: 1}},
@@ -387,7 +389,7 @@ func TestServer_GetMetrics_TimeWindowFallbackForExemplarlessPoints(t *testing.T)
 	// Run window: [1000, 2000].
 	root := &tracepb.ResourceSpans{
 		Resource: &resourcepb.Resource{Attributes: []*commonpb.KeyValue{
-			models.StringAttr("defrost.run_id", "run-1"),
+			models.StringAttr("cicd.pipeline.run.id", "run-1"),
 		}},
 		ScopeSpans: []*tracepb.ScopeSpans{{
 			Spans: []*tracepb.Span{{

@@ -57,20 +57,22 @@ func TestTestResultsToSpans_Pass(t *testing.T) {
 	if s.Status.Code != tracepb.Status_STATUS_CODE_OK {
 		t.Errorf("status.code: want OK got %v", s.Status.Code)
 	}
-	if got := models.AttrString(s.Attributes, "test.case.name"); got != r.Id {
-		t.Errorf("test.case.name attribute: %q", got)
-	}
 	if got := models.AttrString(s.Attributes, "test.case.result.status"); got != "passed" {
 		t.Errorf("test.case.result.status: %q", got)
 	}
-	if got := models.AttrString(s.Attributes, "defrost.run_id"); got != "run-001" {
-		t.Errorf("defrost.run_id attribute missing: %q", got)
+	// Schema 4 stores ONLY test.case.result.status on the test span — the
+	// FQN lives in span.Name and run identity lives on the Resource.
+	if got := models.AttrString(s.Attributes, "test.case.name"); got != "" {
+		t.Errorf("test.case.name should be absent, got %q", got)
 	}
-	if got := models.AttrString(s.Attributes, "test.suite.name"); got != "github.com/x/p" {
-		t.Errorf("test.suite.name: %q", got)
+	if got := models.AttrString(s.Attributes, "defrost.run_id"); got != "" {
+		t.Errorf("defrost.run_id should be absent, got %q", got)
 	}
-	if got := models.AttrString(s.Attributes, "code.function"); got != "TestA" {
-		t.Errorf("code.function: %q", got)
+	if got := models.AttrString(s.Attributes, "test.suite.name"); got != "" {
+		t.Errorf("test.suite.name should be absent, got %q", got)
+	}
+	if got := models.AttrString(s.Attributes, "code.function"); got != "" {
+		t.Errorf("code.function should be absent, got %q", got)
 	}
 	if d := s.EndTimeUnixNano - s.StartTimeUnixNano; d != uint64(5*time.Millisecond) {
 		t.Errorf("duration nanos: want %d got %d", uint64(5*time.Millisecond), d)
@@ -139,17 +141,17 @@ func TestTestResultsToSpans_Panic(t *testing.T) {
 }
 
 func TestTestResultsToSpans_PytestId(t *testing.T) {
+	// Schema 4: the FQN is the canonical identifier and lives in span.Name.
+	// Lossy projections (test.suite.name, code.function) are no longer
+	// emitted — the reader can split the FQN if it wants.
 	r := models.TestResult{
 		Id:     "tests/test_module.py::TestClass::test_method",
 		Ran:    true,
 		Passed: true,
 	}
 	s := TestResultsToSpans([]models.TestResult{r}, newRunContext())[0]
-	if got := models.AttrString(s.Attributes, "test.suite.name"); got != "tests/test_module.py" {
-		t.Errorf("test.suite.name: %q", got)
-	}
-	if got := models.AttrString(s.Attributes, "code.function"); got != "test_method" {
-		t.Errorf("code.function: %q", got)
+	if s.Name != r.Id {
+		t.Errorf("FQN preserved on span.Name: want %q got %q", r.Id, s.Name)
 	}
 }
 

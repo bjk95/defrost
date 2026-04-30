@@ -11,7 +11,7 @@
 
 Every team wants a record of how their evals, benchmarks, and tests have changed
 over time. Almost nobody wants to host a database for it. **defrost** records
-each run as commits on a `_defrost` branch in the same repo, so the history
+each run as commits on a `_defrost-v2` branch in the same repo, so the history
 travels with the code — no database, no SaaS, no API keys.
 
 ## What you get
@@ -78,7 +78,7 @@ and records everything. Exit code:
 
 - Normally the child's exit code.
 - If every failing test is on the suppression list, the exit is rewritten to `0`.
-- If persisting to the `_defrost` branch fails (e.g. push rejected,
+- If persisting to the `_defrost-v2` branch fails (e.g. push rejected,
   no `origin`), the exit is forced to `1` even when the test command itself
   succeeded — so CI never silently loses data.
 
@@ -98,9 +98,11 @@ Serves the dashboard at `127.0.0.1:6969` (override with `--port`).
 
 ## Storage
 
-Every run is committed to a `_defrost` branch (configurable with
+Every run is committed to a `_defrost-v2` branch (configurable with
 `--data-branch`) in your repo. Clone the repo to get the history. Push the
-repo to share it. Concurrent runs from different machines append cleanly.
+repo to share it. Concurrent runs from different machines never conflict
+because each writer owns a unique filename (one file per run, named by its
+OTel `trace_id`).
 
 To experiment without touching git, pass `--no-persist` (don't store
 anything) or `--dev` (write to `.defrost-dev/` instead of the data branch).
@@ -110,15 +112,23 @@ anything) or `--dev` (write to `.defrost-dev/` instead of the data branch).
 For the curious — you do not need to know any of this to use defrost.
 
 The data branch is shaped like OpenTelemetry. One `defrost exec` invocation
-is one trace; the run is the root span; each test is a child span. Evals and
-metrics emitted during the run are persisted as OTel metric data points.
+is one trace; the run is the root span; each test is a child span. Evals
+and metrics emitted during the run are persisted as OTel metric data
+points. Each file is the canonical OTLP/Protobuf payload, zstd-compressed.
 
 ```
-_defrost branch
-├── traces/<span_name>.ndjson     # one OTel span per line (run + per-test)
-├── metrics/<metric_name>.ndjson  # one OTel metric data point per line
+_defrost-v2 branch
+├── traces/<YYYY>/<MM>/<DD>/<trace_id>.otlp.pb.zst    # one ExportTraceServiceRequest per run
+├── metrics/<YYYY>/<MM>/<DD>/<trace_id>.otlp.pb.zst   # one ExportMetricsServiceRequest per run
 └── suppressions.json
 ```
 
-`traces/` and `metrics/` files use Git's `merge=union` attribute so
-concurrent writers append without conflicts.
+Run-scoped attributes (commit, branch, author, command, OS/arch, run id,
+…) live exactly once on each file's `Resource`. The OTel span `name` is
+the canonical fully qualified test name — no lossy projections are stored
+alongside it. Compaction (collapsing many per-run files into one daily
+file) is on the roadmap.
+
+> **Migration note**: this is a hard cut from the original line-oriented
+> `_defrost` layout. Old `_defrost` branches are not migrated; users
+> repopulate by running CI under the new version.
