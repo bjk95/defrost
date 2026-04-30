@@ -203,7 +203,7 @@ def write_results(result):
 | defrost JSON field | Defrost output | Notes |
 |---|---|---|
 | `rows[i].row_index` | `test.case.name` → `"ragas_row_<i>"` | No richer name available without user labels |
-| `rows[i].scores[k]` (metric name `k`) | `gen_ai.evaluation.name` → `k`; metric name → `"eval." + k` | One metric per (row, scorer) |
+| `rows[i].scores[k]` (metric name `k`) | `gen_ai.evaluation.name` → `k`; metric name → `"eval." + scope + "." + k` (see below) | One metric per (row, scorer) |
 | `rows[i].scores[k]` (numeric value) | `gen_ai.evaluation.score.value`; gauge `NumberDataPoint.AsDouble` | |
 | threshold (none in RAGAS output) | omit `defrost.eval.threshold` | RAGAS doesn't surface per-metric thresholds in its result object |
 | judge model (none in RAGAS output) | omit `defrost.eval.judge_model` | RAGAS uses the user's LLM config; not in result object |
@@ -211,6 +211,13 @@ def write_results(result):
 There is no `success` boolean in the RAGAS result — RAGAS doesn't have a built-in
 pass/fail concept. The `gen_ai.evaluation.score.label` attribute is omitted (or set to
 `"none"` — decide at implementation time). Document this gap clearly in the metric.
+
+`scope` is the dot-joined repo-relative path that uniquely locates the eval inside
+the repo: `<runner.RepoRelCwd()>.<sourceFile>`, with empty segments dropped. For
+RAGAS `<sourceFile>` is the path written by `defrost_ragas.write_results()` (the
+JSON file defrost is reading), relative to the cwd. Example:
+`eval.tests/ragas/results.json.faithfulness`. The unscoped form `"eval." + k`
+is reserved for unit tests of the parser.
 
 ---
 

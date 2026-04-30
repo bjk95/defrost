@@ -171,7 +171,7 @@ Key uncertainties (see §11):
 | DeepEval field | Defrost output | Notes |
 |---|---|---|
 | `testCases[i].name` | `test.case.name` attribute | Verify it is the pytest node ID |
-| `metrics_data[j].name` | `gen_ai.evaluation.name` attribute; also `"eval." + name` as metric name | Normalise: lowercase, spaces → `_` |
+| `metrics_data[j].name` | `gen_ai.evaluation.name` attribute; also forms the leaf segment of the qualified metric name (see below) | Normalise: lowercase, spaces → `_` |
 | `metrics_data[j].score` | `gen_ai.evaluation.score.value` (float64); gauge `NumberDataPoint.AsDouble` | |
 | `metrics_data[j].success` | `gen_ai.evaluation.score.label` → `"pass"` or `"fail"` | |
 | `metrics_data[j].threshold` | `defrost.eval.threshold` | Omit attribute if field absent/null |
@@ -179,9 +179,14 @@ Key uncertainties (see §11):
 | `metrics_data[j].evaluation_model` | `defrost.eval.judge_model` | Omit attribute if absent/null |
 
 One `*metricspb.Metric` is emitted per `(testCase, metric_data entry)` pair. Metric name:
-`"eval." + normalised(metrics_data[j].name)`. Each metric carries exactly one
-`NumberDataPoint` (matches the `splitMetricByDataPoint` convention the persistence layer
-expects — see `internal/eval/promptfoo/parser.go`:`mapComponentResult`).
+`"eval." + scope + "." + normalised(metrics_data[j].name)`, where `scope` is the
+dot-joined repo-relative path that uniquely locates the eval inside the repo —
+`<runner.RepoRelCwd()>.<sourceFile>`, with empty segments dropped. For DeepEval
+`<sourceFile>` is the pytest module that produced the run (e.g. `tests/test_rag.py`).
+Example: `eval.tests/eval/test_rag.py.faithfulness`. The unscoped form
+`"eval." + name` is reserved for unit tests of the parser. Each metric carries
+exactly one `NumberDataPoint` (matches the `splitMetricByDataPoint` convention
+the persistence layer expects — see `internal/eval/promptfoo/parser.go`:`mapComponentResult`).
 
 ---
 

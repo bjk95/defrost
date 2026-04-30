@@ -108,7 +108,7 @@ func (a *Adapter) Run(cmd []string) ([]models.TestResult, []*metricspb.Metric, i
 		return nil, nil, 1
 	}
 
-	results, metrics, parseErr := parseLogDir(tempDir)
+	results, metrics, parseErr := parseLogDir(tempDir, runner.RepoRelCwd())
 	if parseErr != nil {
 		fmt.Fprintln(os.Stderr, "defrost:", parseErr)
 		if exitCode == 0 {
@@ -132,9 +132,11 @@ func (a *Adapter) Run(cmd []string) ([]models.TestResult, []*metricspb.Metric, i
 
 // parseLogDir scans dir for *.json files (Inspect's --log-format=json output)
 // and parses each one. Per-file decode failures are logged and skipped so a
-// single corrupt file doesn't drop the whole run. Returns error only on
-// directory listing failure.
-func parseLogDir(dir string) ([]models.TestResult, []*metricspb.Metric, error) {
+// single corrupt file doesn't drop the whole run. repoRelCwd is forwarded
+// to ParseFile, which combines it with each log's `eval.task_file` field
+// to form a per-file metric-name prefix. Returns error only on directory
+// listing failure.
+func parseLogDir(dir, repoRelCwd string) ([]models.TestResult, []*metricspb.Metric, error) {
 	matches, err := filepath.Glob(filepath.Join(dir, "*.json"))
 	if err != nil {
 		return nil, nil, fmt.Errorf("glob inspect log dir: %w", err)
@@ -149,7 +151,7 @@ func parseLogDir(dir string) ([]models.TestResult, []*metricspb.Metric, error) {
 			fmt.Fprintln(os.Stderr, "defrost: inspect: open", path, ":", err)
 			continue
 		}
-		tests, metrics, parseErr := ParseFile(f)
+		tests, metrics, parseErr := ParseFile(f, repoRelCwd)
 		f.Close()
 		if parseErr != nil {
 			fmt.Fprintln(os.Stderr, "defrost: inspect: parse", path, ":", parseErr)

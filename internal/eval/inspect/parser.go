@@ -29,8 +29,9 @@ type inspectDoc struct {
 }
 
 type inspectEval struct {
-	Task  string `json:"task"`
-	Model string `json:"model"`
+	Task     string `json:"task"`
+	TaskFile string `json:"task_file"`
+	Model    string `json:"model"`
 }
 
 type inspectSample struct {
@@ -53,7 +54,16 @@ type inspectScore struct {
 // sample plus one *metricspb.Metric per (sample, numeric scorer) pair. Scorers
 // whose value is non-numeric (Letter "C"/"I", compound objects) are skipped
 // with a stderr warning. Returns nil/nil/error only on JSON decode failure.
-func ParseFile(r io.Reader) ([]models.TestResult, []*metricspb.Metric, error) {
+//
+// repoRelCwd qualifies emitted metric names so the same task running from
+// two different directories in the same repo can't collapse into one
+// series. The full metric name is
+// `eval.<repoRelCwd>.<eval.task_file>.<eval.task>.<scorer>` with empty
+// segments dropped — `<task_file>` is read from the JSON itself rather than
+// the command line so multi-task runs (`inspect eval a.py b.py`) attribute
+// per-file. An empty repoRelCwd is the natural input from the parser-level
+// unit tests.
+func ParseFile(r io.Reader, repoRelCwd string) ([]models.TestResult, []*metricspb.Metric, error) {
 	var doc inspectDoc
 	if err := json.NewDecoder(r).Decode(&doc); err != nil {
 		return nil, nil, fmt.Errorf("parse inspect json: %w", err)
@@ -64,7 +74,7 @@ func ParseFile(r io.Reader) ([]models.TestResult, []*metricspb.Metric, error) {
 		metrics []*metricspb.Metric
 	)
 	for _, s := range doc.Samples {
-		tr, m := mapSample(s, doc.Eval.Task, doc.Eval.Model, now)
+		tr, m := mapSample(s, doc.Eval.Task, doc.Eval.TaskFile, doc.Eval.Model, repoRelCwd, now)
 		tests = append(tests, tr)
 		metrics = append(metrics, m...)
 	}
@@ -75,7 +85,7 @@ func ParseFile(r io.Reader) ([]models.TestResult, []*metricspb.Metric, error) {
 // sample. Pass/fail is the conjunction of all numeric scorers clearing
 // passThreshold; a sample with no numeric scorers is treated as passed (it
 // ran without scoring failures).
-func mapSample(s inspectSample, task, model string, now uint64) (models.TestResult, []*metricspb.Metric) {
+func mapSample(s inspectSample, task, taskFile, model, repoRelCwd string, now uint64) (models.TestResult, []*metricspb.Metric) {
 	caseName := sampleCaseName(s.ID, task)
 
 	scorerNames := make([]string, 0, len(s.Scores))
@@ -100,7 +110,7 @@ func mapSample(s inspectSample, task, model string, now uint64) (models.TestResu
 		if v < passThreshold {
 			pass = false
 		}
-		metrics = append(metrics, buildMetric(name, score, caseName, task, model, v, now))
+		metrics = append(metrics, buildMetric(name, score, caseName, task, taskFile, model, repoRelCwd, v, now))
 	}
 	if !hasNumeric && len(scorerNames) == 0 {
 		fmt.Fprintf(os.Stderr,
@@ -117,7 +127,7 @@ func mapSample(s inspectSample, task, model string, now uint64) (models.TestResu
 	return tr, metrics
 }
 
-func buildMetric(name string, s inspectScore, caseName, task, model string, score float64, now uint64) *metricspb.Metric {
+func buildMetric(name string, s inspectScore, caseName, task, taskFile, model, repoRelCwd string, score float64, now uint64) *metricspb.Metric {
 	attrs := []*commonpb.KeyValue{
 		models.StringAttr("gen_ai.evaluation.name", name),
 		models.DoubleAttr("gen_ai.evaluation.score.value", score),
@@ -131,8 +141,21 @@ func buildMetric(name string, s inspectScore, caseName, task, model string, scor
 	if model != "" {
 		attrs = append(attrs, models.StringAttr("gen_ai.request.model", model))
 	}
+
+	// Fully-qualified metric name:
+	// eval.<repoRelCwd>.<taskFile>.<task>.<scorer>, with empty segments
+	// dropped. See docs/specs/2026-04-30-inspect-ai-adapter.md §6.
+	segs := make([]string, 0, 4)
+	for _, p := range []string{repoRelCwd, taskFile, task} {
+		if p != "" {
+			segs = append(segs, p)
+		}
+	}
+	segs = append(segs, name)
+	metricName := "eval." + strings.Join(segs, ".")
+
 	return &metricspb.Metric{
-		Name: "eval." + name,
+		Name: metricName,
 		Data: &metricspb.Metric_Gauge{Gauge: &metricspb.Gauge{
 			DataPoints: []*metricspb.NumberDataPoint{{
 				TimeUnixNano: now,

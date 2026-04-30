@@ -200,7 +200,7 @@ Aggregate scores are summaries of the per-sample data and would double-count.
 | `eval.task` | `test.suite.name` attribute | Stable across all samples in a file |
 | `samples[i].id` | `TestResult.Id` (via `test.case.name`) | Convert int to string: `"sample_<id>"` |
 | `samples[i].id` | `test.case.name` attribute on metrics | Same value |
-| `samples[i].scores[k].value` (numeric) | `gen_ai.evaluation.score.value`; metric name `"eval.<k>"` | Skip if not parseable as float64 |
+| `samples[i].scores[k].value` (numeric) | `gen_ai.evaluation.score.value`; metric name `"eval." + scope + "." + eval.task + "." + k` (see below) | Skip if not parseable as float64 |
 | `samples[i].scores[k].value` (Letter `"C"`/`"I"`) | Skip — emit stderr warning | See §11 |
 | scorer name `k` | `gen_ai.evaluation.name` attribute | |
 | `samples[i].scores[k].explanation` | `gen_ai.evaluation.explanation` | May be empty |
@@ -212,6 +212,29 @@ Aggregate scores are summaries of the per-sample data and would double-count.
 sample passes if all its numeric scorers are above their respective thresholds, or by a
 simple majority, or by the `correct` boolean if present. The exact pass/fail rule for
 `TestResult.Passed` must be decided at implementation time — see §11.
+
+**Metric name scope.** The fully-qualified metric name is
+`eval.<repoRelCwd>.<eval.task_file>.<eval.task>.<scorer>`, with empty segments
+dropped and joined by `.`. Components:
+
+- `<repoRelCwd>` — `runner.RepoRelCwd()`. Empty when run from the repo root.
+- `<eval.task_file>` — read directly from each JSON log's `eval.task_file`
+  field (Inspect AI's documented log schema), **not** parsed from the command
+  line. This matters in two ways:
+  1. Multi-task runs (`inspect eval a.py b.py`) emit one log per task; each
+     log carries its own `task_file`, so metrics attribute per-file rather
+     than collapsing under whichever path appeared first in argv.
+  2. Defrost-injected `--log-dir` points at a per-run tempdir and would break
+     history continuity if used as the source path.
+- `<eval.task>` — the task name from the JSON log's `eval.task` field (the
+  `@task`-decorated function name), included so two tasks defined in the same
+  file don't collide on overlapping scorer names.
+- `<scorer>` — the scorer key `k`.
+
+Example: `eval.examples/inspect.tasks/capitals.py.capital_cities.match`.
+Parser-level unit tests pass an empty `repoRelCwd` and exercise the form
+`eval.<eval.task_file>.<eval.task>.<scorer>` (or `eval.<eval.task>.<scorer>`
+when the fixture omits `task_file`).
 
 ---
 

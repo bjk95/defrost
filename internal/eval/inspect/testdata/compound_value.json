@@ -1,6 +1,7 @@
 {
   "eval": {
     "task": "compound_eval",
+    "task_file": "tasks/compound.py",
     "model": "openai/gpt-4o"
   },
   "samples": [

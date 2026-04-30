@@ -1,6 +1,7 @@
 {
   "eval": {
     "task": "qa_eval",
+    "task_file": "tasks/qa.py",
     "model": "anthropic/claude-3-5-sonnet"
   },
   "samples": [

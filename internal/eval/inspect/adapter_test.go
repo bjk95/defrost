@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+
+	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
 )
 
 func TestMatches(t *testing.T) {
@@ -148,6 +150,13 @@ func itoa(n int) string {
 
 func TestRunHappyPath(t *testing.T) {
 	bin := fakeChildScript(t, "smoke.json")
+
+	// Pin cwd outside any git repo so RepoRelCwd() returns "" and the
+	// metric scope is driven entirely by the user-supplied task file.
+	dir := t.TempDir()
+	t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(dir))
+	t.Chdir(dir)
+
 	a := &Adapter{}
 	tests, metrics, code := a.Run([]string{bin, "eval", "task.py"})
 	if code != 0 {
@@ -159,15 +168,24 @@ func TestRunHappyPath(t *testing.T) {
 	if len(metrics) != 2 {
 		t.Fatalf("expected 2 metrics, got %d", len(metrics))
 	}
-	if metrics[0].Name != "eval.match" {
-		t.Fatalf("expected eval.match, got %q", metrics[0].Name)
+	// Task file comes from the JSON's `eval.task_file`, not the cmd-line.
+	want := "eval.tasks/capitals.py.capital_cities.match"
+	if metrics[0].Name != want {
+		t.Fatalf("expected %s, got %q", want, metrics[0].Name)
 	}
 }
 
 func TestRunMultipleLogFiles(t *testing.T) {
 	// Inspect can write multiple log files when given multiple tasks; the
-	// adapter must aggregate results across all *.json files in the log dir.
+	// adapter must aggregate results across all *.json files in the log dir
+	// AND attribute each log's metrics to that log's own task_file (not the
+	// first task file from cmd args).
 	bin := fakeChildScript(t, "smoke.json", "multi_scorer.json")
+
+	dir := t.TempDir()
+	t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(dir))
+	t.Chdir(dir)
+
 	a := &Adapter{}
 	tests, metrics, code := a.Run([]string{bin, "eval", "task1.py", "task2.py"})
 	if code != 0 {
@@ -179,6 +197,33 @@ func TestRunMultipleLogFiles(t *testing.T) {
 	if len(metrics) != 4 {
 		t.Fatalf("expected 4 metrics (2 + 2), got %d", len(metrics))
 	}
+
+	// Each metric must carry the task_file from its own JSON log — not the
+	// first task path from cmd args. smoke.json -> tasks/capitals.py;
+	// multi_scorer.json -> tasks/qa.py.
+	want := map[string]bool{
+		"eval.tasks/capitals.py.capital_cities.match": false,
+		"eval.tasks/qa.py.qa_eval.accuracy":           false,
+		"eval.tasks/qa.py.qa_eval.f1_score":           false,
+	}
+	for _, m := range metrics {
+		if _, ok := want[m.Name]; ok {
+			want[m.Name] = true
+		}
+	}
+	for k, ok := range want {
+		if !ok {
+			t.Fatalf("missing per-file-attributed metric %q in %v", k, metricNames(metrics))
+		}
+	}
+}
+
+func metricNames(ms []*metricspb.Metric) []string {
+	names := make([]string, 0, len(ms))
+	for _, m := range ms {
+		names = append(names, m.Name)
+	}
+	return names
 }
 
 func TestRunFailingChildPropagatesExit(t *testing.T) {

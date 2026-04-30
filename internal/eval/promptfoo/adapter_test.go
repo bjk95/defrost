@@ -130,6 +130,45 @@ func TestUserJSONOutput(t *testing.T) {
 	}
 }
 
+func TestUserConfigPaths(t *testing.T) {
+	cases := []struct {
+		args []string
+		want []string
+	}{
+		{[]string{"eval", "-c", "promptfooconfig.yaml"}, []string{"promptfooconfig.yaml"}},
+		{[]string{"eval", "--config", "configs/run.yaml"}, []string{"configs/run.yaml"}},
+		{[]string{"eval", "--config=configs/run.yaml"}, []string{"configs/run.yaml"}},
+		{[]string{"eval", "-o", "out.json"}, nil},
+		{[]string{"eval", "-c"}, nil}, // dangling -c with no value
+		{[]string{"eval", "-c", "first.yaml", "-c", "second.yaml"}, []string{"first.yaml", "second.yaml"}},
+		{[]string{"eval", "-c", "a.yaml", "--config=b.yaml", "--config", "c.yaml"}, []string{"a.yaml", "b.yaml", "c.yaml"}},
+	}
+	for _, tc := range cases {
+		got := userConfigPaths(tc.args)
+		if !equalSlices(got, tc.want) && !(len(got) == 0 && len(tc.want) == 0) {
+			t.Fatalf("userConfigPaths(%v) = %v, want %v", tc.args, got, tc.want)
+		}
+	}
+}
+
+func TestJoinScope(t *testing.T) {
+	cases := []struct {
+		parts []string
+		want  string
+	}{
+		{[]string{"examples/promptfoo", "promptfooconfig.yaml"}, "examples/promptfoo.promptfooconfig.yaml"},
+		{[]string{"", "promptfooconfig.yaml"}, "promptfooconfig.yaml"},
+		{[]string{"examples/promptfoo", ""}, "examples/promptfoo"},
+		{[]string{"", ""}, ""},
+	}
+	for _, tc := range cases {
+		got := joinScope(tc.parts...)
+		if got != tc.want {
+			t.Fatalf("joinScope(%v) = %q, want %q", tc.parts, got, tc.want)
+		}
+	}
+}
+
 func equalSlices(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
@@ -144,6 +183,7 @@ func equalSlices(a, b []string) bool {
 
 // fakeChildScript writes a small shell script that copies a fixture to the
 // path given after `--output`. Used to stub out `promptfoo eval` in Run tests.
+// The fixture path is absolutised so tests are free to t.Chdir before Run.
 func fakeChildScript(t *testing.T, fixture string) string {
 	t.Helper()
 	if runtime.GOOS == "windows" {
@@ -151,7 +191,10 @@ func fakeChildScript(t *testing.T, fixture string) string {
 	}
 	dir := t.TempDir()
 	scriptPath := filepath.Join(dir, "fake-promptfoo")
-	fixtureSrc := filepath.Join("testdata", fixture)
+	fixtureSrc, err := filepath.Abs(filepath.Join("testdata", fixture))
+	if err != nil {
+		t.Fatalf("abs fixture: %v", err)
+	}
 	body := `#!/usr/bin/env bash
 set -e
 out=""
@@ -184,6 +227,13 @@ cp "` + fixtureSrc + `" "$out"
 
 func TestRunHappyPath(t *testing.T) {
 	bin := fakeChildScript(t, "single_assertion.json")
+
+	// Pin cwd outside any git repo so RepoRelCwd() returns "" and the
+	// metric scope is driven entirely by the user-supplied -c flag.
+	dir := t.TempDir()
+	t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(dir))
+	t.Chdir(dir)
+
 	a := &Adapter{}
 	tests, metrics, code := a.Run([]string{bin, "eval", "-c", "x.yaml"})
 	if code != 0 {
@@ -192,8 +242,30 @@ func TestRunHappyPath(t *testing.T) {
 	if len(tests) != 1 || !tests[0].Passed {
 		t.Fatalf("expected 1 passing test, got %v", tests)
 	}
-	if len(metrics) != 1 || metrics[0].Name != "eval.contains" {
-		t.Fatalf("expected eval.contains metric, got %v", metrics)
+	if len(metrics) != 1 || metrics[0].Name != "eval.x.yaml.contains" {
+		t.Fatalf("expected eval.x.yaml.contains metric, got %v", metrics)
+	}
+}
+
+func TestRunMultipleConfigsAppearInScope(t *testing.T) {
+	// Promptfoo accepts multiple -c flags to merge configs into one run.
+	// Defrost must reflect every config in the metric scope so two such
+	// runs (-c A B vs -c B A vs -c A only) don't all collide on one
+	// series.
+	bin := fakeChildScript(t, "single_assertion.json")
+
+	dir := t.TempDir()
+	t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(dir))
+	t.Chdir(dir)
+
+	a := &Adapter{}
+	_, metrics, code := a.Run([]string{bin, "eval", "-c", "a.yaml", "-c", "b.yaml"})
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d", code)
+	}
+	want := "eval.a.yaml.b.yaml.contains"
+	if len(metrics) != 1 || metrics[0].Name != want {
+		t.Fatalf("expected %s, got %v", want, metrics)
 	}
 }
 

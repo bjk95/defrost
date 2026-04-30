@@ -1,6 +1,7 @@
 {
   "eval": {
     "task": "capital_cities",
+    "task_file": "tasks/capitals.py",
     "model": "openai/gpt-4o",
     "dataset": { "name": "capitals" }
   },

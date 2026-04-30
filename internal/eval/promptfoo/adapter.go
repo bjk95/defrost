@@ -123,6 +123,40 @@ func parseExecBase(tok string) string {
 	return base
 }
 
+// joinScope joins non-empty path segments with "." for use as the
+// repo-unique prefix in metric names emitted by this adapter.
+func joinScope(parts ...string) string {
+	var out []string
+	for _, p := range parts {
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return strings.Join(out, ".")
+}
+
+// userConfigPaths returns every `-c` / `--config` / `--config=<v>` value
+// in args, in the order they appear. Promptfoo accepts multiple `-c`
+// flags to merge several configs into one run, so the metric scope must
+// include all of them — taking only the first would label results from
+// the other configs as if they came from the first. Returns nil when no
+// `-c` flag is present; callers substitute promptfoo's default
+// (`promptfooconfig.yaml`).
+func userConfigPaths(args []string) []string {
+	var paths []string
+	for i, a := range args {
+		switch {
+		case a == "--config" || a == "-c":
+			if i+1 < len(args) {
+				paths = append(paths, args[i+1])
+			}
+		case strings.HasPrefix(a, "--config="):
+			paths = append(paths, strings.TrimPrefix(a, "--config="))
+		}
+	}
+	return paths
+}
+
 // userOutputPaths returns every `--output` / `-o` / `--output=<v>` value
 // in args, in order. Promptfoo accepts multiple output flags producing
 // different formats simultaneously (json + html + csv etc.).
@@ -234,7 +268,13 @@ func (a *Adapter) Run(cmd []string) ([]models.TestResult, []*metricspb.Metric, i
 	}
 	defer f.Close()
 
-	tests, metrics, parseErr := Parse(f)
+	configPaths := userConfigPaths(cmd[1:])
+	if len(configPaths) == 0 {
+		configPaths = []string{"promptfooconfig.yaml"}
+	}
+	scope := joinScope(append([]string{runner.RepoRelCwd()}, configPaths...)...)
+
+	tests, metrics, parseErr := Parse(f, scope)
 	if parseErr != nil {
 		fmt.Fprintln(os.Stderr, "defrost:", parseErr)
 		if exitCode == 0 {
