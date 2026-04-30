@@ -31,7 +31,7 @@ type promptfooResult struct {
 }
 
 type promptfooResponse struct {
-	Output string `json:"output"`
+	Output any `json:"output"`
 }
 
 type promptfooProvider struct {
@@ -129,8 +129,26 @@ func providerLabel(p promptfooProvider) string {
 	return p.ID
 }
 
+// outputAsString renders Promptfoo's loosely-typed response.output as a
+// string for the TestResult.Output field. Strings pass through verbatim;
+// nil becomes empty; everything else is rendered as canonical JSON so
+// structured outputs survive into the human-readable trace.
+func outputAsString(o any) string {
+	switch v := o.(type) {
+	case nil:
+		return ""
+	case string:
+		return v
+	}
+	b, err := json.Marshal(o)
+	if err != nil {
+		return fmt.Sprintf("%v", o)
+	}
+	return string(b)
+}
+
 func mapResult(r promptfooResult, caseName string) models.TestResult {
-	output := r.Response.Output
+	output := outputAsString(r.Response.Output)
 	if !r.Success {
 		var fails []string
 		for _, c := range r.GradingResult.ComponentResults {

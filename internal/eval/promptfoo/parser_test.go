@@ -257,6 +257,28 @@ func TestParseEmptyVarsKeepsCasesDistinct(t *testing.T) {
 	}
 }
 
+func TestParseStructuredResponseOutput(t *testing.T) {
+	tests, _, err := Parse(bytes.NewReader(loadFixture(t, "structured_output.json")))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(tests) != 3 {
+		t.Fatalf("expected 3 tests, got %d", len(tests))
+	}
+	// Object output: should be JSON-encoded.
+	if tests[0].Output != `{"answer":"Paris","confidence":0.92}` {
+		t.Fatalf("object output = %q", tests[0].Output)
+	}
+	// Array output: should be JSON-encoded.
+	if tests[1].Output != `[1,2,3]` {
+		t.Fatalf("array output = %q", tests[1].Output)
+	}
+	// Null output: should be empty string.
+	if tests[2].Output != "" {
+		t.Fatalf("null output = %q (want empty)", tests[2].Output)
+	}
+}
+
 func TestParseSameVarsDifferentProvidersGetDistinctIds(t *testing.T) {
 	tests, _, err := Parse(bytes.NewReader(loadFixture(t, "cross_product.json")))
 	if err != nil {
