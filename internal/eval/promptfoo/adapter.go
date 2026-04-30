@@ -38,11 +38,13 @@ func (a *Adapter) Matches(cmd []string) bool {
 		if base != "promptfoo" {
 			continue
 		}
-		// Need `eval` as the next positional token.
+		// Need `eval` as the next positional token. Don't bail here —
+		// `promptfoo` may appear earlier as a flag value (e.g.
+		// `npx --package promptfoo -- promptfoo eval`); the actual
+		// executable token may be later in cmd.
 		if i+1 < len(cmd) && cmd[i+1] == "eval" {
 			return true
 		}
-		return false
 	}
 	return false
 }

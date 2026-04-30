@@ -22,6 +22,8 @@ func TestMatches(t *testing.T) {
 		{"pnpm dlx", []string{"pnpm", "dlx", "promptfoo", "eval"}, true},
 		{"yarn", []string{"yarn", "promptfoo", "eval"}, true},
 		{"node_modules bin", []string{"./node_modules/.bin/promptfoo", "eval"}, true},
+		{"npx --package", []string{"npx", "--package", "promptfoo", "--", "promptfoo", "eval"}, true},
+		{"npx --package no exec", []string{"npx", "--package", "promptfoo"}, false},
 		{"missing eval subcommand", []string{"promptfoo"}, false},
 		{"different subcommand", []string{"promptfoo", "view"}, false},
 		{"different subcommand between promptfoo and eval", []string{"promptfoo", "init", "eval"}, false},
