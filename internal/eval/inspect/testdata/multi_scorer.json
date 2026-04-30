@@ -1,0 +1,29 @@
+{
+  "eval": {
+    "task": "multi_scorer_task",
+    "model": "openai/gpt-4o-mini"
+  },
+  "samples": [
+    {
+      "id": 1,
+      "output": { "completion": "Paris is the capital of France." },
+      "scores": {
+        "accuracy": {
+          "value": 1.0,
+          "answer": "Paris",
+          "explanation": "Matches"
+        },
+        "f1_score": {
+          "value": 0.85,
+          "answer": "Paris is",
+          "explanation": "Token overlap 0.85"
+        },
+        "letter_grade": {
+          "value": "C",
+          "answer": "Paris",
+          "explanation": "Letter — should be skipped"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "eval": {
+    "task": "no_scores_task",
+    "model": "mockllm/model"
+  },
+  "samples": [
+    {
+      "id": 7,
+      "output": { "completion": "raw output, no scoring ran" }
+    }
+  ]
+}

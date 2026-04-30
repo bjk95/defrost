@@ -1,0 +1,30 @@
+{
+  "eval": {
+    "task": "letter_grades",
+    "model": "anthropic/claude-3.5"
+  },
+  "samples": [
+    {
+      "id": 1,
+      "output": { "completion": "Paris" },
+      "scores": {
+        "exact_match": {
+          "value": "C",
+          "answer": "Paris",
+          "explanation": "Correct (Letter)"
+        }
+      }
+    },
+    {
+      "id": 2,
+      "output": { "completion": "Wrong" },
+      "scores": {
+        "exact_match": {
+          "value": "I",
+          "answer": "Wrong",
+          "explanation": "Incorrect (Letter)"
+        }
+      }
+    }
+  ]
+}

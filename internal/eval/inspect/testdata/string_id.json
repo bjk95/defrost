@@ -1,0 +1,30 @@
+{
+  "eval": {
+    "task": "string_id_task",
+    "model": "openai/gpt-4o"
+  },
+  "samples": [
+    {
+      "id": "qa_001",
+      "output": { "completion": "answer-a" },
+      "scores": {
+        "match": {
+          "value": 1,
+          "answer": "answer-a",
+          "explanation": ""
+        }
+      }
+    },
+    {
+      "id": "qa_002",
+      "output": { "completion": "answer-b" },
+      "scores": {
+        "match": {
+          "value": 0,
+          "answer": "answer-b",
+          "explanation": ""
+        }
+      }
+    }
+  ]
+}
