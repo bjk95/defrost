@@ -283,3 +283,41 @@ func TestLooksLikeJestScript(t *testing.T) {
 		})
 	}
 }
+
+func TestHasUserJSONFlag(t *testing.T) {
+	cases := []struct {
+		cmd  []string
+		want bool
+	}{
+		{[]string{"jest"}, false},
+		{[]string{"jest", "tests/"}, false},
+		{[]string{"jest", "--json"}, true},
+		{[]string{"jest", "--json=true"}, true},
+		{[]string{"jest", "--outputFile"}, true},
+		{[]string{"jest", "--outputFile=foo.json"}, true},
+	}
+	for _, tc := range cases {
+		if got := hasUserJSONFlag(tc.cmd); got != tc.want {
+			t.Errorf("hasUserJSONFlag(%v) = %v, want %v", tc.cmd, got, tc.want)
+		}
+	}
+}
+
+func TestHasUserWatchFlag(t *testing.T) {
+	cases := []struct {
+		cmd  []string
+		want bool
+	}{
+		{[]string{"jest"}, false},
+		{[]string{"jest", "tests/"}, false},
+		{[]string{"jest", "--watch"}, true},
+		{[]string{"jest", "--watchAll"}, true},
+		{[]string{"jest", "--watch=true"}, true},
+		{[]string{"jest", "--watchAll=true"}, true},
+	}
+	for _, tc := range cases {
+		if got := hasUserWatchFlag(tc.cmd); got != tc.want {
+			t.Errorf("hasUserWatchFlag(%v) = %v, want %v", tc.cmd, got, tc.want)
+		}
+	}
+}

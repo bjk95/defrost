@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Implemented (2026-04-30).** During Task 7's smoke test, the parser was found to reference fields from the wrong jest documentation surface (`testResultsProcessor` config) instead of the actual `--json --outputFile` CLI output. The fixtures in this plan (Task 1) and the parser snippet (Task 3) reflect the original incorrect shape. The merged code at `internal/javascript/jest/parser.go` plus the testdata fixtures shipped with commit `0d8b5a1` are the source of truth. See the spec's "Errata" section for the four shape corrections (`testFilePath`→`name`, nested `testResults`→`assertionResults`, no `testExecError`, no `startAt`).
+
 **Goal:** Add jest support to defrost so `defrost exec jest tests/` (and the common JS/TS invocation forms — including `npm test` / `yarn test` / `pnpm test`) wraps a jest run and emits parsed `models.TestResult` records, with no extra setup beyond defrost + jest already installed.
 
 **Architecture:** Slot a third adapter into the existing `internal/runner` registry. The adapter auto-injects `--json --outputFile=<tempfile>`, parses jest's JSON document with `encoding/json`, and emits `[]models.TestResult`. For `npm test` / `yarn test` / `pnpm test` style invocations (form (d)), the matcher reads `./package.json` and accepts only when `scripts.<name>` is strict-jest-shaped (allowing leading `KEY=value` env-var tokens, rejecting wrappers and composite shell commands).

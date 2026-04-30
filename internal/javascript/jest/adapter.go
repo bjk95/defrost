@@ -251,7 +251,7 @@ func hasUserJSONFlag(cmd []string) bool {
 		if a == "--json" || a == "--outputFile" {
 			return true
 		}
-		if strings.HasPrefix(a, "--outputFile=") {
+		if strings.HasPrefix(a, "--json=") || strings.HasPrefix(a, "--outputFile=") {
 			return true
 		}
 	}
@@ -261,6 +261,9 @@ func hasUserJSONFlag(cmd []string) bool {
 func hasUserWatchFlag(cmd []string) bool {
 	for _, a := range cmd {
 		if a == "--watch" || a == "--watchAll" {
+			return true
+		}
+		if strings.HasPrefix(a, "--watch=") || strings.HasPrefix(a, "--watchAll=") {
 			return true
 		}
 	}
