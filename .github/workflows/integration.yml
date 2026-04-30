@@ -279,7 +279,7 @@ jobs:
       - name: Run defrost against examples/promptfoo
         run: |
           cd examples/promptfoo
-          ../../defrost exec promptfoo eval -c promptfooconfig.yaml --no-cache | tee out.txt
+          ../../defrost exec promptfoo eval -c promptfooconfig.yaml --no-cache 2>&1 | tee out.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
