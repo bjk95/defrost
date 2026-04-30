@@ -340,7 +340,6 @@ jobs:
         run: |
           set -e
           ./defrost suppress add 'examples/inspect¬sample_2'
-          ./defrost suppress list
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
