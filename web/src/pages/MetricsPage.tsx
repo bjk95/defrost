@@ -17,6 +17,7 @@ import {
 import type { RunSummary } from "@/types";
 import { SearchInput } from "@/components/Controls";
 import { SectionLabel } from "@/components/Primitives";
+import { MetricsEmpty } from "@/components/EmptyStates";
 
 export function MetricsPage() {
   const navigate = useNavigate();
@@ -56,14 +57,7 @@ export function MetricsPage() {
       </p>
     );
 
-  if (metrics.length === 0) {
-    return (
-      <div style={{ padding: "48px 24px", textAlign: "center", color: "var(--fg-muted)" }}>
-        No metrics ingested yet — defrost will populate this view as soon as your tests emit OTel
-        metrics.
-      </div>
-    );
-  }
+  if (metrics.length === 0) return <MetricsEmpty />;
 
   const onOpenRun = (rid: string) =>
     navigate(`/run?id=${encodeURIComponent(rid)}`);

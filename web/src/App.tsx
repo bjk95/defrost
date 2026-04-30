@@ -3,6 +3,7 @@ import { Link, Route, Routes, useLocation } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { getTests } from "@/api";
 import { Icon, Logo } from "@/components/Icons";
+import { FailureScreen, failureKindFromMessage } from "@/components/EmptyStates";
 import { suppression } from "@/lib/utils";
 import { TestsPage } from "@/pages/TestsPage";
 import { TestDetailPage } from "@/pages/TestDetailPage";
@@ -42,8 +43,25 @@ export default function App() {
     location.pathname.startsWith("/runs") || location.pathname === "/run";
   const onTests = !onSuppressions && !onRuns && !onMetrics;
 
-  const { data } = useQuery({ queryKey: ["tests"], queryFn: getTests });
+  const { data, error, refetch } = useQuery({
+    queryKey: ["tests"],
+    queryFn: getTests,
+  });
   const suppressionCount = useSuppressionCount();
+  const [offline, setOffline] = useState(false);
+
+  if (error && !offline) {
+    const msg = (error as Error).message;
+    return (
+      <FailureScreen
+        kind={failureKindFromMessage(msg)}
+        stderr={msg}
+        onRetry={() => refetch()}
+        onContinueOffline={() => setOffline(true)}
+        onShowQuickstart={() => setOffline(true)}
+      />
+    );
+  }
 
   return (
     <div
