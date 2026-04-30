@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/bjk95/defrost/internal/models"
+	"github.com/bjk95/defrost/internal/runner"
 )
 
 // ExecuteGoTest runs cmd, parses test events from its stdout, and returns
@@ -25,18 +26,21 @@ func ExecuteGoTest(cmd []string) ([]models.TestResult, int) {
 		fmt.Fprintln(os.Stderr, err)
 		return nil, 1
 	}
+	c.Stdin = os.Stdin
 	c.Stderr = os.Stderr
 
 	if err := c.Start(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return nil, 1
 	}
+	stop := runner.ForwardSignals(c)
+	defer stop()
 
 	results, parseErr := Parse(stdout)
 	waitErr := c.Wait()
 
 	if parseErr != nil {
-		fmt.Fprintln(os.Stderr, parseErr)
+		fmt.Fprintln(os.Stderr, "defrost: parse go test output:", parseErr)
 	}
 
 	if e, ok := waitErr.(*exec.ExitError); ok {

@@ -217,6 +217,23 @@ func TestExec_FileErrorAlongsideSuppressedTest_NotRewritten(t *testing.T) {
 	}
 }
 
+// TestHandleExecution_UnknownCommand_FallsThroughToPassthrough confirms that
+// `defrost exec <anything>` runs the user's command via the passthrough
+// adapter rather than refusing with exit 2 when no framework adapter
+// matches. Regression-protects the "wrap any run command" guarantee.
+func TestHandleExecution_UnknownCommand_FallsThroughToPassthrough(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh not available")
+	}
+	// Persist off so we don't need a git repo. The command exits 9 — the
+	// passthrough adapter must propagate that, not synthesise its own
+	// "unknown command" exit 2.
+	got := HandleExecution([]string{"sh", "-c", "exit 9"}, ExecOpts{Persist: false})
+	if got != 9 {
+		t.Errorf("want exit 9 from passthrough, got %d", got)
+	}
+}
+
 func TestExec_BuildOnlyFailure_NotSuppressed(t *testing.T) {
 	repoDir := makeRepo(t)
 	// "buildErr" is the only ID present; suppress it. We must NOT rewrite
