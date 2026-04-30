@@ -291,6 +291,12 @@ func TestMetricsToEntries_Histogram(t *testing.T) {
 	if len(dp.BucketCounts) != 3 || len(dp.ExplicitBounds) != 2 {
 		t.Errorf("buckets shape: counts=%v bounds=%v", dp.BucketCounts, dp.ExplicitBounds)
 	}
+	if len(dp.Exemplars) != 1 {
+		t.Fatalf("histogram should carry 1 trace exemplar, got %d", len(dp.Exemplars))
+	}
+	if !bytes.Equal(dp.Exemplars[0].TraceId, stubTraceID) {
+		t.Errorf("histogram exemplar trace_id: %x", dp.Exemplars[0].TraceId)
+	}
 }
 
 func TestMetricsToEntries_ExponentialHistogram(t *testing.T) {
@@ -317,8 +323,15 @@ func TestMetricsToEntries_ExponentialHistogram(t *testing.T) {
 	if !ok {
 		t.Fatalf("not an exponential histogram: %T", got.Data)
 	}
-	if exp.ExponentialHistogram.DataPoints[0].Count != 4 {
-		t.Errorf("count: %d", exp.ExponentialHistogram.DataPoints[0].Count)
+	expDP := exp.ExponentialHistogram.DataPoints[0]
+	if expDP.Count != 4 {
+		t.Errorf("count: %d", expDP.Count)
+	}
+	if len(expDP.Exemplars) != 1 {
+		t.Fatalf("exp histogram should carry 1 trace exemplar, got %d", len(expDP.Exemplars))
+	}
+	if !bytes.Equal(expDP.Exemplars[0].TraceId, stubTraceID) {
+		t.Errorf("exp histogram exemplar trace_id: %x", expDP.Exemplars[0].TraceId)
 	}
 }
 

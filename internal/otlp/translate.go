@@ -192,6 +192,7 @@ func splitMetricByDataPoint(m *metricspb.Metric, run models.RunContext) []*metri
 	case *metricspb.Metric_Histogram:
 		out := make([]*metricspb.Metric, 0, len(d.Histogram.DataPoints))
 		for _, dp := range d.Histogram.DataPoints {
+			dp = stampHistogramDataPointTraceID(dp, run)
 			out = append(out, &metricspb.Metric{
 				Name:        m.Name,
 				Description: m.Description,
@@ -206,6 +207,7 @@ func splitMetricByDataPoint(m *metricspb.Metric, run models.RunContext) []*metri
 	case *metricspb.Metric_ExponentialHistogram:
 		out := make([]*metricspb.Metric, 0, len(d.ExponentialHistogram.DataPoints))
 		for _, dp := range d.ExponentialHistogram.DataPoints {
+			dp = stampExpHistogramDataPointTraceID(dp, run)
 			out = append(out, &metricspb.Metric{
 				Name:        m.Name,
 				Description: m.Description,
@@ -244,4 +246,54 @@ func stampDataPointTraceID(dp *metricspb.NumberDataPoint, run models.RunContext)
 	}
 	cloned.Exemplars = append(cloned.Exemplars, exemplar)
 	return cloned
+}
+
+// stampHistogramDataPointTraceID attaches the run's trace_id to a
+// histogram data point as an exemplar. The exemplar's value is the
+// distribution's mean (sum/count) when count > 0, mirroring how OTel
+// SDKs typically emit at-least-one exemplar per histogram bucket; we
+// emit one per data point because the run's trace is the correlation
+// target, not a specific bucket.
+func stampHistogramDataPointTraceID(dp *metricspb.HistogramDataPoint, run models.RunContext) *metricspb.HistogramDataPoint {
+	if len(run.TraceID) == 0 {
+		return dp
+	}
+	cloned := proto.Clone(dp).(*metricspb.HistogramDataPoint)
+	cloned.Exemplars = append(cloned.Exemplars, &metricspb.Exemplar{
+		TimeUnixNano: dp.TimeUnixNano,
+		TraceId:      run.TraceID,
+		SpanId:       run.RootSpanID,
+		Value:        &metricspb.Exemplar_AsDouble{AsDouble: histogramMean(dp)},
+	})
+	return cloned
+}
+
+// stampExpHistogramDataPointTraceID is the exponential-histogram twin of
+// stampHistogramDataPointTraceID.
+func stampExpHistogramDataPointTraceID(dp *metricspb.ExponentialHistogramDataPoint, run models.RunContext) *metricspb.ExponentialHistogramDataPoint {
+	if len(run.TraceID) == 0 {
+		return dp
+	}
+	cloned := proto.Clone(dp).(*metricspb.ExponentialHistogramDataPoint)
+	cloned.Exemplars = append(cloned.Exemplars, &metricspb.Exemplar{
+		TimeUnixNano: dp.TimeUnixNano,
+		TraceId:      run.TraceID,
+		SpanId:       run.RootSpanID,
+		Value:        &metricspb.Exemplar_AsDouble{AsDouble: expHistogramMean(dp)},
+	})
+	return cloned
+}
+
+func histogramMean(dp *metricspb.HistogramDataPoint) float64 {
+	if dp.Count == 0 || dp.Sum == nil {
+		return 0
+	}
+	return *dp.Sum / float64(dp.Count)
+}
+
+func expHistogramMean(dp *metricspb.ExponentialHistogramDataPoint) float64 {
+	if dp.Count == 0 || dp.Sum == nil {
+		return 0
+	}
+	return *dp.Sum / float64(dp.Count)
 }
