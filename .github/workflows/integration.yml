@@ -252,29 +252,40 @@ jobs:
       - name: Build defrost
         run: go build -o defrost .
 
+      - name: Configure git auth for defrost persist
+        run: |
+          git config --global url."https://x-access-token:${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Suppress known-intentional failures (dogfood the suppression flow)
         run: |
           set -e
-          ./defrost suppress add --no-remote 'examples/promptfoo¬answer="I have no idea",question="capital-germany-wrong",provider="defrost-smoke-mock"'
-          ./defrost suppress add --no-remote 'examples/promptfoo¬answer="London is the answer",question="contaminated-output",provider="defrost-smoke-mock"'
-          ./defrost suppress add --no-remote 'examples/promptfoo¬answer="paris",question="case-sensitive",provider="defrost-smoke-mock"'
-          ./defrost suppress add --no-remote 'examples/promptfoo¬answer="123 invalid",question="regex-capital-digits",provider="defrost-smoke-mock"'
-          ./defrost suppress add --no-remote 'examples/promptfoo¬answer="just plain text",question="unstructured",provider="defrost-smoke-mock"'
-          ./defrost suppress add --no-remote 'examples/promptfoo¬answer="Berlin",question="case-insensitive-fail",provider="defrost-smoke-mock"'
-          ./defrost suppress add --no-remote 'examples/promptfoo¬answer="Only Paris is here",question="contains-all-fail-vars",provider="defrost-smoke-mock"'
-          ./defrost suppress add --no-remote 'examples/promptfoo¬answer="The capital is Paris",question="starts-with-fail-vars",provider="defrost-smoke-mock"'
-          ./defrost suppress add --no-remote 'examples/promptfoo¬answer="not xml at all",question="xml-invalid",provider="defrost-smoke-mock"'
-          ./defrost suppress add --no-remote 'examples/promptfoo¬answer="ROME",question="icontains-any-fail-vars",provider="defrost-smoke-mock"'
-          ./defrost suppress list --no-remote
+          ./defrost suppress add \
+            'examples/promptfoo¬answer="I have no idea",question="capital-germany-wrong",provider="defrost-smoke-mock"' \
+            'examples/promptfoo¬answer="London is the answer",question="contaminated-output",provider="defrost-smoke-mock"' \
+            'examples/promptfoo¬answer="paris",question="case-sensitive",provider="defrost-smoke-mock"' \
+            'examples/promptfoo¬answer="123 invalid",question="regex-capital-digits",provider="defrost-smoke-mock"' \
+            'examples/promptfoo¬answer="just plain text",question="unstructured",provider="defrost-smoke-mock"' \
+            'examples/promptfoo¬answer="Berlin",question="case-insensitive-fail",provider="defrost-smoke-mock"' \
+            'examples/promptfoo¬answer="Only Paris is here",question="contains-all-fail-vars",provider="defrost-smoke-mock"' \
+            'examples/promptfoo¬answer="The capital is Paris",question="starts-with-fail-vars",provider="defrost-smoke-mock"' \
+            'examples/promptfoo¬answer="not xml at all",question="xml-invalid",provider="defrost-smoke-mock"' \
+            'examples/promptfoo¬answer="ROME",question="icontains-any-fail-vars",provider="defrost-smoke-mock"'
+          ./defrost suppress list
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Run defrost against examples/promptfoo
         id: run
         run: |
           set +e
           cd examples/promptfoo
-          ../../defrost exec --no-remote promptfoo eval -c promptfooconfig.yaml --no-cache > out.txt 2>&1
+          ../../defrost exec promptfoo eval -c promptfooconfig.yaml --no-cache > out.txt 2>&1
           echo "exit=$?" >> "$GITHUB_OUTPUT"
           exit 0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Assert defrost exited 0 (suppressions rewrote intentional failures)
         run: |
