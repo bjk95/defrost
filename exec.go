@@ -17,6 +17,7 @@ import (
 	"github.com/bjk95/defrost/internal/persist"
 	"github.com/bjk95/defrost/internal/python/pytest"
 	"github.com/bjk95/defrost/internal/runner"
+	"github.com/bjk95/defrost/internal/runner/passthrough"
 )
 
 // defrostVersion is stamped into the Resource attribute service.version.
@@ -46,9 +47,15 @@ func HandleExecution(cmd []string, opts ExecOpts) int {
 	reg.Register(golang.Adapter{})
 	reg.Register(pytest.Adapter{})
 	reg.Register(&jest.Adapter{})
+	// Passthrough must be registered last: it matches everything, so
+	// anything ahead of it gets first crack at recognising the cmd.
+	reg.Register(passthrough.Adapter{})
 
 	a := reg.Find(cmd)
 	if a == nil {
+		// Unreachable while the passthrough adapter is registered, but kept
+		// as a safety net so a future registry change can't silently turn
+		// "no adapter" into a panic.
 		fmt.Fprintf(os.Stderr, "exec: unsupported test command: %q\n", cmd[0])
 		return 2
 	}
