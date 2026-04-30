@@ -57,8 +57,18 @@ function TestDetailInner({
   onBack: () => void;
   onOpenRun: (rid: string) => void;
 }) {
-  const { has, add, remove, isMutating } = useSuppressions();
-  const isSuppressed = has(testId);
+  const {
+    has,
+    add,
+    remove,
+    isMutating,
+    isError: suppressionsError,
+    error: suppressionsErrorObj,
+  } = useSuppressions();
+  // Don't trust `has(testId)` when the read failed — the empty fallback
+  // would render a real suppression as "not suppressed" and offer the
+  // wrong action.
+  const isSuppressed = !suppressionsError && has(testId);
 
   const points: ChartPoint[] = useMemo(() => {
     const byRun = new Map(cells.map((c) => [c.run_id, c] as const));
@@ -139,12 +149,16 @@ function TestDetailInner({
           stats.failRate < 0.5 && <StatusPill status="flaky" />}
         {isSuppressed && <StatusPill status="suppressed" />}
         <div style={{ flex: 1 }} />
-        <SuppressionAction
-          suppressed={isSuppressed}
-          pending={isMutating}
-          onAdd={() => add(testId)}
-          onRemove={() => remove(testId)}
-        />
+        {suppressionsError ? (
+          <SuppressionLoadError message={suppressionsErrorObj?.message} />
+        ) : (
+          <SuppressionAction
+            suppressed={isSuppressed}
+            pending={isMutating}
+            onAdd={() => add(testId)}
+            onRemove={() => remove(testId)}
+          />
+        )}
       </div>
 
       {isSuppressed && (
@@ -720,6 +734,28 @@ function SuppressionAction({
     >
       <Icon.EyeOff /> Add to suppression list
     </button>
+  );
+}
+
+function SuppressionLoadError({ message }: { message?: string }) {
+  return (
+    <span
+      title={message || "Suppression state unavailable"}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 6,
+        padding: "6px 12px",
+        fontSize: 12,
+        color: "var(--danger)",
+        border: "1px solid var(--border)",
+        borderRadius: 6,
+        background: "var(--bg)",
+        cursor: "help",
+      }}
+    >
+      <Icon.AlertTriangle /> Suppression state unavailable
+    </span>
   );
 }
 

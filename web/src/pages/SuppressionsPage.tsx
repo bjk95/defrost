@@ -23,7 +23,14 @@ interface Row extends SuppressionEntry {
 
 export function SuppressionsPage() {
   const navigate = useNavigate();
-  const { entries: items, remove, isLoading, isMutating } = useSuppressions();
+  const {
+    entries: items,
+    remove,
+    isLoading,
+    isError,
+    error,
+    isMutating,
+  } = useSuppressions();
   const { data } = useQuery({ queryKey: ["tests"], queryFn: getTests });
   const [q, setQ] = useState("");
 
@@ -111,7 +118,11 @@ export function SuppressionsPage() {
             color: "var(--fg-muted)",
           }}
         >
-          {isLoading ? "loading…" : `${items.length} ${items.length === 1 ? "test" : "tests"}`}
+          {isLoading
+            ? "loading…"
+            : isError
+              ? "unavailable"
+              : `${items.length} ${items.length === 1 ? "test" : "tests"}`}
         </span>
         {isMutating && (
           <span
@@ -203,6 +214,8 @@ export function SuppressionsPage() {
 
         {isLoading ? (
           <LoadingState />
+        ) : isError ? (
+          <ErrorState message={error?.message} />
         ) : rows.length === 0 ? (
           <EmptyState
             hasFilter={!!q.trim()}
@@ -423,6 +436,26 @@ function SuppressionRow({
             <Icon.X />
           </button>
         )}
+      </div>
+    </div>
+  );
+}
+
+function ErrorState({ message }: { message?: string }) {
+  return (
+    <div
+      style={{
+        padding: "48px 24px",
+        textAlign: "center",
+        color: "var(--fg-muted)",
+        fontSize: 13,
+      }}
+    >
+      <div style={{ color: "var(--danger)", marginBottom: 4, fontWeight: 500 }}>
+        Could not load suppressions.
+      </div>
+      <div style={{ fontFamily: "var(--font-mono)", fontSize: 12 }}>
+        {message || "Try refreshing the page."}
       </div>
     </div>
   );

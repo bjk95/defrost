@@ -165,7 +165,11 @@ function TestsPageInner({
   // doesn't mount one useQuery + two useMutation observers per row —
   // large suites would otherwise create thousands of subscriptions and
   // re-render every row whenever the suppressions cache updates.
-  const { ids: suppressedIds } = useSuppressions();
+  const {
+    ids: suppressedIds,
+    isError: suppressionsError,
+    error: suppressionsErrorObj,
+  } = useSuppressions();
 
   const totalStats = useMemo(() => {
     let pass = 0, fail = 0, skip = 0, total = 0;
@@ -197,6 +201,21 @@ function TestsPageInner({
         }}
       >
         <SearchInput value={search} onChange={onSearch} placeholder="Filter tests…" />
+        {suppressionsError && (
+          <span
+            title={suppressionsErrorObj?.message || "Suppression state unavailable"}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 4,
+              fontSize: 11,
+              color: "var(--danger)",
+              cursor: "help",
+            }}
+          >
+            <Icon.AlertTriangle /> suppression state unavailable
+          </span>
+        )}
         <Segmented<StatusFilter>
           value={statusFilter}
           onChange={onStatusFilter}
