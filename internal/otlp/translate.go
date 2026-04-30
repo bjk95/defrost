@@ -36,10 +36,11 @@ func testResultToSpan(r models.TestResult, run models.RunContext) models.Span {
 	if suite := suiteFromTestID(r.Id); suite != "" {
 		attrs["test.suite.name"] = suite
 	}
-	if ns, _ := codeFromTestID(r.Id); ns != "" {
+	ns, fn := codeFromTestID(r.Id)
+	if ns != "" {
 		attrs["code.namespace"] = ns
 	}
-	if _, fn := codeFromTestID(r.Id); fn != "" {
+	if fn != "" {
 		attrs["code.function"] = fn
 	}
 
@@ -99,8 +100,8 @@ func resultToSpanStatus(resultStatus, output string) models.SpanStatus {
 // "github.com/x/p/TestFoo" → "github.com/x/p"
 // "tests/test_foo.py::TestClass::test_method" → "tests/test_foo.py"
 func suiteFromTestID(id string) string {
-	if i := strings.Index(id, "::"); i >= 0 {
-		return id[:i]
+	if suite, _, ok := strings.Cut(id, "::"); ok {
+		return suite
 	}
 	if i := strings.LastIndex(id, "/"); i >= 0 {
 		return id[:i]
@@ -123,8 +124,6 @@ func codeFromTestID(id string) (string, string) {
 }
 
 func firstLine(s string) string {
-	if i := strings.IndexByte(s, '\n'); i >= 0 {
-		return s[:i]
-	}
-	return s
+	line, _, _ := strings.Cut(s, "\n")
+	return line
 }
