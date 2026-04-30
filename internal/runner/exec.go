@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -12,11 +13,23 @@ import (
 // MUST be called after c.Wait() returns; it tears down the signal handler
 // and the goroutine it owns.
 //
-// Without this, a `kill -TERM` against the defrost process would leave the
-// child orphaned and still running. The default behaviour for terminal
-// SIGINT (Ctrl+C) already reaches the child via the foreground process
-// group, but explicit forwarding makes shutdown deterministic regardless
-// of how the parent is signalled.
+// SIGINT has two-stage semantics, matching the convention of bash, npm,
+// pytest, and most language runtimes: the first Ctrl+C forwards to the
+// child for graceful shutdown; the second SIGKILLs the child and exits
+// the parent with 130 (128 + SIGINT). Without the second-press escape
+// hatch, a child that ignores or hangs on SIGINT would trap the user —
+// once we call signal.Notify on SIGINT the Go runtime stops killing the
+// parent on it, so we have to provide the way out ourselves.
+//
+// Other terminating signals are forwarded once and don't trigger the
+// force-quit path; those are typically `kill <pid>` and the operator
+// already chose the signal level.
+//
+// Without this forwarder a `kill -TERM` against the defrost process
+// would leave the child orphaned and still running. The default
+// behaviour for terminal SIGINT also reaches the child via the
+// foreground process group, but explicit forwarding makes shutdown
+// deterministic regardless of how the parent is signalled.
 func ForwardSignals(c *exec.Cmd) func() {
 	sigCh := make(chan os.Signal, 4)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT)
@@ -24,9 +37,21 @@ func ForwardSignals(c *exec.Cmd) func() {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
+		intCount := 0
 		for {
 			select {
 			case sig := <-sigCh:
+				if sig == syscall.SIGINT {
+					intCount++
+					if intCount >= 2 {
+						fmt.Fprintln(os.Stderr,
+							"defrost: second SIGINT received; killing child and force-quitting")
+						if c.Process != nil {
+							_ = c.Process.Kill()
+						}
+						os.Exit(130)
+					}
+				}
 				if c.Process != nil {
 					_ = c.Process.Signal(sig)
 				}
