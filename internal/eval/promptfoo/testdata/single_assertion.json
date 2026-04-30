@@ -1,0 +1,25 @@
+{
+  "results": {
+    "results": [
+      {
+        "success": true,
+        "response": { "output": "The capital of France is Paris." },
+        "provider": { "label": "openai:gpt-4o" },
+        "vars": { "country": "France" },
+        "gradingResult": {
+          "pass": true,
+          "score": 1.0,
+          "reason": "Output matches expected.",
+          "componentResults": [
+            {
+              "pass": true,
+              "score": 1.0,
+              "reason": "Contains 'Paris'",
+              "assertion": { "type": "contains", "value": "Paris" }
+            }
+          ]
+        }
+      }
+    ]
+  }
+}
