@@ -256,7 +256,7 @@ function TestsPageInner({
 
       {tree.children.map((node) => (
         <TreeNodeView
-          key={node.path}
+          key={nodeKey(node)}
           node={node}
           runs={visibleRuns}
           collapsed={collapsed}
@@ -309,7 +309,7 @@ function TreeNodeView({
       {!isCollapsed &&
         node.children.map((c) => (
           <TreeNodeView
-            key={c.path}
+            key={nodeKey(c)}
             node={c}
             runs={runs}
             collapsed={collapsed}
@@ -323,6 +323,17 @@ function TreeNodeView({
 
 function nodeStats(node: TreeBranch) {
   return testStats(node.tests.flatMap((t) => t.cells));
+}
+
+// Tree paths can collide when test_ids share segments after splitting on
+// `/` `.` `::` ` > ` (e.g. `a/b` and `a.b` both yield `a → b`), and a leaf
+// can collide with a sibling branch of the same name (`foo` next to
+// `foo/bar`). Use kind+test_id for leaves (test_id is unique per API) and
+// kind+path for branches.
+function nodeKey(node: TreeNode): string {
+  return node.kind === "leaf"
+    ? "leaf:" + node.test.test_id
+    : "branch:" + node.path;
 }
 
 function BranchHeader({
