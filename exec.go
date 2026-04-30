@@ -46,8 +46,11 @@ func HandleExecution(cmd []string, opts ExecOpts) int {
 	reg := runner.NewRegistry()
 	reg.Register(golang.Adapter{})
 	reg.Register(pytest.Adapter{})
-	reg.Register(&jest.Adapter{})
+	// promptfoo registers before jest because jest's yarn-script matcher reads
+	// ./package.json and would claim `yarn promptfoo eval` when scripts.promptfoo
+	// happens to be jest-shaped. Strict matchers go first.
 	reg.Register(&promptfoo.Adapter{})
+	reg.Register(&jest.Adapter{})
 
 	a := reg.Find(cmd)
 	if a == nil {
