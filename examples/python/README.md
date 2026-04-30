@@ -2,7 +2,7 @@
 
 A pytest project covering the cases the defrost pytest adapter parses out
 of JUnit XML. The CI workflow at `.github/workflows/integration.yml`
-runs `defrost exec pytest examples/python/ --no-persist` against this
+runs `defrost exec pytest examples/python/` against this
 directory and asserts on the exit code and result count.
 
 ## Test inventory

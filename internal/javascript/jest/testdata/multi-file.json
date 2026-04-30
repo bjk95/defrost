@@ -1,0 +1,39 @@
+{
+  "testResults": [
+    {
+      "name": "__CWD__/a.test.js",
+      "status": "passed",
+      "message": "",
+      "assertionResults": [
+        {
+          "title": "passes",
+          "status": "passed",
+          "ancestorTitles": [],
+          "failureMessages": [],
+          "duration": 1.0
+        }
+      ]
+    },
+    {
+      "name": "__CWD__/sub/b.test.js",
+      "status": "failed",
+      "message": "",
+      "assertionResults": [
+        {
+          "title": "fails",
+          "status": "failed",
+          "ancestorTitles": [],
+          "failureMessages": ["boom"],
+          "duration": 2.0
+        },
+        {
+          "title": "skipped",
+          "status": "pending",
+          "ancestorTitles": [],
+          "failureMessages": [],
+          "duration": null
+        }
+      ]
+    }
+  ]
+}

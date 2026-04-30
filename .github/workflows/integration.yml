@@ -5,10 +5,38 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: write
+
 jobs:
+  unit-tests:
+    name: go unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build defrost
+        run: go build -o defrost .
+
+      - name: Configure git auth for defrost persist
+        run: |
+          git config --global url."https://x-access-token:${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run defrost against go unit tests
+        run: ./defrost exec go test ./...
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   python:
     name: pytest example
     runs-on: ubuntu-latest
+    needs: unit-tests
     steps:
       - uses: actions/checkout@v4
 
@@ -30,7 +58,7 @@ jobs:
         id: run
         run: |
           set +e
-          ./defrost exec --no-persist pytest examples/python/ > out.txt 2>&1
+          ./defrost exec pytest examples/python/ > out.txt 2>&1
           echo "exit=$?" >> "$GITHUB_OUTPUT"
           exit 0
 
@@ -60,3 +88,119 @@ jobs:
         with:
           name: python-out
           path: out.txt
+
+  javascript:
+    name: jest example (js)
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install jest
+        run: npm install
+        working-directory: examples/javascript
+
+      - name: Build defrost
+        run: go build -o defrost .
+
+      - name: Run defrost against examples/javascript
+        id: run
+        run: |
+          set +e
+          cd examples/javascript
+          ../../defrost exec npm test > out.txt 2>&1
+          echo "exit=$?" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Assert exit code is non-zero (intentional failures)
+        run: |
+          code="${{ steps.run.outputs.exit }}"
+          echo "defrost exit code: $code"
+          if [ "$code" -eq 0 ]; then
+            echo "FAIL: expected non-zero exit (intentional failures present)"
+            cat examples/javascript/out.txt
+            exit 1
+          fi
+
+      - name: Assert result count matches expected
+        run: |
+          count=$(grep -c '^{Id:' examples/javascript/out.txt || true)
+          echo "TestResult lines emitted: $count"
+          if [ "$count" -ne 12 ]; then
+            echo "FAIL: expected 12 TestResult lines, got $count"
+            cat examples/javascript/out.txt
+            exit 1
+          fi
+
+      - name: Upload defrost output for debugging
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: javascript-out
+          path: examples/javascript/out.txt
+
+  typescript:
+    name: jest example (ts)
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install jest + ts-jest
+        run: npm install
+        working-directory: examples/typescript
+
+      - name: Build defrost
+        run: go build -o defrost .
+
+      - name: Run defrost against examples/typescript
+        id: run
+        run: |
+          set +e
+          cd examples/typescript
+          ../../defrost exec npm test > out.txt 2>&1
+          echo "exit=$?" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Assert exit code is non-zero (intentional failures)
+        run: |
+          code="${{ steps.run.outputs.exit }}"
+          echo "defrost exit code: $code"
+          if [ "$code" -eq 0 ]; then
+            echo "FAIL: expected non-zero exit (intentional failures present)"
+            cat examples/typescript/out.txt
+            exit 1
+          fi
+
+      - name: Assert result count matches expected
+        run: |
+          count=$(grep -c '^{Id:' examples/typescript/out.txt || true)
+          echo "TestResult lines emitted: $count"
+          if [ "$count" -ne 12 ]; then
+            echo "FAIL: expected 12 TestResult lines, got $count"
+            cat examples/typescript/out.txt
+            exit 1
+          fi
+
+      - name: Upload defrost output for debugging
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: typescript-out
+          path: examples/typescript/out.txt

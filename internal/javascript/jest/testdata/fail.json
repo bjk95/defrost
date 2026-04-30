@@ -1,0 +1,18 @@
+{
+  "testResults": [
+    {
+      "name": "__CWD__/basics.test.js",
+      "status": "failed",
+      "message": "",
+      "assertionResults": [
+        {
+          "title": "adds correctly",
+          "status": "failed",
+          "ancestorTitles": [],
+          "failureMessages": ["Error: expected 2 but got 3", "    at Object.<anonymous>"],
+          "duration": 2.0
+        }
+      ]
+    }
+  ]
+}
