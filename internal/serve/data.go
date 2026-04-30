@@ -19,8 +19,11 @@ type Dataset struct {
 }
 
 // persistLoadAll is a package-level seam so tests can stub the data
-// source without going through git.
-var persistLoadAll = persist.LoadAll
+// source without going through git. Default impl calls through the
+// Backend selected by the persist.Options.
+var persistLoadAll = func(opts persist.Options) ([]persist.RunRecord, map[string][]persist.Entry, error) {
+	return persist.New(opts).LoadAll()
+}
 
 // Load reads the data branch and returns a sorted, capped Dataset suitable
 // for serving over HTTP.

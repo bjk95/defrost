@@ -545,7 +545,7 @@ func TestLoadAll_ReturnsAllRunsAndEntriesGroupedByTest(t *testing.T) {
 		{Id: "github.com/x/p/TestB", Ran: true, Passed: false, Duration: 9 * time.Millisecond, StartTime: time.Date(2026, 1, 1, 0, 0, 1, 0, time.UTC), Output: "fail one"},
 	}
 	run1 := newTestRun("run-1", "1111111111111111", "main")
-	if err := Persist(Options{RepoDir: repoDir}, run1, resultsRun1); err != nil {
+	if err := New(Options{RepoDir: repoDir}).InsertNewTestResults(run1, resultsRun1); err != nil {
 		t.Fatalf("persist run1: %v", err)
 	}
 
@@ -553,11 +553,11 @@ func TestLoadAll_ReturnsAllRunsAndEntriesGroupedByTest(t *testing.T) {
 		{Id: "github.com/x/p/TestA", Ran: true, Passed: true, Duration: 4 * time.Millisecond, StartTime: time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)},
 	}
 	run2 := newTestRun("run-2", "2222222222222222", "main")
-	if err := Persist(Options{RepoDir: repoDir}, run2, resultsRun2); err != nil {
+	if err := New(Options{RepoDir: repoDir}).InsertNewTestResults(run2, resultsRun2); err != nil {
 		t.Fatalf("persist run2: %v", err)
 	}
 
-	runs, byTest, err := LoadAll(Options{RepoDir: repoDir})
+	runs, byTest, err := New(Options{RepoDir: repoDir}).LoadAll()
 	if err != nil {
 		t.Fatalf("LoadAll: %v", err)
 	}
@@ -586,7 +586,7 @@ func TestLoadAll_NoBranch_ReturnsEmpty(t *testing.T) {
 	requireGit(t)
 	repoDir, _ := makeFixture(t)
 
-	runs, byTest, err := LoadAll(Options{RepoDir: repoDir})
+	runs, byTest, err := New(Options{RepoDir: repoDir}).LoadAll()
 	if err != nil {
 		t.Fatalf("LoadAll: %v", err)
 	}

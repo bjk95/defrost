@@ -132,6 +132,12 @@ type Backend interface {
 	// joined with its RunRecord, oldest first. Returns an empty slice
 	// when the test has no history yet.
 	GetTestHistory(testName string) ([]HistoricalEntry, error)
+
+	// LoadAll returns every persisted RunRecord and every Entry across
+	// all tests, grouped by encoded test ID. Used by `defrost serve` to
+	// populate the heatmap grid in a single read instead of N. Returns
+	// empty (nil) slices/maps when there is no data yet.
+	LoadAll() ([]RunRecord, map[string][]Entry, error)
 }
 
 // New returns the Backend implied by opts. Dev mode selects the local
@@ -407,17 +413,13 @@ func readHistoryFromDir(dir, testName string) ([]HistoricalEntry, error) {
 	return out, nil
 }
 
-// LoadAll returns every persisted RunRecord and every Entry across all
-// tests on the data branch. Entries are grouped by encoded test ID
-// (the on-disk filename). Used by `defrost serve`. Returns empty (nil)
-// slices/maps if the data branch does not yet exist.
-func LoadAll(opts Options) ([]RunRecord, map[string][]Entry, error) {
-	branch := opts.DataBranch
+func (b *gitBackend) LoadAll() ([]RunRecord, map[string][]Entry, error) {
+	branch := b.opts.DataBranch
 	if branch == "" {
 		branch = DefaultDataBranch
 	}
 
-	remoteURL, err := resolveTargetURL(opts)
+	remoteURL, err := resolveTargetURL(b.opts)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -446,6 +448,24 @@ func LoadAll(opts Options) ([]RunRecord, map[string][]Entry, error) {
 		return nil, nil, err
 	}
 	byTest, err := readAllEntries(workDir)
+	if err != nil {
+		return nil, nil, err
+	}
+	return runs, byTest, nil
+}
+
+func (b *fileBackend) LoadAll() ([]RunRecord, map[string][]Entry, error) {
+	if _, err := os.Stat(b.dir); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil, nil
+		}
+		return nil, nil, err
+	}
+	runs, err := readAllRunRecords(b.dir)
+	if err != nil {
+		return nil, nil, err
+	}
+	byTest, err := readAllEntries(b.dir)
 	if err != nil {
 		return nil, nil, err
 	}
