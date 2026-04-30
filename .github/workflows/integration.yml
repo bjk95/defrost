@@ -350,7 +350,11 @@ jobs:
         run: |
           set -o pipefail
           cd examples/inspect
-          ../../defrost exec inspect eval task.py --model none 2>&1 | tee out.txt
+          # --display plain disables Inspect's Rich-based progress UI so the
+          # defrost summary line lands at column 0 in out.txt (Rich's
+          # animated progress bars otherwise leave whitespace runs that
+          # prevent the assertion below from anchoring on ^defrost:).
+          ../../defrost exec inspect eval task.py --model none --display plain 2>&1 | tee out.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -359,7 +363,9 @@ jobs:
           # Inspect AI exits 0 even when samples fail scoring, so the
           # regression-detection signal is the pass/fail breakdown rather
           # than the exit code. Expected: 2 pass, 2 fail, 0 skip = 4 total.
-          line=$(grep -E '^defrost: results:' examples/inspect/out.txt | tail -1)
+          # Strip leading whitespace defensively in case Rich progress output
+          # leaks through despite --display plain.
+          line=$(grep -E 'defrost: results:' examples/inspect/out.txt | tail -1 | sed 's/^[[:space:]]*//')
           if [ -z "$line" ]; then
             echo "FAIL: no 'defrost: results:' line found"
             cat examples/inspect/out.txt
