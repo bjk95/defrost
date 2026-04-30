@@ -44,6 +44,13 @@ func main() {
 			NoRemote:   CLI.Suppress.List.NoRemote,
 			Dev:        CLI.Suppress.List.Dev,
 		}))
+	case strings.HasPrefix(cmd, "serve"):
+		os.Exit(HandleServe(ServeOpts{
+			Port:       CLI.Serve.Port,
+			RepoDir:    CLI.Serve.RepoDir,
+			DataBranch: CLI.Serve.DataBranch,
+			NoRemote:   CLI.Serve.NoRemote,
+		}))
 	default:
 		fmt.Fprintln(os.Stderr, "unknown command:", cmd)
 		os.Exit(2)

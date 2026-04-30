@@ -41,4 +41,11 @@ var CLI struct {
 			Dev        bool   `name:"dev" short:"d" help:"Dev mode: read the local scratch dir instead of the data branch."`
 		} `cmd:"" help:"List the suppressed test IDs, one per line."`
 	} `cmd:"" help:"Manage the suppression list. When every failing test in 'defrost exec' is suppressed, the exit code is rewritten to 0."`
+
+	Serve struct {
+		Port       int    `name:"port" default:"6969" help:"Port to bind on 127.0.0.1."`
+		RepoDir    string `name:"repo-dir" default:"." help:"Path to the git repo."`
+		DataBranch string `name:"data-branch" default:"_defrost" help:"Branch name to read from."`
+		NoRemote   bool   `name:"no-remote" help:"Read from the local repo only — do not consult origin."`
+	} `cmd:"" help:"Serve a local UI for inspecting test history."`
 }
