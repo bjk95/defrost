@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640">
+  <rect width="1280" height="640" fill="#fafafa"/>
+
+  <!-- defrost git-flake logo from assets/logo.svg, scaled 100->140, centered at (640, 230) -->
+  <g transform="translate(570 160) scale(1.4)">
+    <g stroke="#18181b" stroke-width="6" stroke-linecap="round">
+      <line x1="50" y1="20" x2="50" y2="80"/>
+      <line x1="24" y1="35" x2="76" y2="65"/>
+      <line x1="24" y1="65" x2="76" y2="35"/>
+    </g>
+    <g fill="#18181b">
+      <circle cx="50" cy="20" r="7"/>
+      <circle cx="50" cy="80" r="7"/>
+      <circle cx="24" cy="35" r="7"/>
+      <circle cx="76" cy="35" r="7"/>
+      <circle cx="24" cy="65" r="7"/>
+      <circle cx="76" cy="65" r="7"/>
+      <circle cx="50" cy="50" r="8"/>
+    </g>
+  </g>
+
+  <!-- Wordmark: defrost -->
+  <text x="640" y="425"
+        font-family="Geist, -apple-system, Helvetica, sans-serif"
+        font-size="96" font-weight="700" fill="#18181b"
+        text-anchor="middle" letter-spacing="-3">defrost</text>
+
+  <!-- Tagline -->
+  <text x="640" y="478"
+        font-family="Geist, -apple-system, Helvetica, sans-serif"
+        font-size="28" font-weight="400" fill="#52525b"
+        text-anchor="middle" letter-spacing="-0.3">Track AI evals, metrics, and tests with Git as the database.</text>
+</svg>
