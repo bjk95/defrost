@@ -23,7 +23,7 @@ jobs:
         run: go build -o defrost .
 
       - name: Run defrost against go unit tests
-        run: ./defrost exec go test -json -race ./...
+        run: ./defrost exec --no-persist go test -json -race ./...
 
   python:
     name: pytest example
