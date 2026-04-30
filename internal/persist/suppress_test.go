@@ -2,9 +2,11 @@ package persist
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -104,5 +106,99 @@ func TestFileBackend_SuppressionsRoundTrip(t *testing.T) {
 	want := []string{"x", "y"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("want %v got %v", want, got)
+	}
+}
+
+func TestGitBackend_Suppressions_EmptyWhenBranchAbsent(t *testing.T) {
+	requireGit(t)
+	repoDir, _ := makeFixture(t)
+
+	got, err := New(Options{RepoDir: repoDir}).GetSuppressions()
+	if err != nil {
+		t.Fatalf("GetSuppressions: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("want empty (no data branch yet), got %v", got)
+	}
+}
+
+func TestGitBackend_Suppressions_RoundTrip(t *testing.T) {
+	requireGit(t)
+	repoDir, originURL := makeFixture(t)
+
+	addX := func(cur []string) []string { return append(cur, "github.com/x/p/TestX") }
+	if err := New(Options{RepoDir: repoDir}).UpdateSuppressions(addX, "suppress: add X"); err != nil {
+		t.Fatalf("UpdateSuppressions add X: %v", err)
+	}
+
+	got, err := New(Options{RepoDir: repoDir}).GetSuppressions()
+	if err != nil {
+		t.Fatalf("GetSuppressions: %v", err)
+	}
+	want := []string{"github.com/x/p/TestX"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("want %v got %v", want, got)
+	}
+
+	// Verify the file landed on the data branch.
+	verify := cloneDataBranch(t, originURL)
+	b, err := os.ReadFile(filepath.Join(verify, "suppressions.json"))
+	if err != nil {
+		t.Fatalf("read suppressions.json: %v", err)
+	}
+	if !strings.Contains(string(b), "github.com/x/p/TestX") {
+		t.Errorf("file does not contain test id:\n%s", b)
+	}
+}
+
+func TestGitBackend_Suppressions_IdempotentAdd(t *testing.T) {
+	requireGit(t)
+	repoDir, originURL := makeFixture(t)
+
+	addX := func(cur []string) []string { return append(cur, "X") }
+	be := New(Options{RepoDir: repoDir})
+	if err := be.UpdateSuppressions(addX, "suppress: add X"); err != nil {
+		t.Fatalf("first add: %v", err)
+	}
+	if err := be.UpdateSuppressions(addX, "suppress: add X"); err != nil {
+		t.Fatalf("second add: %v", err)
+	}
+
+	// Two adds of the same ID should produce one suppression entry...
+	got, err := be.GetSuppressions()
+	if err != nil {
+		t.Fatalf("GetSuppressions: %v", err)
+	}
+	if !reflect.DeepEqual(got, []string{"X"}) {
+		t.Errorf("want [X], got %v", got)
+	}
+
+	// ...and only ONE commit on the data branch (the second should be a
+	// no-op because the file content didn't change).
+	verify := cloneDataBranch(t, originURL)
+	out, err := exec.Command("git", "-C", verify, "log", "--oneline").CombinedOutput()
+	if err != nil {
+		t.Fatalf("git log: %v: %s", err, out)
+	}
+	commits := strings.Count(strings.TrimSpace(string(out)), "\n") + 1
+	// Expected: seed commit (initial branch creation) + one suppress commit = 2.
+	// If second add added a commit, we'd see 3.
+	if commits > 2 {
+		t.Errorf("expected at most 2 commits on data branch, got %d:\n%s", commits, out)
+	}
+}
+
+func TestGitBackend_Suppressions_DevModeUsesScratchDir(t *testing.T) {
+	requireGit(t)
+	repoDir, _ := makeFixture(t)
+
+	be := New(Options{RepoDir: repoDir, Dev: true})
+	add := func(cur []string) []string { return append(cur, "id1") }
+	if err := be.UpdateSuppressions(add, "n/a"); err != nil {
+		t.Fatalf("UpdateSuppressions: %v", err)
+	}
+	scratchPath := filepath.Join(repoDir, DevDir, "suppressions.json")
+	if _, err := os.Stat(scratchPath); err != nil {
+		t.Errorf("expected %s to exist: %v", scratchPath, err)
 	}
 }

@@ -76,6 +76,127 @@ func (b *fileBackend) UpdateSuppressions(mutate func([]string) []string, _ strin
 	return writeSuppressionsFile(b.dir, mutate(cur))
 }
 
+func (b *gitBackend) GetSuppressions() ([]string, error) {
+	branch := b.opts.DataBranch
+	if branch == "" {
+		branch = DefaultDataBranch
+	}
+
+	remoteURL, err := resolveTargetURL(b.opts)
+	if err != nil {
+		return nil, err
+	}
+
+	exists, err := branchExistsOnRemote(remoteURL, branch)
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return []string{}, nil
+	}
+
+	workDir, err := os.MkdirTemp("", "defrost-suppress-read-")
+	if err != nil {
+		return nil, fmt.Errorf("mktemp: %w", err)
+	}
+	defer os.RemoveAll(workDir)
+	_ = os.Remove(workDir) // clone wants the path missing
+
+	if _, err := runGit("", "clone", "--quiet", "--depth=1", "--single-branch", "--branch", branch, remoteURL, workDir); err != nil {
+		return nil, fmt.Errorf("clone data branch: %w", err)
+	}
+	return readSuppressionsFile(workDir)
+}
+
+func (b *gitBackend) UpdateSuppressions(mutate func([]string) []string, msg string) error {
+	branch := b.opts.DataBranch
+	if branch == "" {
+		branch = DefaultDataBranch
+	}
+
+	remoteURL, err := resolveTargetURL(b.opts)
+	if err != nil {
+		return err
+	}
+
+	workDir, err := os.MkdirTemp("", "defrost-suppress-write-")
+	if err != nil {
+		return fmt.Errorf("mktemp: %w", err)
+	}
+	defer os.RemoveAll(workDir)
+
+	branchExisted, err := openOrInitDataRepo(workDir, remoteURL, branch)
+	if err != nil {
+		return err
+	}
+	if !branchExisted {
+		if err := writeSeed(workDir); err != nil {
+			return err
+		}
+	}
+
+	apply := func() (changed bool, err error) {
+		cur, err := readSuppressionsFile(workDir)
+		if err != nil {
+			return false, err
+		}
+		next := mutate(cur)
+		next = sortAndDedupe(next)
+
+		prevBytes, _ := os.ReadFile(filepath.Join(workDir, suppressionsFile))
+		if err := writeSuppressionsFile(workDir, next); err != nil {
+			return false, err
+		}
+		newBytes, err := os.ReadFile(filepath.Join(workDir, suppressionsFile))
+		if err != nil {
+			return false, err
+		}
+		return string(prevBytes) != string(newBytes), nil
+	}
+
+	changed, err := apply()
+	if err != nil {
+		return err
+	}
+	if !changed && branchExisted {
+		// No-op: file content unchanged and the branch already exists,
+		// so there is nothing to commit or push.
+		return nil
+	}
+
+	if err := commitAll(workDir, msg); err != nil {
+		return err
+	}
+
+	// Retry-on-conflict: re-run the mutation closure on each retry against
+	// the rebased tip, so two concurrent add calls for different IDs both
+	// land in the final list.
+	var lastErr error
+	for attempt := 1; attempt <= maxPushAttempts; attempt++ {
+		err := pushBranch(workDir, branch)
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		if !branchExisted || !isNonFastForward(err) {
+			return err
+		}
+		if rebErr := pullRebase(workDir, branch); rebErr != nil {
+			return fmt.Errorf("rebase after push conflict (attempt %d): %w", attempt, rebErr)
+		}
+		if _, err := runGit(workDir, "reset", "--soft", "HEAD~1"); err != nil {
+			return fmt.Errorf("reset for retry: %w", err)
+		}
+		if _, err := apply(); err != nil {
+			return err
+		}
+		if err := commitAll(workDir, msg); err != nil {
+			return err
+		}
+	}
+	return fmt.Errorf("push failed after %d retries: %w", maxPushAttempts, lastErr)
+}
+
 func sortAndDedupe(in []string) []string {
 	out := make([]string, 0, len(in))
 	seen := make(map[string]struct{}, len(in))

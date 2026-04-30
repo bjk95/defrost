@@ -311,14 +311,6 @@ func (b *gitBackend) InsertNewTestResults(run RunRecord, results []models.TestRe
 	return pushWithRetry(workDir, branch, branchExisted)
 }
 
-func (b *gitBackend) GetSuppressions() ([]string, error) {
-	return nil, errors.New("gitBackend.GetSuppressions: not implemented")
-}
-
-func (b *gitBackend) UpdateSuppressions(mutate func([]string) []string, msg string) error {
-	return errors.New("gitBackend.UpdateSuppressions: not implemented")
-}
-
 func (b *gitBackend) GetTestHistory(testName string) ([]HistoricalEntry, error) {
 	branch := b.opts.DataBranch
 	if branch == "" {
