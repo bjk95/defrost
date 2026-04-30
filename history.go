@@ -10,7 +10,7 @@ import (
 )
 
 func HandleHistory(testName, repoDir, dataBranch string, noRemote bool) int {
-	entries, err := persist.New(persist.Options{
+	spans, err := persist.New(persist.Options{
 		RepoDir:    repoDir,
 		DataBranch: dataBranch,
 		AuthToken:  os.Getenv("GITHUB_TOKEN"),
@@ -25,8 +25,8 @@ func HandleHistory(testName, repoDir, dataBranch string, noRemote bool) int {
 		return 1
 	}
 	enc := json.NewEncoder(os.Stdout)
-	for _, e := range entries {
-		if err := enc.Encode(e); err != nil {
+	for _, s := range spans {
+		if err := enc.Encode(s); err != nil {
 			fmt.Fprintln(os.Stderr, "history:", err)
 			return 1
 		}
