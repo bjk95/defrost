@@ -50,12 +50,25 @@ func (a *Adapter) Matches(cmd []string) bool {
 	}
 
 	if first == "npx" || first == "bunx" {
+		// Some npx flags take their value as the next token (`--package jest`
+		// installs the jest package). When we see one of those flags, the next
+		// token is the flag's argument, not the executable — don't match on it.
+		// The `--flag=value` form keeps the value attached to the flag token,
+		// so it doesn't need this skip.
+		skipNext := false
 		for _, tok := range cmd[1:] {
+			if skipNext {
+				skipNext = false
+				continue
+			}
 			if tok == "jest" {
 				return true
 			}
 			if !strings.HasPrefix(tok, "-") {
 				return false
+			}
+			if tok == "-p" || tok == "--package" || tok == "-c" || tok == "--call" {
+				skipNext = true
 			}
 		}
 		return false
@@ -156,12 +169,13 @@ func looksLikeJestScript(value string) bool {
 	if i >= len(tokens) || tokens[i] != "jest" {
 		return false
 	}
+	// npm runs scripts through a shell, so shell-composition characters are
+	// significant even when glued onto another token (`jest --foo&&attack`).
+	// Reject any token containing one of these chars rather than only the
+	// standalone `&&` / `||` / `;` / etc. forms. `&` covers `&&` and bare
+	// background; `|` covers `||` and pipe; `(` covers subshells and `$(...)`.
 	for _, t := range tokens[i:] {
-		switch t {
-		case "&&", "||", ";", "|", ">", "<", "&":
-			return false
-		}
-		if strings.ContainsAny(t, "`(") || strings.Contains(t, "$(") {
+		if strings.ContainsAny(t, "`<>|&;(") {
 			return false
 		}
 	}
