@@ -294,15 +294,17 @@ func TestParseSameVarsDifferentPromptsGetDistinctIds(t *testing.T) {
 	if len(ids) != 3 {
 		t.Fatalf("identical vars/provider across three prompts must produce distinct ids; got %v", tests)
 	}
-	// First two use labels; third falls back to id.
-	if !strings.Contains(tests[0].Id, `prompt="concise"`) {
-		t.Fatalf("expected prompt label in id, got %q", tests[0].Id)
+	// We prefer the id (short hash) over the label so case-name
+	// filenames stay under common 255-byte FS limits even when prompt
+	// labels are full templates.
+	if !strings.Contains(tests[0].Id, `prompt="abc123"`) {
+		t.Fatalf("expected prompt id in case id, got %q", tests[0].Id)
 	}
-	if !strings.Contains(tests[1].Id, `prompt="verbose"`) {
-		t.Fatalf("expected prompt label in id, got %q", tests[1].Id)
+	if !strings.Contains(tests[1].Id, `prompt="def456"`) {
+		t.Fatalf("expected prompt id in case id, got %q", tests[1].Id)
 	}
 	if !strings.Contains(tests[2].Id, `prompt="ghi789"`) {
-		t.Fatalf("expected prompt id fallback, got %q", tests[2].Id)
+		t.Fatalf("expected prompt id, got %q", tests[2].Id)
 	}
 }
 

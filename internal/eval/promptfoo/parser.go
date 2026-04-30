@@ -140,15 +140,17 @@ func caseName(vars map[string]any, idx int, providerLabel, promptID string) stri
 	return strings.Join(parts, ",")
 }
 
-// promptIdentity returns the most readable identifier for a prompt:
-// label if present, else id (which promptfoo computes as a hash and is
-// always populated when a prompt was used). Returns "" when neither is
-// present, in which case the case name omits prompt info.
+// promptIdentity returns a stable, compact identifier for a prompt.
+// Always prefer the id (a short hash) over the label, because labels
+// can be the full prompt template — long enough to push URL-encoded
+// case-name filenames past common 255-byte FS limits when used as
+// metric/trace partition keys. Returns "" when no id is present, in
+// which case the case name omits prompt info.
 func promptIdentity(p promptfooPrompt) string {
-	if p.Label != "" {
-		return p.Label
+	if p.ID != "" {
+		return p.ID
 	}
-	return p.ID
+	return p.Label
 }
 
 func providerLabel(p promptfooProvider) string {
