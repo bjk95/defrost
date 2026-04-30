@@ -84,11 +84,11 @@ func execWith(a runner.Adapter, cmd []string, opts ExecOpts) int {
 	}
 	defer restoreEnv()
 
+	// The adapter is responsible for piping child stdout/stderr through
+	// to the user (pytest and jest do; the Go adapter consumes stdout
+	// because go test -json is for the parser). Defrost does not layer
+	// its own per-test print on top — we only emit a summary line below.
 	results, code := a.Run(cmd)
-
-	for _, r := range results {
-		fmt.Printf("%+v\n", r)
-	}
 
 	if len(results) > 0 {
 		pass, fail, skip := tallyResults(results)
