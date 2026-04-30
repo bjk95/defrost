@@ -17,13 +17,19 @@ const MaxRuns = 50
 // UI. Roots are root run ResourceSpans (column axis, newest first).
 // TestSpans are the per-test span time series, keyed by encoded span name
 // (file basename in traces/), filtered to only those whose run_id still
-// appears in Roots after capping. Metrics are every persisted metric
-// ResourceMetrics record; the /api/metrics handler resolves each data
-// point to a kept run by exemplar trace_id or by time-window fallback.
+// appears in Roots after capping.
 type Dataset struct {
 	Roots     []*tracepb.ResourceSpans
 	TestSpans map[string][]*tracepb.ResourceSpans
-	Metrics   []*metricspb.ResourceMetrics
+}
+
+// MetricsView is the metrics-handler-only view of the data branch:
+// kept root run spans plus every persisted ResourceMetrics record. The
+// /api/metrics handler resolves each data point to a run by exemplar
+// trace_id or by time-window fallback.
+type MetricsView struct {
+	Roots   []*tracepb.ResourceSpans
+	Metrics []*metricspb.ResourceMetrics
 }
 
 // persistLoadAll is a package-level seam so tests can stub the data
@@ -80,11 +86,33 @@ func Load(opts persist.Options) (Dataset, error) {
 		}
 	}
 
-	metrics, err := persistLoadAllMetrics(opts)
+	return Dataset{Roots: roots, TestSpans: filtered}, nil
+}
+
+// LoadMetricsView reads the data branch and returns the kept root spans
+// plus every persisted metric. Used only by /api/metrics so a metrics
+// I/O failure cannot break /api/tests or /api/test/*.
+func LoadMetricsView(opts persist.Options) (MetricsView, error) {
+	roots, _, err := persistLoadAll(opts)
 	if err != nil {
-		return Dataset{}, err
+		return MetricsView{}, err
+	}
+	sort.Slice(roots, func(i, j int) bool {
+		ai := persist.SpanFromResourceSpans(roots[i])
+		aj := persist.SpanFromResourceSpans(roots[j])
+		if ai == nil || aj == nil {
+			return false
+		}
+		return ai.StartTimeUnixNano > aj.StartTimeUnixNano
+	})
+	if len(roots) > MaxRuns {
+		roots = roots[:MaxRuns]
 	}
 
-	return Dataset{Roots: roots, TestSpans: filtered, Metrics: metrics}, nil
+	metrics, err := persistLoadAllMetrics(opts)
+	if err != nil {
+		return MetricsView{}, err
+	}
+	return MetricsView{Roots: roots, Metrics: metrics}, nil
 }
 

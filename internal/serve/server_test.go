@@ -87,6 +87,16 @@ func newTestServer(t *testing.T, ds Dataset, assets fstest.MapFS) *httptest.Serv
 	return httptest.NewServer(h)
 }
 
+func newMetricsTestServer(t *testing.T, mv MetricsView, assets fstest.MapFS) *httptest.Server {
+	t.Helper()
+	prev := metricsLoaderFn
+	metricsLoaderFn = func(_ persist.Options) (MetricsView, error) { return mv, nil }
+	t.Cleanup(func() { metricsLoaderFn = prev })
+
+	h := New(persist.Options{}, assets)
+	return httptest.NewServer(h)
+}
+
 func TestServer_GetTests_ShapeAndCacheControl(t *testing.T) {
 	srv := newTestServer(t, stubDataset(), fstest.MapFS{
 		"web/dist/index.html": &fstest.MapFile{Data: []byte("<!doctype html><html></html>")},
@@ -264,8 +274,8 @@ func TestServer_GetMetrics_TranslatesGaugeAndHistogram(t *testing.T) {
 		}},
 	}
 
-	ds := Dataset{Roots: []*tracepb.ResourceSpans{root}, Metrics: []*metricspb.ResourceMetrics{gauge, hist}}
-	srv := newTestServer(t, ds, fstest.MapFS{
+	mv := MetricsView{Roots: []*tracepb.ResourceSpans{root}, Metrics: []*metricspb.ResourceMetrics{gauge, hist}}
+	srv := newMetricsTestServer(t, mv, fstest.MapFS{
 		"web/dist/index.html": &fstest.MapFile{Data: []byte("<!doctype html>")},
 	})
 	defer srv.Close()
@@ -361,8 +371,8 @@ func TestServer_GetMetrics_DropsDataPointsWithoutKeptRun(t *testing.T) {
 			}},
 		}},
 	}
-	ds := Dataset{Roots: []*tracepb.ResourceSpans{root}, Metrics: []*metricspb.ResourceMetrics{stranger}}
-	srv := newTestServer(t, ds, fstest.MapFS{
+	mv := MetricsView{Roots: []*tracepb.ResourceSpans{root}, Metrics: []*metricspb.ResourceMetrics{stranger}}
+	srv := newMetricsTestServer(t, mv, fstest.MapFS{
 		"web/dist/index.html": &fstest.MapFile{Data: []byte("<!doctype html>")},
 	})
 	defer srv.Close()
@@ -413,8 +423,8 @@ func TestServer_GetMetrics_TimeWindowFallbackForExemplarlessPoints(t *testing.T)
 		}},
 	}
 
-	ds := Dataset{Roots: []*tracepb.ResourceSpans{root}, Metrics: []*metricspb.ResourceMetrics{pointInWindow}}
-	srv := newTestServer(t, ds, fstest.MapFS{
+	mv := MetricsView{Roots: []*tracepb.ResourceSpans{root}, Metrics: []*metricspb.ResourceMetrics{pointInWindow}}
+	srv := newMetricsTestServer(t, mv, fstest.MapFS{
 		"web/dist/index.html": &fstest.MapFile{Data: []byte("<!doctype html>")},
 	})
 	defer srv.Close()
@@ -440,6 +450,88 @@ func TestServer_GetMetrics_TimeWindowFallbackForExemplarlessPoints(t *testing.T)
 	}
 	if body.Metrics[0].Points[0].RunID != "run-1" {
 		t.Errorf("expected run-1 attribution, got %q", body.Metrics[0].Points[0].RunID)
+	}
+}
+
+func TestServer_GetMetrics_TimeWindow_PrefersLatestStartAmongOverlappingRuns(t *testing.T) {
+	// Two concurrent runs (timestamps in nanoseconds, well outside the
+	// 5s grace window so overlap semantics are exercised, not grace):
+	//   long: [10s, 50s] (still in-flight while short runs and exits)
+	//   short: [20s, 25s] (started later, finished sooner)
+	const sec = uint64(1_000_000_000)
+	long := &tracepb.ResourceSpans{
+		Resource: &resourcepb.Resource{Attributes: []*commonpb.KeyValue{
+			models.StringAttr("defrost.run_id", "long"),
+		}},
+		ScopeSpans: []*tracepb.ScopeSpans{{
+			Spans: []*tracepb.Span{{
+				Name: "defrost.run", StartTimeUnixNano: 10 * sec, EndTimeUnixNano: 50 * sec,
+			}},
+		}},
+	}
+	short := &tracepb.ResourceSpans{
+		Resource: &resourcepb.Resource{Attributes: []*commonpb.KeyValue{
+			models.StringAttr("defrost.run_id", "short"),
+		}},
+		ScopeSpans: []*tracepb.ScopeSpans{{
+			Spans: []*tracepb.Span{{
+				Name: "defrost.run", StartTimeUnixNano: 20 * sec, EndTimeUnixNano: 25 * sec,
+			}},
+		}},
+	}
+	// Two points:
+	//   ts=22s — inside both windows. Attribute to the later-started
+	//     run (short).
+	//   ts=40s — outside short, still inside long. Regression case: the
+	//     previous binary-search picked short and dropped the point
+	//     because t > short.end + 5s grace. Linear-scan finds long.
+	overlap := &metricspb.ResourceMetrics{
+		ScopeMetrics: []*metricspb.ScopeMetrics{{
+			Metrics: []*metricspb.Metric{{
+				Name: "g.during_overlap",
+				Data: &metricspb.Metric_Gauge{Gauge: &metricspb.Gauge{
+					DataPoints: []*metricspb.NumberDataPoint{
+						{TimeUnixNano: 22 * sec, Value: &metricspb.NumberDataPoint_AsDouble{AsDouble: 1}},
+						{TimeUnixNano: 40 * sec, Value: &metricspb.NumberDataPoint_AsDouble{AsDouble: 2}},
+					},
+				}},
+			}},
+		}},
+	}
+	mv := MetricsView{
+		Roots:   []*tracepb.ResourceSpans{long, short},
+		Metrics: []*metricspb.ResourceMetrics{overlap},
+	}
+	srv := newMetricsTestServer(t, mv, fstest.MapFS{
+		"web/dist/index.html": &fstest.MapFile{Data: []byte("<!doctype html>")},
+	})
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/metrics")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+	var body struct {
+		Metrics []struct {
+			Points []struct {
+				RunID string `json:"run_id"`
+			} `json:"points"`
+		} `json:"metrics"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(body.Metrics) != 1 || len(body.Metrics[0].Points) != 2 {
+		t.Fatalf("want 2 points (none dropped), got %+v", body.Metrics)
+	}
+	// ts=22s → inside both long and short; prefer the later start (short).
+	if got := body.Metrics[0].Points[0].RunID; got != "short" {
+		t.Errorf("ts=22s: want run \"short\" (later start), got %q", got)
+	}
+	// ts=40s → only inside long.
+	if got := body.Metrics[0].Points[1].RunID; got != "long" {
+		t.Errorf("ts=40s: want run \"long\", got %q", got)
 	}
 }
 

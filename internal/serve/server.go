@@ -20,6 +20,10 @@ import (
 // loaderFn is a package-level seam so tests stub the data load.
 var loaderFn = Load
 
+// metricsLoaderFn is the metrics-handler seam, parallel to loaderFn.
+// Kept separate so /api/tests and /api/test/* never run metrics I/O.
+var metricsLoaderFn = LoadMetricsView
+
 // New returns the http.Handler for `defrost serve`. It does not retain
 // any per-request state — each /api/* request loads the data branch via
 // loaderFn(opts).
@@ -38,7 +42,7 @@ func New(opts persist.Options, assets fs.FS) http.Handler {
 	})
 
 	mux.HandleFunc("/api/metrics", func(w http.ResponseWriter, r *http.Request) {
-		ds, err := loaderFn(opts)
+		mv, err := metricsLoaderFn(opts)
 		if err != nil {
 			writeJSONError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -47,7 +51,7 @@ func New(opts persist.Options, assets fs.FS) http.Handler {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(struct {
 			Metrics []metricSeriesDTO `json:"metrics"`
-		}{Metrics: buildMetricsResponse(ds.Metrics, ds.Roots)})
+		}{Metrics: buildMetricsResponse(mv.Metrics, mv.Roots)})
 	})
 
 	mux.HandleFunc("/api/test/", func(w http.ResponseWriter, r *http.Request) {

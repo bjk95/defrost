@@ -63,7 +63,7 @@ func TestLoad_SortsRunsNewestFirstAndCapsAtFifty(t *testing.T) {
 	}
 }
 
-func TestLoad_PassesMetricsThroughUnfiltered(t *testing.T) {
+func TestLoadMetricsView_PassesMetricsThroughUnfiltered(t *testing.T) {
 	roots := []*tracepb.ResourceSpans{
 		{
 			Resource: &resourcepb.Resource{Attributes: []*commonpb.KeyValue{
@@ -115,12 +115,44 @@ func TestLoad_PassesMetricsThroughUnfiltered(t *testing.T) {
 	}
 	defer func() { persistLoadAllMetrics = prevMetrics }()
 
-	ds, err := Load(persist.Options{})
+	mv, err := LoadMetricsView(persist.Options{})
 	if err != nil {
-		t.Fatalf("Load: %v", err)
+		t.Fatalf("LoadMetricsView: %v", err)
 	}
-	if len(ds.Metrics) != 2 {
-		t.Fatalf("want both metrics retained, got %d", len(ds.Metrics))
+	if len(mv.Metrics) != 2 {
+		t.Fatalf("want both metrics retained, got %d", len(mv.Metrics))
+	}
+}
+
+// /api/tests must not perform metrics I/O — a metrics-side failure
+// must never break the spans handlers.
+func TestLoad_DoesNotTouchMetrics(t *testing.T) {
+	roots := []*tracepb.ResourceSpans{
+		{
+			Resource: &resourcepb.Resource{Attributes: []*commonpb.KeyValue{
+				models.StringAttr("defrost.run_id", "run-1"),
+			}},
+			ScopeSpans: []*tracepb.ScopeSpans{{
+				Spans: []*tracepb.Span{{Name: "defrost.run", StartTimeUnixNano: 1}},
+			}},
+		},
+	}
+
+	prevSpans := persistLoadAll
+	persistLoadAll = func(_ persist.Options) ([]*tracepb.ResourceSpans, map[string][]*tracepb.ResourceSpans, error) {
+		return roots, nil, nil
+	}
+	defer func() { persistLoadAll = prevSpans }()
+
+	prevMetrics := persistLoadAllMetrics
+	persistLoadAllMetrics = func(_ persist.Options) ([]*metricspb.ResourceMetrics, error) {
+		t.Fatalf("Load must not call persistLoadAllMetrics")
+		return nil, nil
+	}
+	defer func() { persistLoadAllMetrics = prevMetrics }()
+
+	if _, err := Load(persist.Options{}); err != nil {
+		t.Fatalf("Load: %v", err)
 	}
 }
 

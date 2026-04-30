@@ -178,6 +178,11 @@ func newRunResolver(roots []*tracepb.ResourceSpans) *runResolver {
 // resolveDataPoint picks the run for a data point, preferring exemplar
 // match. ts is the data point's time_unix_nano, used as the time-window
 // fallback key.
+//
+// When multiple run windows contain ts (concurrent runs, or grace zones
+// that overlap on closely timed runs), prefer the latest start — a
+// metric emitted while two runs are in-flight more plausibly belongs to
+// the more recently launched one.
 func (r *runResolver) resolveDataPoint(exemplars []*metricspb.Exemplar, ts uint64) (runRef, bool) {
 	for _, ex := range exemplars {
 		if ref, ok := r.traceIDToRun[string(ex.GetTraceId())]; ok {
@@ -188,18 +193,20 @@ func (r *runResolver) resolveDataPoint(exemplars []*metricspb.Exemplar, ts uint6
 		return runRef{}, false
 	}
 	t := int64(ts)
-	// Binary search for the latest window whose start <= t.
-	idx := sort.Search(len(r.windows), func(i int) bool {
-		return r.windows[i].start > t
-	}) - 1
-	if idx < 0 {
-		return runRef{}, false
+	// Windows are sorted ascending by start; iterate from newest to
+	// oldest and return the first match. Linear is fine — runs are
+	// capped at MaxRuns (50).
+	for i := len(r.windows) - 1; i >= 0; i-- {
+		w := r.windows[i]
+		if t < w.start {
+			continue
+		}
+		if t > w.end {
+			continue
+		}
+		return w.ref, true
 	}
-	w := r.windows[idx]
-	if t > w.end {
-		return runRef{}, false
-	}
-	return w.ref, true
+	return runRef{}, false
 }
 
 func extractDataPoints(acc *seriesAcc, m *metricspb.Metric, resolver *runResolver) {
