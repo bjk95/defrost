@@ -272,7 +272,6 @@ jobs:
             'examples/promptfoo¬answer="The capital is Paris",question="starts-with-fail-vars",prompt="f7a68f6f0557",provider="defrost-smoke-mock"' \
             'examples/promptfoo¬answer="not xml at all",question="xml-invalid",prompt="f7a68f6f0557",provider="defrost-smoke-mock"' \
             'examples/promptfoo¬answer="ROME",question="icontains-any-fail-vars",prompt="f7a68f6f0557",provider="defrost-smoke-mock"'
-          ./defrost suppress list
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
