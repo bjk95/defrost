@@ -1,7 +1,28 @@
 # JavaScript/TypeScript (jest) Support — Design
 
 **Date:** 2026-04-30
-**Status:** Draft, pending implementation
+**Status:** Implemented (2026-04-30). See **Errata** below for corrections to the JSON shape that were discovered during the smoke test for `examples/javascript/`. The struct names and field-mapping table in this doc reflect the original (incorrect) plan; the merged code is the source of truth.
+
+## Errata (post-implementation)
+
+The original design described jest's `--json --outputFile` shape using fields from a documentation snippet that turned out to describe the `testResultsProcessor` configuration callback, not the CLI output. Jest 29's actual `--json --outputFile` document differs in three places:
+
+| What the design said | What jest 29 actually emits |
+|---|---|
+| `testFilePath` (file entry) | `name` |
+| nested `testResults` (assertion array on a file entry) | `assertionResults` |
+| `testExecError: { message, stack }` (file-level error object) | No such field. File-level errors are signaled by `assertionResults: []` + file `status: "failed"` + a populated `message` string at the file level. |
+| `startAt` (per-assertion epoch ms) | No such field. `StartTime` defaults to zero `time.Time` (matching the pytest path). |
+
+Implications carried into the shipped code:
+
+- `parser.go` uses `name` and `assertionResults` for the JSON tags, drops the `jestExecError` struct, and treats the file-error path as `len(assertionResults) == 0 && status == "failed" && message != ""` → emit one synthetic `<rel>::<file-error>` with `Output = message`.
+- `models.TestResult.StartTime` is always zero for the jest path (jest 29 emits per-file `startTime` only, not per-assertion).
+- `testdata/exec-error.json` uses the file-level message convention; the other 8 fixtures use `name` / `assertionResults`.
+
+The mapping table in "Components → `internal/javascript/jest/parser.go`" below is the original (incorrect) design. Read the merged `parser.go` for ground truth.
+
+
 
 ## Purpose
 
