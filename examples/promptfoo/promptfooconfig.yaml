@@ -118,3 +118,183 @@ tests:
     assert:
       - type: javascript
         value: output.length > 0
+
+  # ── String/pattern (extended) ──
+
+  # icontains — pass (case-insensitive)
+  - description: icontains-pass
+    vars:
+      question: case-insensitive-pass
+      answer: PARIS
+    assert:
+      - type: icontains
+        value: paris
+
+  # icontains — fail (intentional)
+  - description: icontains-fail
+    vars:
+      question: case-insensitive-fail
+      answer: Berlin
+    assert:
+      - type: icontains
+        value: paris
+
+  # contains-all — pass (every value present)
+  - description: contains-all-pass
+    vars:
+      question: contains-all-pass-vars
+      answer: Paris and Berlin are capitals
+    assert:
+      - type: contains-all
+        value:
+          - Paris
+          - Berlin
+
+  # contains-all — fail (one value missing)
+  - description: contains-all-fail
+    vars:
+      question: contains-all-fail-vars
+      answer: Only Paris is here
+    assert:
+      - type: contains-all
+        value:
+          - Paris
+          - Berlin
+
+  # contains-any — pass (at least one present)
+  - description: contains-any-pass
+    vars:
+      question: contains-any-pass-vars
+      answer: Paris
+    assert:
+      - type: contains-any
+        value:
+          - Paris
+          - Berlin
+
+  # starts-with — pass
+  - description: starts-with-pass
+    vars:
+      question: starts-with-pass-vars
+      answer: Paris is the capital
+    assert:
+      - type: starts-with
+        value: Paris
+
+  # starts-with — fail
+  - description: starts-with-fail
+    vars:
+      question: starts-with-fail-vars
+      answer: The capital is Paris
+    assert:
+      - type: starts-with
+        value: Paris
+
+  # ── Format validation ──
+
+  # is-xml — pass
+  - description: is-xml-pass
+    vars:
+      question: xml-valid
+      answer: '<root><city>Paris</city></root>'
+    assert:
+      - type: is-xml
+
+  # is-xml — fail
+  - description: is-xml-fail
+    vars:
+      question: xml-invalid
+      answer: not xml at all
+    assert:
+      - type: is-xml
+
+  # icontains-any — fail (substituted for is-sql which requires node-sql-parser not bundled with npx; intentional fail)
+  - description: icontains-any-fail
+    vars:
+      question: icontains-any-fail-vars
+      answer: ROME
+    assert:
+      - type: icontains-any
+        value:
+          - paris
+          - berlin
+
+  # is-html — pass
+  - description: is-html-pass
+    vars:
+      question: html-valid
+      answer: '<p>Paris</p>'
+    assert:
+      - type: is-html
+
+  # contains-json — pass (json embedded in surrounding text)
+  - description: contains-json-pass
+    vars:
+      question: json-embedded
+      answer: 'The result is {"capital": "Paris"} per the database.'
+    assert:
+      - type: contains-json
+
+  # ── NLP metrics ──
+
+  # rouge-n — pass (sufficient n-gram overlap)
+  - description: rouge-n-pass
+    vars:
+      question: rouge-pass-vars
+      answer: The capital of France is Paris
+    assert:
+      - type: rouge-n
+        value: The capital of France is Paris
+        threshold: 0.5
+
+  # bleu — pass
+  - description: bleu-pass
+    vars:
+      question: bleu-pass-vars
+      answer: The capital of France is Paris
+    assert:
+      - type: bleu
+        value: The capital of France is Paris
+        threshold: 0.5
+
+  # icontains-all — pass (substituted for meteor which requires PorterStemmer not available in npx context)
+  - description: icontains-all-pass
+    vars:
+      question: icontains-all-pass-vars
+      answer: PARIS and BERLIN are capitals
+    assert:
+      - type: icontains-all
+        value:
+          - paris
+          - berlin
+
+  # gleu — pass
+  - description: gleu-pass
+    vars:
+      question: gleu-pass-vars
+      answer: The capital of France is Paris
+    assert:
+      - type: gleu
+        value: The capital of France is Paris
+        threshold: 0.5
+
+  # ── Metadata ──
+
+  # word-count — pass (value: {min: 3}; threshold is not valid, word-count requires value)
+  - description: word-count-pass
+    vars:
+      question: word-count-vars
+      answer: one two three four five
+    assert:
+      - type: word-count
+        value:
+          min: 3
+
+  # latency — pass (mock is instant; 5000ms is generous)
+  - description: latency-pass
+    vars:
+      question: latency-vars
+      answer: instant
+    assert:
+      - type: latency
+        threshold: 5000
