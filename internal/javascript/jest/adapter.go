@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"strings"
 
+	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
+
 	"github.com/bjk95/defrost/internal/models"
 	"github.com/bjk95/defrost/internal/runner"
 )
@@ -183,26 +185,26 @@ func looksLikeJestScript(value string) bool {
 	return true
 }
 
-func (a *Adapter) Run(cmd []string) ([]models.TestResult, int) {
+func (a *Adapter) Run(cmd []string) ([]models.TestResult, []*metricspb.Metric, int) {
 	if hasUserJSONFlag(cmd) {
 		fmt.Fprintln(os.Stderr, "defrost: jest adapter requires control of --json and --outputFile; remove those flags")
-		return nil, 2
+		return nil, nil, 2
 	}
 	if hasUserWatchFlag(cmd) {
 		fmt.Fprintln(os.Stderr, "defrost: jest adapter is not compatible with --watch / --watchAll")
-		return nil, 2
+		return nil, nil, 2
 	}
 	if a.formD && !a.scriptOK {
 		fmt.Fprintf(os.Stderr,
 			"defrost: scripts.%s in package.json doesn't look like a direct jest invocation; run jest via 'npx jest …' or rewrite the script\n",
 			a.scriptName)
-		return nil, 2
+		return nil, nil, 2
 	}
 
 	f, err := os.CreateTemp("", "defrost-jest-*.json")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "defrost:", err)
-		return nil, 1
+		return nil, nil, 1
 	}
 	path := f.Name()
 	f.Close()
@@ -223,23 +225,23 @@ func (a *Adapter) Run(cmd []string) ([]models.TestResult, int) {
 		exitCode = e.ExitCode()
 	default:
 		fmt.Fprintln(os.Stderr, "defrost:", runErr)
-		return nil, 1
+		return nil, nil, 1
 	}
 
 	cwd, err := os.Getwd()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "defrost:", err)
-		return nil, 1
+		return nil, nil, 1
 	}
 
 	results, parseErr := ParseFile(path, cwd)
 	if parseErr != nil {
 		fmt.Fprintln(os.Stderr, "defrost:", parseErr)
-		return nil, 1
+		return nil, nil, 1
 	}
 	runner.ApplyRepoPrefix(results)
 
-	return results, exitCode
+	return results, nil, exitCode
 }
 
 // buildArgs returns the args to pass to cmd[0], with --json and

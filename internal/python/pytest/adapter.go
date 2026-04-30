@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"strings"
 
+	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
+
 	"github.com/bjk95/defrost/internal/models"
 	"github.com/bjk95/defrost/internal/runner"
 )
@@ -40,16 +42,16 @@ func (Adapter) Matches(cmd []string) bool {
 	return false
 }
 
-func (Adapter) Run(cmd []string) ([]models.TestResult, int) {
+func (Adapter) Run(cmd []string) ([]models.TestResult, []*metricspb.Metric, int) {
 	if hasUserJunitxml(cmd) {
 		fmt.Fprintln(os.Stderr, "defrost: pytest adapter requires control of --junitxml; remove your --junitxml flag")
-		return nil, 2
+		return nil, nil, 2
 	}
 
 	f, err := os.CreateTemp("", "defrost-pytest-*.xml")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "defrost:", err)
-		return nil, 1
+		return nil, nil, 1
 	}
 	path := f.Name()
 	f.Close()
@@ -75,17 +77,17 @@ func (Adapter) Run(cmd []string) ([]models.TestResult, int) {
 		exitCode = e.ExitCode()
 	default:
 		fmt.Fprintln(os.Stderr, "defrost:", runErr)
-		return nil, 1
+		return nil, nil, 1
 	}
 
 	results, parseErr := ParseFile(path)
 	if parseErr != nil {
 		fmt.Fprintln(os.Stderr, "defrost:", parseErr)
-		return nil, 1
+		return nil, nil, 1
 	}
 	runner.ApplyRepoPrefix(results)
 
-	return results, exitCode
+	return results, nil, exitCode
 }
 
 func hasUserJunitxml(cmd []string) bool {
