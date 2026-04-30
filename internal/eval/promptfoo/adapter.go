@@ -38,32 +38,24 @@ func (a *Adapter) Matches(cmd []string) bool {
 
 	switch cmd[0] {
 	case "npx", "bunx":
-		// Skip flags; a few flags take their value as the next token.
-		skipNext := false
-		for i := 1; i < len(cmd); i++ {
-			tok := cmd[i]
-			if skipNext {
-				skipNext = false
-				continue
-			}
-			if strings.HasPrefix(tok, "-") {
-				if tok == "-p" || tok == "--package" || tok == "-c" || tok == "--call" {
-					skipNext = true
-				}
-				continue
-			}
-			// First positional after flags must be promptfoo.
-			if parseExecBase(tok) != "promptfoo" {
-				return false
-			}
-			return i+1 < len(cmd) && cmd[i+1] == "eval"
+		// npx flags that take a value as the next token.
+		npxValueFlags := map[string]bool{"-p": true, "--package": true, "-c": true, "--call": true}
+		i := skipFlagsBeforeExec(cmd, 1, npxValueFlags)
+		if i >= len(cmd) {
+			return false
 		}
-		return false
+		if parseExecBase(cmd[i]) != "promptfoo" {
+			return false
+		}
+		return i+1 < len(cmd) && cmd[i+1] == "eval"
 	case "pnpm":
 		i := 1
 		if i < len(cmd) && cmd[i] == "dlx" {
 			i++
 		}
+		// pnpm dlx accepts flags before the package; -p / --package take a value.
+		pnpmValueFlags := map[string]bool{"-p": true, "--package": true}
+		i = skipFlagsBeforeExec(cmd, i, pnpmValueFlags)
 		if i >= len(cmd) {
 			return false
 		}
@@ -76,6 +68,10 @@ func (a *Adapter) Matches(cmd []string) bool {
 		if i < len(cmd) && cmd[i] == "run" {
 			i++
 		}
+		// yarn run accepts flags before the script name. Most yarn flags
+		// are boolean; --cwd takes a value.
+		yarnValueFlags := map[string]bool{"--cwd": true}
+		i = skipFlagsBeforeExec(cmd, i, yarnValueFlags)
 		if i >= len(cmd) {
 			return false
 		}
@@ -86,6 +82,28 @@ func (a *Adapter) Matches(cmd []string) bool {
 	}
 
 	return false
+}
+
+// skipFlagsBeforeExec advances startIdx past any flag tokens, returning
+// the index of the first non-flag positional (or len(cmd) if none).
+// Tokens whose presence implies the next token is a value (e.g.
+// --package <pkg>) are skipped along with their value.
+func skipFlagsBeforeExec(cmd []string, startIdx int, valueFlags map[string]bool) int {
+	skipNext := false
+	for i := startIdx; i < len(cmd); i++ {
+		tok := cmd[i]
+		if skipNext {
+			skipNext = false
+			continue
+		}
+		if !strings.HasPrefix(tok, "-") {
+			return i
+		}
+		if valueFlags[tok] {
+			skipNext = true
+		}
+	}
+	return len(cmd)
 }
 
 // parseExecBase returns the basename of an exec token with any `@<ver>`

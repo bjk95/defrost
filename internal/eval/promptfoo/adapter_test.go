@@ -36,6 +36,13 @@ func TestMatches(t *testing.T) {
 		{"npx flag in middle", []string{"npx", "promptfoo", "eval", "--", "--debug"}, true},
 		{"npx wrong package", []string{"npx", "jest", "eval"}, false},
 		{"yarn wrong tool", []string{"yarn", "echo", "eval"}, false},
+		{"yarn run with -T flag", []string{"yarn", "run", "-T", "promptfoo", "eval"}, true},
+		{"yarn run with --inspect-brk flag", []string{"yarn", "run", "--inspect-brk", "promptfoo", "eval"}, true},
+		{"yarn run with --cwd value flag", []string{"yarn", "run", "--cwd", "/some/path", "promptfoo", "eval"}, true},
+		{"yarn run with multiple boolean flags", []string{"yarn", "run", "-T", "-B", "promptfoo", "eval"}, true},
+		{"pnpm dlx with -p value flag", []string{"pnpm", "dlx", "-p", "promptfoo@latest", "promptfoo", "eval"}, true},
+		{"pnpm dlx with --package value flag", []string{"pnpm", "dlx", "--package", "promptfoo@latest", "promptfoo", "eval"}, true},
+		{"yarn run no script after flags", []string{"yarn", "run", "-T"}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
