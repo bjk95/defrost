@@ -7,26 +7,25 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/bjk95/defrost/internal/models"
 )
 
-func TestEncodeTestID_RoundTrip(t *testing.T) {
+func TestEncodeName_RoundTrip(t *testing.T) {
 	cases := []string{
 		"github.com/bjk95/defrost/internal/x/TestFoo",
 		"p/TestSubtest/with spaces",
 		"p/TestPercent_already%encoded",
-		"p/Test_no_special_chars",
-		"p/TestUnicode_éà",
-		"p/TestQuestion?_and_star*",
+		"db.query.duration",
+		"http.server.request.duration",
+		"defrost.run",
 	}
 	for _, name := range cases {
-		id := EncodeTestID(name)
+		id := EncodeName(name)
 		if strings.ContainsAny(id, `/\`) {
 			t.Errorf("encoded id contains path separator: %q (from %q)", id, name)
 		}
-		got, err := DecodeTestID(id)
+		got, err := DecodeName(id)
 		if err != nil {
 			t.Errorf("decode %q: %v", id, err)
 			continue
@@ -37,71 +36,77 @@ func TestEncodeTestID_RoundTrip(t *testing.T) {
 	}
 }
 
-func TestNewRunID_TimePrefixSortable(t *testing.T) {
-	a := NewRunID()
-	time.Sleep(2 * time.Millisecond)
-	b := NewRunID()
-	if a >= b {
-		t.Errorf("expected b > a after time gap; a=%q b=%q", a, b)
-	}
-}
-
-func TestPersist_CreatesDataBranchOnFirstWrite(t *testing.T) {
+func TestPersist_WritesTracesAndMetricsOnFirstWrite(t *testing.T) {
 	requireGit(t)
 	repoDir, originURL := makeFixture(t)
 
-	results := []models.TestResult{
+	run := newRunContext("run-001", "abc123def4567890", "main")
+	root := NewRootSpan(run)
+	root.EndTimeUnixNano = root.StartTimeUnixNano + 100
+	root.Status = models.SpanStatus{Code: "OK"}
+
+	testSpans := []models.Span{
 		{
-			Id:        "github.com/x/p/TestA",
-			Ran:       true,
-			Passed:    true,
-			Duration:  5 * time.Millisecond,
-			StartTime: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
-		},
-		{
-			Id:        "github.com/x/p/TestB",
-			Ran:       true,
-			Passed:    false,
-			Duration:  12 * time.Millisecond,
-			StartTime: time.Date(2026, 1, 1, 0, 0, 1, 0, time.UTC),
-			Output:    "FAIL\n",
+			Schema:            models.SchemaV3,
+			TraceID:           run.TraceID,
+			SpanID:            "aaaaaaaaaaaaaaaa",
+			ParentSpanID:      run.RootSpanID,
+			Name:              "github.com/x/p/TestA",
+			StartTimeUnixNano: run.StartTimeUnixNano + 10,
+			EndTimeUnixNano:   run.StartTimeUnixNano + 50,
+			Status:            models.SpanStatus{Code: "OK"},
+			Resource:          run.Resource,
+			Attributes:        map[string]any{"test.case.name": "github.com/x/p/TestA"},
 		},
 	}
-	run := newTestRun("run-001", "abc123def4567890", "main")
+	v := 12.0
+	metrics := []models.MetricEntry{
+		{
+			Schema:         models.SchemaV3,
+			Name:           "db.connection_pool.size",
+			InstrumentType: "gauge",
+			TimeUnixNano:   run.StartTimeUnixNano + 30,
+			Resource:       run.Resource,
+			TraceID:        run.TraceID,
+			Value:          &v,
+		},
+	}
 
-	if err := New(Options{RepoDir: repoDir}).InsertNewTestResults(run, results); err != nil {
-		t.Fatalf("Persist: %v", err)
+	if err := New(Options{RepoDir: repoDir}).InsertNewRun(root, testSpans, metrics); err != nil {
+		t.Fatalf("InsertNewRun: %v", err)
 	}
 
 	verify := cloneDataBranch(t, originURL)
 
-	for _, r := range results {
-		path := filepath.Join(verify, "tests", EncodeTestID(r.Id)+".ndjson")
-		b, err := os.ReadFile(path)
-		if err != nil {
-			t.Errorf("missing %s: %v", path, err)
-			continue
-		}
-		if !strings.Contains(string(b), r.Id) {
-			t.Errorf("file %s does not contain test name %q\ncontent: %s", path, r.Id, b)
-		}
-		if !strings.Contains(string(b), run.RunID) {
-			t.Errorf("file %s does not contain run_id %q", path, run.RunID)
-		}
+	tracesPath := filepath.Join(verify, "traces", EncodeName("github.com/x/p/TestA")+".ndjson")
+	if b, err := os.ReadFile(tracesPath); err != nil {
+		t.Errorf("missing %s: %v", tracesPath, err)
+	} else if !strings.Contains(string(b), run.TraceID) {
+		t.Errorf("test span missing trace_id %q:\n%s", run.TraceID, b)
 	}
 
-	runPath := filepath.Join(verify, "runs", run.RunID+".json")
-	b, err := os.ReadFile(runPath)
-	if err != nil {
-		t.Fatalf("missing run record %s: %v", runPath, err)
+	rootPath := filepath.Join(verify, "traces", EncodeName("defrost.run")+".ndjson")
+	if b, err := os.ReadFile(rootPath); err != nil {
+		t.Errorf("missing root span file %s: %v", rootPath, err)
+	} else if !strings.Contains(string(b), run.RunID) {
+		t.Errorf("root span missing run_id %q:\n%s", run.RunID, b)
 	}
-	for _, want := range []string{run.RunID, run.Commit, run.Branch} {
-		if !strings.Contains(string(b), want) {
-			t.Errorf("run record missing %q:\n%s", want, b)
-		}
+
+	metricsPath := filepath.Join(verify, "metrics", EncodeName("db.connection_pool.size")+".ndjson")
+	if b, err := os.ReadFile(metricsPath); err != nil {
+		t.Errorf("missing metrics file %s: %v", metricsPath, err)
+	} else if !strings.Contains(string(b), `"value":12`) {
+		t.Errorf("metric file missing value:\n%s", b)
 	}
+
 	if _, err := os.Stat(filepath.Join(verify, ".gitattributes")); err != nil {
-		t.Errorf("missing .gitattributes seed file: %v", err)
+		t.Errorf("missing .gitattributes seed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(verify, "runs")); err == nil {
+		t.Errorf("runs/ directory should not exist in schema 3")
+	}
+	if _, err := os.Stat(filepath.Join(verify, "tests")); err == nil {
+		t.Errorf("tests/ directory should not exist in schema 3")
 	}
 }
 
@@ -109,117 +114,80 @@ func TestPersist_AppendsToExistingBranch(t *testing.T) {
 	requireGit(t)
 	repoDir, originURL := makeFixture(t)
 
-	first := []models.TestResult{{
-		Id:        "github.com/x/p/TestA",
-		Ran:       true,
-		Passed:    true,
-		Duration:  5 * time.Millisecond,
-		StartTime: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
-	}}
-	run1 := newTestRun("run-A", "1111111111111111", "main")
-	if err := New(Options{RepoDir: repoDir}).InsertNewTestResults(run1, first); err != nil {
-		t.Fatalf("first Persist: %v", err)
+	first := newRunContext("run-A", "1111111111111111", "main")
+	if err := New(Options{RepoDir: repoDir}).InsertNewRun(NewRootSpan(first), []models.Span{makeTestSpan(first, "p/TestA", "OK")}, nil); err != nil {
+		t.Fatalf("first InsertNewRun: %v", err)
 	}
 
-	second := []models.TestResult{{
-		Id:        "github.com/x/p/TestA",
-		Ran:       true,
-		Passed:    false,
-		Duration:  6 * time.Millisecond,
-		StartTime: time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC),
-	}}
-	run2 := newTestRun("run-B", "2222222222222222", "main")
-	if err := New(Options{RepoDir: repoDir}).InsertNewTestResults(run2, second); err != nil {
-		t.Fatalf("second Persist: %v", err)
+	second := newRunContext("run-B", "2222222222222222", "main")
+	if err := New(Options{RepoDir: repoDir}).InsertNewRun(NewRootSpan(second), []models.Span{makeTestSpan(second, "p/TestA", "ERROR")}, nil); err != nil {
+		t.Fatalf("second InsertNewRun: %v", err)
 	}
 
 	verify := cloneDataBranch(t, originURL)
-	path := filepath.Join(verify, "tests", EncodeTestID("github.com/x/p/TestA")+".ndjson")
+	path := filepath.Join(verify, "traces", EncodeName("p/TestA")+".ndjson")
 	b, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read %s: %v", path, err)
 	}
 	lines := strings.Split(strings.TrimRight(string(b), "\n"), "\n")
 	if len(lines) != 2 {
-		t.Fatalf("expected 2 lines after two persists, got %d:\n%s", len(lines), b)
+		t.Fatalf("expected 2 spans after two runs, got %d:\n%s", len(lines), b)
 	}
-	if !strings.Contains(lines[0], run1.RunID) {
-		t.Errorf("line 0 missing first run_id %q: %q", run1.RunID, lines[0])
-	}
-	if !strings.Contains(lines[1], run2.RunID) {
-		t.Errorf("line 1 missing second run_id %q: %q", run2.RunID, lines[1])
-	}
-
-	for _, run := range []RunRecord{run1, run2} {
-		if _, err := os.Stat(filepath.Join(verify, "runs", run.RunID+".json")); err != nil {
-			t.Errorf("missing run record for %s: %v", run.RunID, err)
-		}
+	if !strings.Contains(lines[0], first.RunID) || !strings.Contains(lines[1], second.RunID) {
+		t.Errorf("expected one line per run id; got:\n%s", b)
 	}
 }
 
-func TestHistory_RoundTripJoinsRunRecord(t *testing.T) {
+func TestHistory_ReturnsSpansSortedByStartTime(t *testing.T) {
 	requireGit(t)
 	repoDir, _ := makeFixture(t)
 
-	in := []models.TestResult{{
-		Id:        "github.com/x/p/TestA",
-		Ran:       true,
-		Passed:    true,
-		Duration:  5 * time.Millisecond,
-		StartTime: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
-		Output:    "PASS",
-	}}
-	run := newTestRun("run-history", "deadbeefcafebabe", "main")
-	run.AuthorEmail = "alice@example.com"
-	run.AuthorName = "Alice"
-	run.Cmd = []string{"go", "test", "./..."}
-	run.CmdHash = cmdHash(run.Cmd)
-	run.Dirty = true
-	run.DirtyHash = "abcd1234"
-
-	if err := New(Options{RepoDir: repoDir}).InsertNewTestResults(run, in); err != nil {
-		t.Fatalf("Persist: %v", err)
+	run := newRunContext("run-history", "deadbeefcafebabe", "main")
+	root := NewRootSpan(run)
+	span := models.Span{
+		Schema:            models.SchemaV3,
+		TraceID:           run.TraceID,
+		SpanID:            "bbbbbbbbbbbbbbbb",
+		ParentSpanID:      run.RootSpanID,
+		Name:              "github.com/x/p/TestA",
+		StartTimeUnixNano: 100,
+		EndTimeUnixNano:   200,
+		Status:            models.SpanStatus{Code: "OK"},
+		Resource:          run.Resource,
+		Attributes:        map[string]any{"test.case.name": "github.com/x/p/TestA"},
+	}
+	if err := New(Options{RepoDir: repoDir}).InsertNewRun(root, []models.Span{span}, nil); err != nil {
+		t.Fatalf("InsertNewRun: %v", err)
 	}
 
 	got, err := New(Options{RepoDir: repoDir}).GetTestHistory("github.com/x/p/TestA")
 	if err != nil {
-		t.Fatalf("History: %v", err)
+		t.Fatalf("GetTestHistory: %v", err)
 	}
 	if len(got) != 1 {
-		t.Fatalf("expected 1 entry, got %d", len(got))
+		t.Fatalf("expected 1 span, got %d", len(got))
 	}
-	h := got[0]
+	if got[0].Name != "github.com/x/p/TestA" {
+		t.Errorf("name: %q", got[0].Name)
+	}
+	if got[0].Resource["vcs.repository.ref.revision"] != "deadbeefcafebabe" {
+		t.Errorf("resource not inlined: %+v", got[0].Resource)
+	}
+	if got[0].TraceID != run.TraceID {
+		t.Errorf("trace_id: %q", got[0].TraceID)
+	}
+}
 
-	if h.Test.TestName != in[0].Id {
-		t.Errorf("test_name: want %q got %q", in[0].Id, h.Test.TestName)
+func TestHistory_UnknownTestReturnsEmpty(t *testing.T) {
+	requireGit(t)
+	repoDir, _ := makeFixture(t)
+	got, err := New(Options{RepoDir: repoDir}).GetTestHistory("github.com/x/p/NeverWritten")
+	if err != nil {
+		t.Fatalf("GetTestHistory on empty origin: %v", err)
 	}
-	if h.Test.RunID != run.RunID {
-		t.Errorf("run_id: want %q got %q", run.RunID, h.Test.RunID)
-	}
-	if !h.Test.Passed || !h.Test.Ran {
-		t.Errorf("ran/passed: want true/true got %v/%v", h.Test.Ran, h.Test.Passed)
-	}
-	if h.Test.Status != "pass" {
-		t.Errorf("status: want pass got %q", h.Test.Status)
-	}
-	if h.Test.DurationMs != 5 {
-		t.Errorf("duration_ms: want 5 got %d", h.Test.DurationMs)
-	}
-	if h.Test.Output != "PASS" {
-		t.Errorf("output: want %q got %q", "PASS", h.Test.Output)
-	}
-
-	if h.Run.Commit != run.Commit {
-		t.Errorf("run.commit: want %q got %q", run.Commit, h.Run.Commit)
-	}
-	if h.Run.AuthorEmail != "alice@example.com" {
-		t.Errorf("run.author_email: want alice@example.com got %q", h.Run.AuthorEmail)
-	}
-	if !h.Run.Dirty || h.Run.DirtyHash != "abcd1234" {
-		t.Errorf("run.dirty/dirty_hash: want true/abcd1234 got %v/%q", h.Run.Dirty, h.Run.DirtyHash)
-	}
-	if h.Run.CmdHash == "" {
-		t.Errorf("run.cmd_hash: want non-empty")
+	if len(got) != 0 {
+		t.Errorf("expected 0 spans, got %d", len(got))
 	}
 }
 
@@ -231,18 +199,11 @@ func TestPushWithRetry_RebasesOnConflict(t *testing.T) {
 	requireGit(t)
 	repoDir, originURL := makeFixture(t)
 
-	seed := []models.TestResult{{
-		Id:        "p/TestA",
-		Ran:       true,
-		Passed:    true,
-		Duration:  1 * time.Millisecond,
-		StartTime: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
-	}}
-	if err := New(Options{RepoDir: repoDir}).InsertNewTestResults(newTestRun("run-seed", "1111111111111111", "main"), seed); err != nil {
-		t.Fatalf("seed Persist: %v", err)
+	seedRun := newRunContext("run-seed", "1111111111111111", "main")
+	if err := New(Options{RepoDir: repoDir}).InsertNewRun(NewRootSpan(seedRun), []models.Span{makeTestSpan(seedRun, "p/TestA", "OK")}, nil); err != nil {
+		t.Fatalf("seed InsertNewRun: %v", err)
 	}
 
-	// Writer 1: clone data branch and stage a commit, but do not push yet.
 	w1Dir := filepath.Join(t.TempDir(), "w1")
 	branchExisted, err := openOrInitDataRepo(w1Dir, originURL, DefaultDataBranch)
 	if err != nil {
@@ -251,43 +212,25 @@ func TestPushWithRetry_RebasesOnConflict(t *testing.T) {
 	if !branchExisted {
 		t.Fatal("w1: expected branch to exist after seed")
 	}
-	w1Run := newTestRun("run-w1", "2222222222222222", "main")
-	w1Results := []models.TestResult{{
-		Id:        "p/TestA",
-		Ran:       true,
-		Passed:    false,
-		Duration:  2 * time.Millisecond,
-		StartTime: time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC),
-	}}
-	if err := writeRunRecord(w1Dir, w1Run); err != nil {
-		t.Fatalf("w1 writeRunRecord: %v", err)
-	}
-	if err := appendEntries(w1Dir, w1Run, w1Results); err != nil {
-		t.Fatalf("w1 append: %v", err)
+	w1Run := newRunContext("run-w1", "2222222222222222", "main")
+	if err := appendSpans(w1Dir, []models.Span{NewRootSpan(w1Run), makeTestSpan(w1Run, "p/TestA", "ERROR")}); err != nil {
+		t.Fatalf("w1 appendSpans: %v", err)
 	}
 	if err := commitAll(w1Dir, "writer 1"); err != nil {
 		t.Fatalf("w1 commit: %v", err)
 	}
 
-	// Writer 2 (the racer) advances origin/data via a normal Persist.
-	racer := []models.TestResult{{
-		Id:        "p/TestA",
-		Ran:       true,
-		Passed:    true,
-		Duration:  3 * time.Millisecond,
-		StartTime: time.Date(2026, 1, 3, 0, 0, 0, 0, time.UTC),
-	}}
-	if err := New(Options{RepoDir: repoDir}).InsertNewTestResults(newTestRun("run-racer", "3333333333333333", "main"), racer); err != nil {
-		t.Fatalf("racer Persist: %v", err)
+	racerRun := newRunContext("run-racer", "3333333333333333", "main")
+	if err := New(Options{RepoDir: repoDir}).InsertNewRun(NewRootSpan(racerRun), []models.Span{makeTestSpan(racerRun, "p/TestA", "OK")}, nil); err != nil {
+		t.Fatalf("racer InsertNewRun: %v", err)
 	}
 
-	// Writer 1 pushes — first attempt is non-fast-forward, retry must rebase.
 	if err := pushWithRetry(w1Dir, DefaultDataBranch, true); err != nil {
 		t.Fatalf("pushWithRetry: %v", err)
 	}
 
 	verify := cloneDataBranch(t, originURL)
-	path := filepath.Join(verify, "tests", EncodeTestID("p/TestA")+".ndjson")
+	path := filepath.Join(verify, "traces", EncodeName("p/TestA")+".ndjson")
 	b, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read final ndjson: %v", err)
@@ -303,15 +246,74 @@ func TestPushWithRetry_RebasesOnConflict(t *testing.T) {
 	}
 }
 
-func TestHistory_UnknownTestReturnsEmpty(t *testing.T) {
+func TestReadOriginURL_NoOriginReturnsErrNoOrigin(t *testing.T) {
 	requireGit(t)
-	repoDir, _ := makeFixture(t)
-	got, err := New(Options{RepoDir: repoDir}).GetTestHistory("github.com/x/p/NeverWritten")
-	if err != nil {
-		t.Fatalf("History on empty origin: %v", err)
+	dir := t.TempDir()
+	gitMust(t, "", "init", dir)
+	_, err := readOriginURL(dir)
+	if !errors.Is(err, ErrNoOrigin) {
+		t.Errorf("expected ErrNoOrigin, got %v", err)
 	}
-	if len(got) != 0 {
-		t.Errorf("expected 0 entries, got %d", len(got))
+}
+
+func TestPersist_RequiresOriginByDefault(t *testing.T) {
+	requireGit(t)
+	dir := t.TempDir()
+	gitMust(t, "", "init", dir)
+	run := newRunContext("orphan-run", "abc", "main")
+	err := New(Options{RepoDir: dir}).InsertNewRun(NewRootSpan(run), []models.Span{makeTestSpan(run, "p/TestA", "OK")}, nil)
+	if !errors.Is(err, ErrNoOrigin) {
+		t.Errorf("expected ErrNoOrigin, got %v", err)
+	}
+}
+
+func TestPersist_LocalOnlyNoRemote(t *testing.T) {
+	requireGit(t)
+	dir := t.TempDir()
+	gitMust(t, "", "init", "-b", "main", dir)
+	gitMust(t, dir, "config", "user.email", "t@example.com")
+	gitMust(t, dir, "config", "user.name", "t")
+	gitMust(t, dir, "commit", "--allow-empty", "-m", "init")
+
+	run := newRunContext("local-run", "abc123", "main")
+	if err := New(Options{RepoDir: dir, NoRemote: true}).InsertNewRun(NewRootSpan(run), []models.Span{makeTestSpan(run, "p/TestA", "OK")}, nil); err != nil {
+		t.Fatalf("InsertNewRun (no-remote): %v", err)
+	}
+
+	out, err := exec.Command("git", "-C", dir, "show", DefaultDataBranch+":traces/"+EncodeName("p/TestA")+".ndjson").CombinedOutput()
+	if err != nil {
+		t.Fatalf("read traces file from data branch: %v: %s", err, out)
+	}
+	if !strings.Contains(string(out), run.RunID) {
+		t.Errorf("trace ndjson missing run_id %q:\n%s", run.RunID, out)
+	}
+}
+
+// TestPersist_LocalOnlyNoRemote_RelativeRepoDir guards the localGitDir
+// regression: when RepoDir was passed as a relative path (e.g. "."), the
+// resolved .git path stayed relative and the push from the ephemeral
+// workdir silently no-op'd against the wrong cwd.
+func TestPersist_LocalOnlyNoRemote_RelativeRepoDir(t *testing.T) {
+	requireGit(t)
+	parent := t.TempDir()
+	gitMust(t, "", "init", "-b", "main", filepath.Join(parent, "repo"))
+	gitMust(t, filepath.Join(parent, "repo"), "config", "user.email", "t@example.com")
+	gitMust(t, filepath.Join(parent, "repo"), "config", "user.name", "t")
+	gitMust(t, filepath.Join(parent, "repo"), "commit", "--allow-empty", "-m", "init")
+
+	t.Chdir(parent)
+
+	run := newRunContext("rel-run", "abc123", "main")
+	if err := New(Options{RepoDir: "repo", NoRemote: true}).InsertNewRun(NewRootSpan(run), []models.Span{makeTestSpan(run, "p/TestA", "OK")}, nil); err != nil {
+		t.Fatalf("InsertNewRun (no-remote, relative): %v", err)
+	}
+
+	out, err := exec.Command("git", "-C", "repo", "show", DefaultDataBranch+":traces/"+EncodeName("p/TestA")+".ndjson").CombinedOutput()
+	if err != nil {
+		t.Fatalf("read traces file from data branch: %v: %s", err, out)
+	}
+	if !strings.Contains(string(out), run.RunID) {
+		t.Errorf("trace ndjson missing run_id %q:\n%s", run.RunID, out)
 	}
 }
 
@@ -339,163 +341,55 @@ func TestReadOriginURL_WorksInWorktree(t *testing.T) {
 	}
 }
 
-func TestReadOriginURL_NoOriginReturnsErrNoOrigin(t *testing.T) {
-	requireGit(t)
-	dir := t.TempDir()
-	gitMust(t, "", "init", dir)
-	_, err := readOriginURL(dir)
-	if !errors.Is(err, ErrNoOrigin) {
-		t.Errorf("expected ErrNoOrigin, got %v", err)
-	}
-}
-
-func TestPersist_LocalOnlyNoRemote(t *testing.T) {
-	requireGit(t)
-	dir := t.TempDir()
-	gitMust(t, "", "init", "-b", "main", dir)
-	gitMust(t, dir, "config", "user.email", "t@example.com")
-	gitMust(t, dir, "config", "user.name", "t")
-	gitMust(t, dir, "commit", "--allow-empty", "-m", "init")
-
-	results := []models.TestResult{{
-		Id:        "p/TestA",
-		Ran:       true,
-		Passed:    true,
-		Duration:  1 * time.Millisecond,
-		StartTime: time.Date(2026, 4, 30, 0, 0, 0, 0, time.UTC),
-	}}
-	run := newTestRun("local-run", "abc123", "main")
-	if err := New(Options{RepoDir: dir, NoRemote: true}).InsertNewTestResults(run, results); err != nil {
-		t.Fatalf("Persist (no-remote): %v", err)
-	}
-
-	out, err := exec.Command("git", "-C", dir, "show", DefaultDataBranch+":tests/"+EncodeTestID("p/TestA")+".ndjson").CombinedOutput()
-	if err != nil {
-		t.Fatalf("read tests file from data branch: %v: %s", err, out)
-	}
-	if !strings.Contains(string(out), run.RunID) {
-		t.Errorf("test ndjson missing run_id %q:\n%s", run.RunID, out)
-	}
-
-	hist, err := New(Options{RepoDir: dir, NoRemote: true}).GetTestHistory("p/TestA")
-	if err != nil {
-		t.Fatalf("History (no-remote): %v", err)
-	}
-	if len(hist) != 1 || hist[0].Test.RunID != run.RunID {
-		t.Fatalf("unexpected history: %+v", hist)
-	}
-}
-
-// TestPersist_LocalOnlyNoRemote_RelativeRepoDir guards the localGitDir
-// regression: when RepoDir was passed as a relative path (e.g. "."), the
-// resolved .git path stayed relative and the push from the ephemeral
-// workdir silently no-op'd against the wrong cwd.
-func TestPersist_LocalOnlyNoRemote_RelativeRepoDir(t *testing.T) {
-	requireGit(t)
-	parent := t.TempDir()
-	gitMust(t, "", "init", "-b", "main", filepath.Join(parent, "repo"))
-	gitMust(t, filepath.Join(parent, "repo"), "config", "user.email", "t@example.com")
-	gitMust(t, filepath.Join(parent, "repo"), "config", "user.name", "t")
-	gitMust(t, filepath.Join(parent, "repo"), "commit", "--allow-empty", "-m", "init")
-
-	t.Chdir(parent)
-
-	results := []models.TestResult{{
-		Id:        "p/TestA",
-		Ran:       true,
-		Passed:    true,
-		Duration:  1 * time.Millisecond,
-		StartTime: time.Date(2026, 4, 30, 0, 0, 0, 0, time.UTC),
-	}}
-	run := newTestRun("rel-run", "abc123", "main")
-	if err := New(Options{RepoDir: "repo", NoRemote: true}).InsertNewTestResults(run, results); err != nil {
-		t.Fatalf("Persist (no-remote, relative): %v", err)
-	}
-
-	out, err := exec.Command("git", "-C", "repo", "show", DefaultDataBranch+":tests/"+EncodeTestID("p/TestA")+".ndjson").CombinedOutput()
-	if err != nil {
-		t.Fatalf("read tests file from data branch: %v: %s", err, out)
-	}
-	if !strings.Contains(string(out), run.RunID) {
-		t.Errorf("test ndjson missing run_id %q:\n%s", run.RunID, out)
-	}
-}
-
 func TestPersist_DevModeWritesScratchDirAndSkipsGit(t *testing.T) {
 	requireGit(t)
 	dir := t.TempDir()
 	gitMust(t, "", "init", "-b", "main", dir)
 
-	results := []models.TestResult{{
-		Id:        "p/TestA",
-		Ran:       true,
-		Passed:    true,
-		Duration:  1 * time.Millisecond,
-		StartTime: time.Date(2026, 4, 30, 0, 0, 0, 0, time.UTC),
-	}}
-	run := newTestRun("dev-run", "abc123", "main")
-	if err := New(Options{RepoDir: dir, Dev: true}).InsertNewTestResults(run, results); err != nil {
-		t.Fatalf("Persist (dev): %v", err)
+	run := newRunContext("dev-run", "abc123", "main")
+	if err := New(Options{RepoDir: dir, Dev: true}).InsertNewRun(NewRootSpan(run), []models.Span{makeTestSpan(run, "p/TestA", "OK")}, nil); err != nil {
+		t.Fatalf("InsertNewRun (dev): %v", err)
 	}
 
 	scratch := filepath.Join(dir, DevDir)
-	runPath := filepath.Join(scratch, "runs", run.RunID+".json")
-	if _, err := os.Stat(runPath); err != nil {
-		t.Errorf("run record not written to scratch dir: %v", err)
+	tracesPath := filepath.Join(scratch, "traces", EncodeName("p/TestA")+".ndjson")
+	if _, err := os.Stat(tracesPath); err != nil {
+		t.Errorf("trace file not written to scratch dir: %v", err)
 	}
-	entryPath := filepath.Join(scratch, "tests", EncodeTestID("p/TestA")+".ndjson")
-	b, err := os.ReadFile(entryPath)
-	if err != nil {
-		t.Fatalf("entry file not written: %v", err)
-	}
-	if !strings.Contains(string(b), run.RunID) {
-		t.Errorf("entry file missing run_id %q:\n%s", run.RunID, b)
-	}
-
-	// No data branch ref should exist — git path was skipped.
 	if out, err := exec.Command("git", "-C", dir, "rev-parse", "--verify", DefaultDataBranch).CombinedOutput(); err == nil {
 		t.Errorf("expected no %s branch, but rev-parse succeeded: %s", DefaultDataBranch, out)
 	}
 }
 
-func TestPersist_RequiresOriginByDefault(t *testing.T) {
-	requireGit(t)
-	dir := t.TempDir()
-	gitMust(t, "", "init", dir)
-	results := []models.TestResult{{Id: "p/TestA", Ran: true, Passed: true}}
-	run := newTestRun("orphan-run", "abc", "main")
-	err := New(Options{RepoDir: dir}).InsertNewTestResults(run, results)
-	if !errors.Is(err, ErrNoOrigin) {
-		t.Errorf("expected ErrNoOrigin, got %v", err)
+// --- helpers ---
+
+func newRunContext(runID, commit, branch string) models.RunContext {
+	return models.RunContext{
+		RunID:             runID,
+		TraceID:           models.DeriveTraceID(runID),
+		RootSpanID:        models.NewSpanID(),
+		StartTimeUnixNano: 1,
+		Resource: map[string]any{
+			"service.name":                "defrost",
+			"vcs.repository.ref.revision": commit,
+			"vcs.repository.ref.name":     branch,
+			"defrost.run_id":              runID,
+		},
 	}
 }
 
-func TestDeriveStatus(t *testing.T) {
-	cases := []struct {
-		r    models.TestResult
-		want string
-	}{
-		{models.TestResult{Ran: false}, "skip"},
-		{models.TestResult{Ran: true, Passed: true}, "pass"},
-		{models.TestResult{Ran: true, Passed: false}, "fail"},
-		{models.TestResult{Ran: true, Passed: false, Output: "panic: nil deref\n"}, "panic"},
-	}
-	for _, tc := range cases {
-		if got := deriveStatus(tc.r); got != tc.want {
-			t.Errorf("deriveStatus(%+v) = %q, want %q", tc.r, got, tc.want)
-		}
-	}
-}
-
-// --- test helpers ---
-
-func newTestRun(runID, commit, branch string) RunRecord {
-	return RunRecord{
-		Schema:    SchemaVersion,
-		RunID:     runID,
-		Commit:    commit,
-		Branch:    branch,
-		Timestamp: time.Date(2026, 4, 29, 12, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+func makeTestSpan(run models.RunContext, name, statusCode string) models.Span {
+	return models.Span{
+		Schema:            models.SchemaV3,
+		TraceID:           run.TraceID,
+		SpanID:            models.NewSpanID(),
+		ParentSpanID:      run.RootSpanID,
+		Name:              name,
+		StartTimeUnixNano: run.StartTimeUnixNano + 1,
+		EndTimeUnixNano:   run.StartTimeUnixNano + 5,
+		Status:            models.SpanStatus{Code: statusCode},
+		Resource:          run.Resource,
+		Attributes:        map[string]any{"test.case.name": name, "defrost.run_id": run.RunID},
 	}
 }
 

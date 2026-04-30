@@ -24,114 +24,39 @@ import (
 )
 
 const (
-	// DefaultDataBranch is the branch name we use to namespace defrost
-	// data on the user's repo. Underscore prefix to (a) make the branch
-	// obviously not user-authored and (b) sort it away from real
-	// branches in `git branch -a`. Note: git-check-ref-format forbids
-	// branch components starting with `.`, so `.defrost` is not a legal
-	// alternative.
 	DefaultDataBranch = "_defrost"
-	SchemaVersion     = 2
 
 	botName  = "defrost[bot]"
 	botEmail = "defrost[bot]@users.noreply.github.com"
 
-	gitAttributes = "tests/*.ndjson merge=union\n"
+	gitAttributes = "traces/*.ndjson merge=union\nmetrics/*.ndjson merge=union\n"
 	readme        = "# defrost data branch\n\nManaged by the defrost CLI. Do not edit by hand.\n"
 
 	maxPushAttempts = 5
+
+	rootSpanName = "defrost.run"
 )
 
-// Entry is one persisted line per (test, run) in tests/<id>.ndjson on the
-// data branch. Run-level metadata (commit, author, dirty, etc.) is stored
-// once per run in a sibling RunRecord at runs/<run_id>.json — Entry just
-// references it via RunID.
-type Entry struct {
-	Schema     int    `json:"schema"`
-	TestID     string `json:"test_id"`
-	TestName   string `json:"test_name"`
-	RunID      string `json:"run_id"`
-	Timestamp  string `json:"ts"`
-	Ran        bool   `json:"ran"`
-	Passed     bool   `json:"passed"`
-	Status     string `json:"status"`
-	DurationMs int64  `json:"duration_ms"`
-	Output     string `json:"output,omitempty"`
-}
-
-// RunRecord captures everything common to all tests in a single defrost
-// invocation: which commit, who authored it, was the workspace dirty, what
-// command was run, and the runtime environment. Persisted as one file at
-// runs/<run_id>.json — unique filename per run, so concurrent writers
-// never collide on it.
-type RunRecord struct {
-	Schema      int      `json:"schema"`
-	RunID       string   `json:"run_id"`
-	Commit      string   `json:"commit,omitempty"`
-	Parent      string   `json:"parent,omitempty"`
-	Branch      string   `json:"branch,omitempty"`
-	PR          int      `json:"pr,omitempty"`
-	AuthorEmail string   `json:"author_email,omitempty"`
-	AuthorName  string   `json:"author_name,omitempty"`
-	Dirty       bool     `json:"dirty"`
-	DirtyHash   string   `json:"dirty_hash,omitempty"`
-	Cmd         []string `json:"cmd,omitempty"`
-	CmdHash     string   `json:"cmd_hash,omitempty"`
-	GoVersion   string   `json:"go_version,omitempty"`
-	OS          string   `json:"os,omitempty"`
-	Arch        string   `json:"arch,omitempty"`
-	Timestamp   string   `json:"ts"`
-}
-
-// HistoricalEntry pairs a test's persisted Entry with the RunRecord it
-// references. Output of History.
-type HistoricalEntry struct {
-	Test Entry     `json:"test"`
-	Run  RunRecord `json:"run"`
-}
-
-// Options controls Persist and History.
+// Options controls Backend creation.
 type Options struct {
-	RepoDir    string // path to the user's git repo
-	DataBranch string // branch name on origin; "" → DefaultDataBranch
-	AuthToken  string // optional GITHUB_TOKEN; pushed via http.extraHeader for HTTPS remotes
-
-	// NoRemote, when true, persists into the user's local .git directory
-	// instead of cloning from / pushing to origin. The data branch lives
-	// in the user's repo and is never pushed anywhere. Useful for purely
-	// local flaky-test tracking.
-	NoRemote bool
-
-	// Dev, when true, selects the dev-mode backend: writes the run
-	// record and entry files to <RepoDir>/.defrost-dev/ (a scratch
-	// directory the user gitignores) and skips all git operations.
-	// Intended for developing defrost itself without polluting the
-	// data branch.
-	Dev bool
+	RepoDir    string
+	DataBranch string // "" → DefaultDataBranch
+	AuthToken  string
+	NoRemote   bool
+	Dev        bool
 }
 
-// DevDir is the subdirectory of RepoDir used when Dev is set.
 const DevDir = ".defrost-dev"
 
-// Backend is the swappable persistence layer. Implementations decide
-// where run records and test entries live (git data branch, scratch dir,
-// SQL database, etc.). All implementations are responsible for atomicity
-// within a single InsertNewTestResults call: either every result lands
-// or none does.
+// Backend is the swappable persistence layer. Schema 3.
 type Backend interface {
-	// InitialisePersistence prepares storage for first use. Idempotent.
-	// Implementations may be lazy — InsertNewTestResults and
-	// GetTestHistory must work without an explicit prior call.
 	InitialisePersistence() error
-
-	// InsertNewTestResults atomically writes a RunRecord plus one entry
-	// per result. Empty results are a no-op.
-	InsertNewTestResults(run RunRecord, results []models.TestResult) error
-
-	// GetTestHistory returns every persisted entry for the named test,
-	// joined with its RunRecord, oldest first. Returns an empty slice
-	// when the test has no history yet.
-	GetTestHistory(testName string) ([]HistoricalEntry, error)
+	// InsertNewRun atomically persists the root run span, every test span,
+	// and every metric data point produced by one defrost exec invocation.
+	InsertNewRun(root models.Span, testSpans []models.Span, metrics []models.MetricEntry) error
+	// GetTestHistory returns every span persisted under traces/<testName>.ndjson,
+	// sorted oldest first by start time. Empty slice when nothing matches.
+	GetTestHistory(testName string) ([]models.Span, error)
 }
 
 // New returns the Backend implied by opts. Dev mode selects the local
@@ -143,28 +68,18 @@ func New(opts Options) Backend {
 	return &gitBackend{opts: opts}
 }
 
-// ErrNoOrigin is returned when the user's repo has no origin remote
-// configured. Callers should treat this as a soft "nothing to persist
-// against" rather than a failure.
+// ErrNoOrigin is returned when the user's repo has no origin remote configured.
 var ErrNoOrigin = errors.New("no origin remote configured")
 
-// EncodeTestID returns a filesystem-safe identifier for a Go test name
-// such as "github.com/bjk95/defrost/internal/x/TestFoo". Reversible via
-// DecodeTestID. Cross-platform — every byte unsafe in a URL path segment
-// becomes %XX, so the result handles Windows-reserved characters and
-// unicode the same way everywhere.
-func EncodeTestID(name string) string {
-	return url.PathEscape(name)
-}
+// EncodeName escapes a span or metric name into a filesystem-safe segment.
+// Reversible via DecodeName.
+func EncodeName(name string) string { return url.PathEscape(name) }
 
-// DecodeTestID is the inverse of EncodeTestID.
-func DecodeTestID(id string) (string, error) {
-	return url.PathUnescape(id)
-}
+// DecodeName is the inverse of EncodeName.
+func DecodeName(id string) (string, error) { return url.PathUnescape(id) }
 
 // NewRunID returns a sortable-by-time, collision-resistant run identifier.
-// Format: <16 hex of UnixNano>-<8 hex of crypto/rand>. ASCII-only, fixed
-// width, lex-sortable in time order.
+// Format: <16 hex of UnixNano>-<8 hex of crypto/rand>.
 func NewRunID() string {
 	var buf [4]byte
 	if _, err := rand.Read(buf[:]); err != nil {
@@ -173,88 +88,101 @@ func NewRunID() string {
 	return fmt.Sprintf("%016x-%s", time.Now().UnixNano(), hex.EncodeToString(buf[:]))
 }
 
-// DetectRun builds a RunRecord by inspecting the user's repo, environment
-// variables (GitHub Actions), and Go runtime. The caller may freely
-// override any field on the returned record before passing it to Persist.
-func DetectRun(opts Options, cmd []string) (RunRecord, error) {
+// DetectRunContext builds a RunContext for one defrost exec invocation by
+// inspecting the user's repo, environment variables, and Go runtime.
+// Returned Resource attributes follow OTel CI/CD and VCS semantic
+// conventions where applicable; defrost-private keys use a `defrost.*`
+// prefix.
+func DetectRunContext(opts Options, cmd []string, defrostVersion string) (models.RunContext, error) {
 	if _, err := runGit(opts.RepoDir, "rev-parse", "--is-inside-work-tree"); err != nil {
-		return RunRecord{}, fmt.Errorf("not a git repo at %s: %w", opts.RepoDir, err)
+		return models.RunContext{}, fmt.Errorf("not a git repo at %s: %w", opts.RepoDir, err)
 	}
 
-	run := RunRecord{
-		Schema:    SchemaVersion,
-		RunID:     NewRunID(),
-		Cmd:       cmd,
-		CmdHash:   cmdHash(cmd),
-		GoVersion: runtime.Version(),
-		OS:        runtime.GOOS,
-		Arch:      runtime.GOARCH,
-		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+	runID := NewRunID()
+	res := map[string]any{
+		"service.name":            "defrost",
+		"service.version":         defrostVersion,
+		"cicd.pipeline.run.id":    runID,
+		"host.os.type":            runtime.GOOS,
+		"host.arch":               runtime.GOARCH,
+		"process.runtime.version": runtime.Version(),
+		"defrost.cmd":             cmd,
+		"defrost.cmd_hash":        cmdHash(cmd),
+		"defrost.run_id":          runID,
 	}
 
-	// Read commit hash, parents, author email, author name in one log call.
 	if out, err := runGit(opts.RepoDir, "log", "-1", "--format=%H%n%P%n%ae%n%an"); err == nil {
 		lines := strings.SplitN(out, "\n", 4)
-		if len(lines) >= 1 {
-			run.Commit = lines[0]
+		if len(lines) >= 1 && lines[0] != "" {
+			res["vcs.repository.ref.revision"] = lines[0]
 		}
 		if len(lines) >= 2 {
 			parents := strings.Fields(lines[1])
 			if len(parents) > 0 {
-				run.Parent = parents[0]
+				res["defrost.parent_commit"] = parents[0]
 			}
 		}
-		if len(lines) >= 3 {
-			run.AuthorEmail = lines[2]
+		if len(lines) >= 3 && lines[2] != "" {
+			res["defrost.author_email"] = lines[2]
 		}
-		if len(lines) >= 4 {
-			run.AuthorName = lines[3]
+		if len(lines) >= 4 && lines[3] != "" {
+			res["defrost.author_name"] = lines[3]
 		}
 	}
 
-	if out, err := runGit(opts.RepoDir, "rev-parse", "--abbrev-ref", "HEAD"); err == nil && out != "HEAD" {
-		run.Branch = out
+	if out, err := runGit(opts.RepoDir, "rev-parse", "--abbrev-ref", "HEAD"); err == nil && out != "HEAD" && out != "" {
+		res["vcs.repository.ref.name"] = out
+	} else if v := os.Getenv("GITHUB_HEAD_REF"); v != "" {
+		res["vcs.repository.ref.name"] = v
+	} else if v := os.Getenv("GITHUB_REF_NAME"); v != "" {
+		res["vcs.repository.ref.name"] = v
 	}
-	if run.Branch == "" {
-		if v := os.Getenv("GITHUB_HEAD_REF"); v != "" {
-			run.Branch = v
-		} else if v := os.Getenv("GITHUB_REF_NAME"); v != "" {
-			run.Branch = v
-		}
+
+	if pr := parsePRFromEnv(); pr != 0 {
+		res["vcs.repository.change.id"] = strconv.Itoa(pr)
 	}
-	run.PR = parsePRFromEnv()
 
 	dirty, dirtyHash := workingTreeStatus(opts.RepoDir)
-	run.Dirty = dirty
-	run.DirtyHash = dirtyHash
+	res["defrost.dirty"] = dirty
+	if dirtyHash != "" {
+		res["defrost.dirty_hash"] = dirtyHash
+	}
 
-	return run, nil
+	now := time.Now().UnixNano()
+	return models.RunContext{
+		RunID:             runID,
+		TraceID:           models.DeriveTraceID(runID),
+		RootSpanID:        models.NewSpanID(),
+		Resource:          res,
+		StartTimeUnixNano: now,
+	}, nil
 }
 
-// gitBackend stores runs/entries on a dedicated git data branch. Default
-// remote is the user's `origin`; with NoRemote the branch lives only in
-// the user's local .git directory.
-//
-// Concurrent writers are reconciled by retrying push up to
-// maxPushAttempts times. On a non-fast-forward rejection the backend
-// fetches the current tip and rebases — git's three-way merge runs the
-// `merge=union` driver from .gitattributes. RunRecord files have unique
-// filenames per run_id and never conflict.
-type gitBackend struct {
-	opts Options
+// NewRootSpan returns the bookkeeping span representing one defrost exec
+// invocation. End time and status are filled in by the caller after the
+// child exits and persistence either succeeds or fails.
+func NewRootSpan(run models.RunContext) models.Span {
+	return models.Span{
+		Schema:            models.SchemaV3,
+		TraceID:           run.TraceID,
+		SpanID:            run.RootSpanID,
+		Name:              rootSpanName,
+		Kind:              "INTERNAL",
+		StartTimeUnixNano: run.StartTimeUnixNano,
+		Status:            models.SpanStatus{Code: "UNSET"},
+		Attributes:        map[string]any{"defrost.run_id": run.RunID},
+		Resource:          run.Resource,
+	}
 }
 
-// InitialisePersistence is a no-op: the git backend's storage is the
-// data branch itself, which is created lazily on first write inside
-// InsertNewTestResults (the workdir is per-call and ephemeral).
+// gitBackend stores spans and metrics on a dedicated git data branch.
+type gitBackend struct{ opts Options }
+
 func (b *gitBackend) InitialisePersistence() error { return nil }
 
-func (b *gitBackend) InsertNewTestResults(run RunRecord, results []models.TestResult) error {
-	if len(results) == 0 {
-		return nil
-	}
-	if run.RunID == "" {
-		return errors.New("persist: empty RunID")
+func (b *gitBackend) InsertNewRun(root models.Span, testSpans []models.Span, metrics []models.MetricEntry) error {
+	if root.SpanID == "" {
+		return errors.New("persist: empty root span id")
 	}
 
 	branch := b.opts.DataBranch
@@ -284,31 +212,29 @@ func (b *gitBackend) InsertNewTestResults(run RunRecord, results []models.TestRe
 		}
 	}
 
-	if err := writeRunRecord(workDir, run); err != nil {
+	if err := appendSpans(workDir, append([]models.Span{root}, testSpans...)); err != nil {
 		return err
 	}
-	if err := appendEntries(workDir, run, results); err != nil {
+	if err := appendMetrics(workDir, metrics); err != nil {
 		return err
 	}
 
-	if err := commitAll(workDir, commitMessage(run, len(results))); err != nil {
+	if err := commitAll(workDir, commitMessage(root, len(testSpans), len(metrics))); err != nil {
 		return err
 	}
 
 	return pushWithRetry(workDir, branch, branchExisted)
 }
 
-func (b *gitBackend) GetTestHistory(testName string) ([]HistoricalEntry, error) {
+func (b *gitBackend) GetTestHistory(testName string) ([]models.Span, error) {
 	branch := b.opts.DataBranch
 	if branch == "" {
 		branch = DefaultDataBranch
 	}
-
 	remoteURL, err := resolveTargetURL(b.opts)
 	if err != nil {
 		return nil, err
 	}
-
 	exists, err := branchExistsOnRemote(remoteURL, branch)
 	if err != nil {
 		return nil, err
@@ -322,63 +248,116 @@ func (b *gitBackend) GetTestHistory(testName string) ([]HistoricalEntry, error) 
 		return nil, fmt.Errorf("mktemp: %w", err)
 	}
 	defer os.RemoveAll(workDir)
-	// MkdirTemp created it; clone wants an empty path.
-	_ = os.Remove(workDir)
+	_ = os.Remove(workDir) // clone wants empty path
 
 	if _, err := runGit("", "clone", "--quiet", "--depth=1", "--single-branch", "--branch", branch, remoteURL, workDir); err != nil {
 		return nil, fmt.Errorf("clone data branch: %w", err)
 	}
 
-	return readHistoryFromDir(workDir, testName)
+	return readSpansFromDir(workDir, testName)
 }
 
-// fileBackend writes runs and entries to a plain directory on disk and
-// performs no git operations. The directory is reused across runs so the
-// developer can inspect accumulated output; it is the user's
-// responsibility to gitignore it.
-type fileBackend struct {
-	dir string
-}
+// fileBackend writes spans/metrics to a plain directory; no git operations.
+type fileBackend struct{ dir string }
 
 func (b *fileBackend) InitialisePersistence() error {
-	if err := os.MkdirAll(b.dir, 0o755); err != nil {
-		return fmt.Errorf("mkdir %s: %w", b.dir, err)
-	}
-	return nil
+	return os.MkdirAll(b.dir, 0o755)
 }
 
-func (b *fileBackend) InsertNewTestResults(run RunRecord, results []models.TestResult) error {
-	if len(results) == 0 {
-		return nil
-	}
-	if run.RunID == "" {
-		return errors.New("persist: empty RunID")
+func (b *fileBackend) InsertNewRun(root models.Span, testSpans []models.Span, metrics []models.MetricEntry) error {
+	if root.SpanID == "" {
+		return errors.New("persist: empty root span id")
 	}
 	if err := b.InitialisePersistence(); err != nil {
 		return err
 	}
-	if err := writeRunRecord(b.dir, run); err != nil {
+	if err := appendSpans(b.dir, append([]models.Span{root}, testSpans...)); err != nil {
 		return err
 	}
-	return appendEntries(b.dir, run, results)
+	return appendMetrics(b.dir, metrics)
 }
 
-func (b *fileBackend) GetTestHistory(testName string) ([]HistoricalEntry, error) {
+func (b *fileBackend) GetTestHistory(testName string) ([]models.Span, error) {
 	if _, err := os.Stat(b.dir); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
 		}
 		return nil, err
 	}
-	return readHistoryFromDir(b.dir, testName)
+	return readSpansFromDir(b.dir, testName)
 }
 
-// readHistoryFromDir reads tests/<id>.ndjson from a directory laid out
-// like the data branch and joins each entry with its RunRecord from
-// runs/<run_id>.json. Shared by gitBackend (after cloning) and
-// fileBackend.
-func readHistoryFromDir(dir, testName string) ([]HistoricalEntry, error) {
-	path := filepath.Join(dir, "tests", EncodeTestID(testName)+".ndjson")
+// --- write helpers ---
+
+func writeSeed(workDir string) error {
+	if err := os.WriteFile(filepath.Join(workDir, ".gitattributes"), []byte(gitAttributes), 0o644); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(workDir, "README.md"), []byte(readme), 0o644)
+}
+
+func appendSpans(workDir string, spans []models.Span) error {
+	if len(spans) == 0 {
+		return nil
+	}
+	dir := filepath.Join(workDir, "traces")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	for _, s := range spans {
+		line, err := json.Marshal(s)
+		if err != nil {
+			return fmt.Errorf("marshal span %s: %w", s.Name, err)
+		}
+		path := filepath.Join(dir, EncodeName(s.Name)+".ndjson")
+		if err := appendLine(path, line); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func appendMetrics(workDir string, entries []models.MetricEntry) error {
+	if len(entries) == 0 {
+		return nil
+	}
+	dir := filepath.Join(workDir, "metrics")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	for _, e := range entries {
+		line, err := json.Marshal(e)
+		if err != nil {
+			return fmt.Errorf("marshal metric %s: %w", e.Name, err)
+		}
+		path := filepath.Join(dir, EncodeName(e.Name)+".ndjson")
+		if err := appendLine(path, line); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func appendLine(path string, line []byte) error {
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return fmt.Errorf("open %s: %w", path, err)
+	}
+	_, werr := f.Write(append(line, '\n'))
+	cerr := f.Close()
+	if werr != nil {
+		return fmt.Errorf("write %s: %w", path, werr)
+	}
+	if cerr != nil {
+		return fmt.Errorf("close %s: %w", path, cerr)
+	}
+	return nil
+}
+
+// --- read helpers ---
+
+func readSpansFromDir(dir, testName string) ([]models.Span, error) {
+	path := filepath.Join(dir, "traces", EncodeName(testName)+".ndjson")
 	f, err := os.Open(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -388,30 +367,50 @@ func readHistoryFromDir(dir, testName string) ([]HistoricalEntry, error) {
 	}
 	defer f.Close()
 
-	entries, err := parseNDJSON(f)
+	spans, err := parseSpansNDJSON(f)
 	if err != nil {
 		return nil, err
 	}
-	sort.Slice(entries, func(i, j int) bool { return entries[i].Timestamp < entries[j].Timestamp })
-
-	out := make([]HistoricalEntry, 0, len(entries))
-	runCache := map[string]RunRecord{}
-	for _, e := range entries {
-		rec, ok := runCache[e.RunID]
-		if !ok {
-			rec, _ = readRunRecord(dir, e.RunID)
-			runCache[e.RunID] = rec
-		}
-		out = append(out, HistoricalEntry{Test: e, Run: rec})
-	}
-	return out, nil
+	sort.Slice(spans, func(i, j int) bool { return spans[i].StartTimeUnixNano < spans[j].StartTimeUnixNano })
+	return spans, nil
 }
 
-// --- internal helpers ---
+func parseSpansNDJSON(r io.Reader) ([]models.Span, error) {
+	var out []models.Span
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 64*1024), 8*1024*1024)
+	for sc.Scan() {
+		line := bytes.TrimSpace(sc.Bytes())
+		if len(line) == 0 {
+			continue
+		}
+		var s models.Span
+		if err := json.Unmarshal(line, &s); err != nil {
+			return nil, fmt.Errorf("parse ndjson line: %w", err)
+		}
+		out = append(out, s)
+	}
+	return out, sc.Err()
+}
 
-// gitErr carries the captured stderr and exit code so callers can branch
-// on specific failure modes (most importantly: "ref does not exist", a.k.a.
-// exit code 2 from ls-remote / remote get-url / similar).
+func commitMessage(root models.Span, nSpans, nMetrics int) string {
+	commit, _ := root.Resource["vcs.repository.ref.revision"].(string)
+	short := commit
+	if len(short) > 7 {
+		short = short[:7]
+	}
+	if short == "" {
+		runID, _ := root.Resource["defrost.run_id"].(string)
+		short = runID
+		if len(short) > 8 {
+			short = short[:8]
+		}
+	}
+	return fmt.Sprintf("results for %s (%d spans, %d metrics)", short, nSpans, nMetrics)
+}
+
+// --- preserved helpers (unchanged from schema 2) ---
+
 type gitErr struct {
 	args   []string
 	err    error
@@ -428,9 +427,6 @@ func (e *gitErr) Error() string {
 
 func (e *gitErr) Unwrap() error { return e.err }
 
-// runGit invokes `git` with the given args. If dir is non-empty it becomes
-// the child's working directory; the empty string means "inherit cwd",
-// fine for any URL-driven command (clone, ls-remote).
 func runGit(dir string, args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
 	if dir != "" {
@@ -445,19 +441,11 @@ func runGit(dir string, args ...string) (string, error) {
 		if errors.As(err, &ee) {
 			code = ee.ExitCode()
 		}
-		return strings.TrimSpace(stdout.String()), &gitErr{
-			args:   args,
-			err:    err,
-			stderr: strings.TrimSpace(stderr.String()),
-			code:   code,
-		}
+		return strings.TrimSpace(stdout.String()), &gitErr{args: args, err: err, stderr: strings.TrimSpace(stderr.String()), code: code}
 	}
 	return strings.TrimSpace(stdout.String()), nil
 }
 
-// resolveTargetURL returns the URL to clone/push the data branch from. In
-// remote mode (default) it's the user's origin; in local mode it's the
-// user's own .git directory, so the data branch lives in their repo.
 func resolveTargetURL(opts Options) (string, error) {
 	if opts.NoRemote {
 		return localGitDir(opts.RepoDir)
@@ -480,9 +468,6 @@ func readOriginURL(repoDir string) (string, error) {
 	return out, nil
 }
 
-// localGitDir returns the absolute path of the user's .git directory,
-// resolving worktree gitlinks via the git CLI so it works inside any
-// checkout.
 func localGitDir(repoDir string) (string, error) {
 	out, err := runGit(repoDir, "rev-parse", "--git-common-dir")
 	if err != nil {
@@ -491,14 +476,9 @@ func localGitDir(repoDir string) (string, error) {
 	if !filepath.IsAbs(out) {
 		out = filepath.Join(repoDir, out)
 	}
-	// Must be absolute: this path is used as the origin URL for an
-	// ephemeral workdir elsewhere on disk, so a relative path would
-	// resolve against the wrong cwd and the push would silently no-op.
 	return filepath.Abs(out)
 }
 
-// branchExistsOnRemote returns true iff refs/heads/<branch> is published
-// at the remote. Uses ls-remote, which exits 2 when no ref matches.
 func branchExistsOnRemote(remoteURL, branch string) (bool, error) {
 	_, err := runGit("", "ls-remote", "--exit-code", remoteURL, "refs/heads/"+branch)
 	if err == nil {
@@ -511,17 +491,12 @@ func branchExistsOnRemote(remoteURL, branch string) (bool, error) {
 	return false, fmt.Errorf("ls-remote %s: %w", remoteURL, err)
 }
 
-// openOrInitDataRepo prepares workDir as a checkout of the data branch.
-// If the branch already exists on the remote it is shallow-cloned;
-// otherwise workDir is initialised as a fresh repo with HEAD pointed at
-// the new branch (no parent history, ready for the first commit).
 func openOrInitDataRepo(workDir, remoteURL, branch string) (branchExisted bool, err error) {
 	exists, err := branchExistsOnRemote(remoteURL, branch)
 	if err != nil {
 		return false, err
 	}
 	if exists {
-		// `git clone <url> <dest>` requires dest to be empty or missing.
 		if err := os.Remove(workDir); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return false, fmt.Errorf("clear workdir: %w", err)
 		}
@@ -533,7 +508,6 @@ func openOrInitDataRepo(workDir, remoteURL, branch string) (branchExisted bool, 
 		}
 		return true, nil
 	}
-
 	if err := os.MkdirAll(workDir, 0o755); err != nil {
 		return false, fmt.Errorf("mkdir workdir: %w", err)
 	}
@@ -560,101 +534,6 @@ func configureBotIdentity(workDir string) error {
 		return fmt.Errorf("config user.email: %w", err)
 	}
 	return nil
-}
-
-func writeSeed(workDir string) error {
-	if err := os.WriteFile(filepath.Join(workDir, ".gitattributes"), []byte(gitAttributes), 0o644); err != nil {
-		return err
-	}
-	return os.WriteFile(filepath.Join(workDir, "README.md"), []byte(readme), 0o644)
-}
-
-func writeRunRecord(workDir string, run RunRecord) error {
-	dir := filepath.Join(workDir, "runs")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	b, err := json.MarshalIndent(run, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal run record: %w", err)
-	}
-	path := filepath.Join(dir, run.RunID+".json")
-	return os.WriteFile(path, append(b, '\n'), 0o644)
-}
-
-func readRunRecord(workDir, runID string) (RunRecord, error) {
-	path := filepath.Join(workDir, "runs", runID+".json")
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return RunRecord{}, err
-	}
-	var run RunRecord
-	if err := json.Unmarshal(b, &run); err != nil {
-		return RunRecord{}, fmt.Errorf("parse %s: %w", path, err)
-	}
-	return run, nil
-}
-
-func appendEntries(workDir string, run RunRecord, results []models.TestResult) error {
-	dir := filepath.Join(workDir, "tests")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	for _, r := range results {
-		entry := toEntry(r, run)
-		line, err := json.Marshal(entry)
-		if err != nil {
-			return fmt.Errorf("marshal entry for %s: %w", r.Id, err)
-		}
-		path := filepath.Join(dir, entry.TestID+".ndjson")
-		f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-		if err != nil {
-			return fmt.Errorf("open %s: %w", path, err)
-		}
-		_, werr := f.Write(append(line, '\n'))
-		cerr := f.Close()
-		if werr != nil {
-			return fmt.Errorf("write %s: %w", path, werr)
-		}
-		if cerr != nil {
-			return fmt.Errorf("close %s: %w", path, cerr)
-		}
-	}
-	return nil
-}
-
-func toEntry(r models.TestResult, run RunRecord) Entry {
-	ts := r.StartTime
-	if ts.IsZero() {
-		ts = time.Now()
-	}
-	return Entry{
-		Schema:     SchemaVersion,
-		TestID:     EncodeTestID(r.Id),
-		TestName:   r.Id,
-		RunID:      run.RunID,
-		Timestamp:  ts.UTC().Format(time.RFC3339Nano),
-		Ran:        r.Ran,
-		Passed:     r.Passed,
-		Status:     deriveStatus(r),
-		DurationMs: r.Duration.Milliseconds(),
-		Output:     r.Output,
-	}
-}
-
-// deriveStatus collapses go test outcomes into a small enum useful for
-// flaky-test classification: "skip", "pass", "panic", or "fail".
-func deriveStatus(r models.TestResult) string {
-	if !r.Ran {
-		return "skip"
-	}
-	if r.Passed {
-		return "pass"
-	}
-	if strings.Contains(r.Output, "panic:") {
-		return "panic"
-	}
-	return "fail"
 }
 
 func commitAll(workDir, msg string) error {
@@ -717,44 +596,10 @@ func pullRebase(workDir, branch string) error {
 	}
 	target := fmt.Sprintf("refs/remotes/origin/%s", branch)
 	if _, err := runGit(workDir, "rebase", target); err != nil {
-		// Best-effort cleanup so the workdir is in a known state.
 		_, _ = runGit(workDir, "rebase", "--abort")
 		return fmt.Errorf("git rebase %s: %w", target, err)
 	}
 	return nil
-}
-
-func commitMessage(run RunRecord, n int) string {
-	short := run.Commit
-	if len(short) > 7 {
-		short = short[:7]
-	}
-	if short == "" {
-		short = run.RunID
-		if len(short) > 8 {
-			short = short[:8]
-		}
-	}
-	return fmt.Sprintf("results for %s (%d entries)", short, n)
-}
-
-func parseNDJSON(r io.Reader) ([]Entry, error) {
-	out := []Entry{}
-	sc := bufio.NewScanner(r)
-	// Allow large lines: long Output captures can exceed the default 64KB.
-	sc.Buffer(make([]byte, 64*1024), 8*1024*1024)
-	for sc.Scan() {
-		line := bytes.TrimSpace(sc.Bytes())
-		if len(line) == 0 {
-			continue
-		}
-		var e Entry
-		if err := json.Unmarshal(line, &e); err != nil {
-			return nil, fmt.Errorf("parse ndjson line: %w", err)
-		}
-		out = append(out, e)
-	}
-	return out, sc.Err()
 }
 
 func cmdHash(cmd []string) string {
@@ -765,11 +610,6 @@ func cmdHash(cmd []string) string {
 	return hex.EncodeToString(h[:8])
 }
 
-// workingTreeStatus reports whether the user's repo has uncommitted
-// changes. When dirty, the second return value is a stable hash of the
-// unified diff against HEAD so two distinct dirty states do not look like
-// the same run. Falls back to a hash of the status text if `git diff`
-// can't be run for any reason.
 func workingTreeStatus(repoDir string) (bool, string) {
 	out, err := runGit(repoDir, "status", "--porcelain")
 	if err != nil || out == "" {
@@ -790,8 +630,6 @@ func parsePRFromEnv() int {
 			return n
 		}
 	}
-	// On GitHub Actions PR runs, GITHUB_REF is "refs/pull/<n>/merge"
-	// or "refs/pull/<n>/head".
 	ref := os.Getenv("GITHUB_REF")
 	if !strings.HasPrefix(ref, "refs/pull/") {
 		return 0
