@@ -1,6 +1,7 @@
 package promptfoo
 
 import (
+	"path/filepath"
 	"strings"
 )
 
@@ -22,18 +23,16 @@ func (a *Adapter) Matches(cmd []string) bool {
 		return false
 	}
 	for i, tok := range cmd {
-		base := tok
-		if at := strings.Index(tok, "@"); at > 0 {
-			base = tok[:at]
+		base := filepath.Base(tok)
+		if at := strings.Index(base, "@"); at > 0 {
+			base = base[:at]
 		}
 		if base != "promptfoo" {
 			continue
 		}
-		// Need an `eval` subcommand somewhere after this token.
-		for j := i + 1; j < len(cmd); j++ {
-			if cmd[j] == "eval" {
-				return true
-			}
+		// Need `eval` as the next positional token.
+		if i+1 < len(cmd) && cmd[i+1] == "eval" {
+			return true
 		}
 		return false
 	}

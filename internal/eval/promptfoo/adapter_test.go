@@ -30,8 +30,10 @@ func TestMatches(t *testing.T) {
 		{"pnpm", []string{"pnpm", "promptfoo", "eval"}, true},
 		{"pnpm dlx", []string{"pnpm", "dlx", "promptfoo", "eval"}, true},
 		{"yarn", []string{"yarn", "promptfoo", "eval"}, true},
+		{"node_modules bin", []string{"./node_modules/.bin/promptfoo", "eval"}, true},
 		{"missing eval subcommand", []string{"promptfoo"}, false},
 		{"different subcommand", []string{"promptfoo", "view"}, false},
+		{"different subcommand between promptfoo and eval", []string{"promptfoo", "init", "eval"}, false},
 		{"unrelated cmd", []string{"jest"}, false},
 		{"empty", []string{}, false},
 	}
