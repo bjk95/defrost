@@ -29,6 +29,13 @@ func TestMatches(t *testing.T) {
 		{"different subcommand between promptfoo and eval", []string{"promptfoo", "init", "eval"}, false},
 		{"unrelated cmd", []string{"jest"}, false},
 		{"empty", []string{}, false},
+		{"echo arg-mistake", []string{"echo", "promptfoo", "eval"}, false},
+		{"sh -c promptfoo eval", []string{"sh", "-c", "promptfoo eval"}, false},
+		{"yarn run promptfoo eval", []string{"yarn", "run", "promptfoo", "eval"}, true},
+		{"pnpm dlx with @ver", []string{"pnpm", "dlx", "promptfoo@latest", "eval"}, true},
+		{"npx flag in middle", []string{"npx", "promptfoo", "eval", "--", "--debug"}, true},
+		{"npx wrong package", []string{"npx", "jest", "eval"}, false},
+		{"yarn wrong tool", []string{"yarn", "echo", "eval"}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

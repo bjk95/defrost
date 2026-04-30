@@ -30,23 +30,72 @@ func (a *Adapter) Matches(cmd []string) bool {
 	if len(cmd) == 0 {
 		return false
 	}
-	for i, tok := range cmd {
-		base := filepath.Base(tok)
-		if at := strings.Index(base, "@"); at > 0 {
-			base = base[:at]
-		}
-		if base != "promptfoo" {
-			continue
-		}
-		// Need `eval` as the next positional token. Don't bail here —
-		// `promptfoo` may appear earlier as a flag value (e.g.
-		// `npx --package promptfoo -- promptfoo eval`); the actual
-		// executable token may be later in cmd.
-		if i+1 < len(cmd) && cmd[i+1] == "eval" {
-			return true
-		}
+
+	// Direct: promptfoo eval ... or /path/to/promptfoo eval ... or promptfoo@ver eval ...
+	if parseExecBase(cmd[0]) == "promptfoo" {
+		return len(cmd) >= 2 && cmd[1] == "eval"
 	}
+
+	switch cmd[0] {
+	case "npx", "bunx":
+		// Skip flags; a few flags take their value as the next token.
+		skipNext := false
+		for i := 1; i < len(cmd); i++ {
+			tok := cmd[i]
+			if skipNext {
+				skipNext = false
+				continue
+			}
+			if strings.HasPrefix(tok, "-") {
+				if tok == "-p" || tok == "--package" || tok == "-c" || tok == "--call" {
+					skipNext = true
+				}
+				continue
+			}
+			// First positional after flags must be promptfoo.
+			if parseExecBase(tok) != "promptfoo" {
+				return false
+			}
+			return i+1 < len(cmd) && cmd[i+1] == "eval"
+		}
+		return false
+	case "pnpm":
+		i := 1
+		if i < len(cmd) && cmd[i] == "dlx" {
+			i++
+		}
+		if i >= len(cmd) {
+			return false
+		}
+		if parseExecBase(cmd[i]) != "promptfoo" {
+			return false
+		}
+		return i+1 < len(cmd) && cmd[i+1] == "eval"
+	case "yarn":
+		i := 1
+		if i < len(cmd) && cmd[i] == "run" {
+			i++
+		}
+		if i >= len(cmd) {
+			return false
+		}
+		if parseExecBase(cmd[i]) != "promptfoo" {
+			return false
+		}
+		return i+1 < len(cmd) && cmd[i+1] == "eval"
+	}
+
 	return false
+}
+
+// parseExecBase returns the basename of an exec token with any `@<ver>`
+// suffix stripped. e.g. `./node_modules/.bin/promptfoo@1.0.0` → `promptfoo`.
+func parseExecBase(tok string) string {
+	base := filepath.Base(tok)
+	if at := strings.Index(base, "@"); at > 0 {
+		base = base[:at]
+	}
+	return base
 }
 
 // userOutputPath returns the value of --output / -o / --output=<v> in args,
