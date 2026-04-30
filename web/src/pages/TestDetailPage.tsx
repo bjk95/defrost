@@ -147,7 +147,9 @@ function TestDetailInner({
         />
       </div>
 
-      {isSuppressed && <SuppressionBanner onRemove={() => remove(testId)} />}
+      {isSuppressed && (
+        <SuppressionBanner pending={isMutating} onRemove={() => remove(testId)} />
+      )}
 
       <div
         style={{
@@ -721,7 +723,13 @@ function SuppressionAction({
   );
 }
 
-function SuppressionBanner({ onRemove }: { onRemove: () => void }) {
+function SuppressionBanner({
+  pending,
+  onRemove,
+}: {
+  pending: boolean;
+  onRemove: () => void;
+}) {
   return (
     <div
       style={{
@@ -744,17 +752,19 @@ function SuppressionBanner({ onRemove }: { onRemove: () => void }) {
       <div style={{ flex: 1 }} />
       <button
         onClick={onRemove}
+        disabled={pending}
         style={{
           fontSize: 12,
           background: "transparent",
           border: "none",
-          cursor: "pointer",
+          cursor: pending ? "wait" : "pointer",
           color: "var(--accent)",
           padding: 0,
           fontWeight: 500,
+          opacity: pending ? 0.6 : 1,
         }}
       >
-        Remove
+        {pending ? "Removing…" : "Remove"}
       </button>
     </div>
   );

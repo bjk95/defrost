@@ -161,6 +161,12 @@ function TestsPageInner({
 
   const tree = useMemo(() => buildTestTree(filtered), [filtered]);
 
+  // Hoist the suppressions read up to the page level so the test tree
+  // doesn't mount one useQuery + two useMutation observers per row —
+  // large suites would otherwise create thousands of subscriptions and
+  // re-render every row whenever the suppressions cache updates.
+  const { ids: suppressedIds } = useSuppressions();
+
   const totalStats = useMemo(() => {
     let pass = 0, fail = 0, skip = 0, total = 0;
     for (const t of filtered) {
@@ -276,6 +282,7 @@ function TestsPageInner({
           collapsed={collapsed}
           onToggle={toggle}
           onOpenTest={onOpenTest}
+          suppressedIds={suppressedIds}
         />
       ))}
     </div>
@@ -291,12 +298,14 @@ function TreeNodeView({
   collapsed,
   onToggle,
   onOpenTest,
+  suppressedIds,
 }: {
   node: TreeNode;
   runs: RunSummary[];
   collapsed: Record<string, boolean>;
   onToggle: (path: string) => void;
   onOpenTest: (testId: string) => void;
+  suppressedIds: Set<string>;
 }) {
   if (node.kind === "leaf") {
     return (
@@ -305,6 +314,7 @@ function TreeNodeView({
         leafName={node.name}
         runs={runs}
         depth={node.depth}
+        isSuppressed={suppressedIds.has(node.test.test_id)}
         onClick={() => onOpenTest(node.test.test_id)}
       />
     );
@@ -329,6 +339,7 @@ function TreeNodeView({
             collapsed={collapsed}
             onToggle={onToggle}
             onOpenTest={onOpenTest}
+            suppressedIds={suppressedIds}
           />
         ))}
     </div>
@@ -444,18 +455,18 @@ function TestRowView({
   leafName,
   runs,
   depth,
+  isSuppressed,
   onClick,
 }: {
   test: TestRow;
   leafName: string;
   runs: RunSummary[];
   depth: number;
+  isSuppressed: boolean;
   onClick: () => void;
 }) {
   const [hover, setHover] = useState(false);
   const stats = testStats(test.cells);
-  const { has } = useSuppressions();
-  const isSuppressed = has(test.test_id);
   const indent = ROW_BASE_INDENT + depth * ROW_INDENT_STEP;
   return (
     <div
