@@ -66,7 +66,7 @@ func HandleExecution(cmd []string, opts ExecOpts) int {
 		return 1
 	}
 
-	receiver, restoreEnv := startReceiver(run, runErr == nil)
+	receiver, restoreEnv := startReceiver()
 	defer restoreEnv()
 
 	results, code := a.Run(cmd)
@@ -115,9 +115,7 @@ func HandleExecution(cmd []string, opts ExecOpts) int {
 // for the child. On bind failure we log and return (nil, no-op) so the
 // run continues without metric collection. Returns a restore function the
 // caller MUST call to clear the exported env vars regardless of outcome.
-func startReceiver(run models.RunContext, haveRunContext bool) (*otlp.Receiver, func()) {
-	_ = run            // currently unused; reserved for future per-run scoping of the receiver
-	_ = haveRunContext // currently unused; receiver buffers regardless and we drop on shutdown when no run context
+func startReceiver() (*otlp.Receiver, func()) {
 
 	r := otlp.New()
 	port, err := r.Start()

@@ -91,7 +91,11 @@ func (r *Receiver) handleMetrics(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "unsupported media type", http.StatusUnsupportedMediaType)
 		return
 	}
-	body, err := io.ReadAll(req.Body)
+	// Cap inbound payloads at 16 MiB. Defrost's expected workload is one
+	// run's worth of OTLP exports — far below this — so the cap is a
+	// guard against misbehaving clients, not a real ceiling.
+	const maxBody = 16 << 20
+	body, err := io.ReadAll(http.MaxBytesReader(w, req.Body, maxBody))
 	if err != nil {
 		http.Error(w, "read body", http.StatusBadRequest)
 		return

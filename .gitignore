@@ -1,0 +1,5 @@
+# Defrost dev-mode scratch directory (see `defrost exec --dev`)
+.defrost-dev/
+
+# Build artifacts
+/defrost
