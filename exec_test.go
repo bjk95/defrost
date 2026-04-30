@@ -287,12 +287,23 @@ func TestExecPlumbsAdapterMetricsToPersistence(t *testing.T) {
 		t.Fatalf("expected exit 0, got %d", code)
 	}
 
-	// The persist package has no GetMetricHistory API; assert the round-trip
-	// by verifying the metric was written to the dev scratch directory.
-	// fileBackend writes one NDJSON file per metric name under metrics/.
-	metricFile := filepath.Join(repo, persist.DevDir, "metrics",
-		persist.EncodeName("eval.faithfulness")+".ndjson")
-	if _, err := os.Stat(metricFile); err != nil {
-		t.Fatalf("expected persisted metric file %s, got: %v", metricFile, err)
+	// Assert the round-trip by querying the in-memory backend.
+	loaded, err := persist.New(persist.Options{RepoDir: repo, Dev: true}).LoadAllMetrics()
+	if err != nil {
+		t.Fatalf("LoadAllMetrics: %v", err)
+	}
+	var foundFaithfulness bool
+	for _, rm := range loaded {
+		m := persist.MetricFromResourceMetrics(rm)
+		if m == nil {
+			continue
+		}
+		if m.Name == "eval.faithfulness" {
+			foundFaithfulness = true
+			break
+		}
+	}
+	if !foundFaithfulness {
+		t.Errorf("expected eval.faithfulness in loaded metrics, got %d records", len(loaded))
 	}
 }

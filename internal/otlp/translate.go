@@ -34,21 +34,6 @@ func testResultToSpan(r models.TestResult, run models.RunContext) *tracepb.Span 
 	endNs := startNs + uint64(r.Duration.Nanoseconds())
 
 	resultStatus := mapResultStatus(r)
-	attrs := []*commonpb.KeyValue{
-		models.StringAttr("test.case.name", r.Id),
-		models.StringAttr("test.case.result.status", resultStatus),
-		models.StringAttr("defrost.run_id", run.RunID),
-	}
-	if suite := suiteFromTestID(r.Id); suite != "" {
-		attrs = append(attrs, models.StringAttr("test.suite.name", suite))
-	}
-	ns, fn := codeFromTestID(r.Id)
-	if ns != "" {
-		attrs = append(attrs, models.StringAttr("code.namespace", ns))
-	}
-	if fn != "" {
-		attrs = append(attrs, models.StringAttr("code.function", fn))
-	}
 
 	var events []*tracepb.Span_Event
 	if r.Output != "" {
@@ -68,7 +53,7 @@ func testResultToSpan(r models.TestResult, run models.RunContext) *tracepb.Span 
 		StartTimeUnixNano: startNs,
 		EndTimeUnixNano:   endNs,
 		Status:            resultToSpanStatus(resultStatus, r.Output),
-		Attributes:        attrs,
+		Attributes:        []*commonpb.KeyValue{models.StringAttr("test.case.result.status", resultStatus)},
 		Events:            events,
 	}
 }
@@ -98,33 +83,6 @@ func resultToSpanStatus(resultStatus, output string) *tracepb.Status {
 		return &tracepb.Status{Code: tracepb.Status_STATUS_CODE_ERROR, Message: firstLine(output)}
 	}
 	return &tracepb.Status{Code: tracepb.Status_STATUS_CODE_UNSET}
-}
-
-// suiteFromTestID extracts the suite identifier:
-// "github.com/x/p/TestFoo" → "github.com/x/p"
-// "tests/test_foo.py::TestClass::test_method" → "tests/test_foo.py"
-func suiteFromTestID(id string) string {
-	if suite, _, ok := strings.Cut(id, "::"); ok {
-		return suite
-	}
-	if i := strings.LastIndex(id, "/"); i >= 0 {
-		return id[:i]
-	}
-	return ""
-}
-
-// codeFromTestID returns (namespace, function) for a test id. For Go
-// "<pkg>/TestFoo" the namespace is the package and function is the test
-// name. For pytest "<file>::<class>::<method>" the namespace is the file
-// path and function is the trailing token.
-func codeFromTestID(id string) (string, string) {
-	if i := strings.LastIndex(id, "::"); i >= 0 {
-		return suiteFromTestID(id), id[i+2:]
-	}
-	if i := strings.LastIndex(id, "/"); i >= 0 {
-		return id[:i], id[i+1:]
-	}
-	return "", id
 }
 
 func firstLine(s string) string {

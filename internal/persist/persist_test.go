@@ -40,7 +40,7 @@ func TestEncodeName_RoundTrip(t *testing.T) {
 	}
 }
 
-func TestPersist_WritesTracesAndMetricsOnFirstWrite(t *testing.T) {
+func TestPersist_WritesOneFilePerSignal(t *testing.T) {
 	requireGit(t)
 	repoDir, originURL := makeFixture(t)
 
@@ -72,95 +72,37 @@ func TestPersist_WritesTracesAndMetricsOnFirstWrite(t *testing.T) {
 
 	verify := cloneDataBranch(t, originURL)
 
-	tracesPath := filepath.Join(verify, "traces", EncodeName("github.com/x/p/TestA")+".ndjson")
-	if b, err := os.ReadFile(tracesPath); err != nil {
-		t.Errorf("missing %s: %v", tracesPath, err)
-	} else if !strings.Contains(string(b), run.RunID) {
-		t.Errorf("test span file should mention run id %q:\n%s", run.RunID, b)
+	traceFiles := listFilesWithSuffix(t, filepath.Join(verify, "traces"), fileSuffix)
+	if len(traceFiles) != 1 {
+		t.Fatalf("want exactly 1 trace file, got %d: %v", len(traceFiles), traceFiles)
 	}
-
-	rootPath := filepath.Join(verify, "traces", EncodeName("defrost.run")+".ndjson")
-	if b, err := os.ReadFile(rootPath); err != nil {
-		t.Errorf("missing root span file %s: %v", rootPath, err)
-	} else if !strings.Contains(string(b), run.RunID) {
-		t.Errorf("root span file missing run_id %q:\n%s", run.RunID, b)
+	metricFiles := listFilesWithSuffix(t, filepath.Join(verify, "metrics"), fileSuffix)
+	if len(metricFiles) != 1 {
+		t.Fatalf("want exactly 1 metrics file, got %d: %v", len(metricFiles), metricFiles)
 	}
-
-	metricsPath := filepath.Join(verify, "metrics", EncodeName("db.connection_pool.size")+".ndjson")
-	if b, err := os.ReadFile(metricsPath); err != nil {
-		t.Errorf("missing metrics file %s: %v", metricsPath, err)
-	} else if !strings.Contains(string(b), "db.connection_pool.size") {
-		t.Errorf("metric file missing name:\n%s", b)
-	}
-
-	if _, err := os.Stat(filepath.Join(verify, ".gitattributes")); err != nil {
-		t.Errorf("missing .gitattributes seed: %v", err)
+	if _, err := os.Stat(filepath.Join(verify, ".gitattributes")); err == nil {
+		t.Errorf(".gitattributes should not be written")
 	}
 	if _, err := os.Stat(filepath.Join(verify, "runs")); err == nil {
 		t.Errorf("runs/ directory should not exist")
 	}
-	if _, err := os.Stat(filepath.Join(verify, "tests")); err == nil {
-		t.Errorf("tests/ directory should not exist")
-	}
 }
 
-func TestPersist_AppendsToExistingBranch(t *testing.T) {
-	requireGit(t)
-	repoDir, originURL := makeFixture(t)
-
-	first := newRunContext("run-A", "1111111111111111", "main")
-	traces1 := WrapSpansInResource(first.Resource, []*tracepb.Span{
-		NewRootSpan(first),
-		makeTestSpan(first, "p/TestA", tracepb.Status_STATUS_CODE_OK),
-	})
-	if err := New(Options{RepoDir: repoDir}).InsertNewRun(traces1, nil); err != nil {
-		t.Fatalf("first InsertNewRun: %v", err)
-	}
-
-	second := newRunContext("run-B", "2222222222222222", "main")
-	traces2 := WrapSpansInResource(second.Resource, []*tracepb.Span{
-		NewRootSpan(second),
-		makeTestSpan(second, "p/TestA", tracepb.Status_STATUS_CODE_ERROR),
-	})
-	if err := New(Options{RepoDir: repoDir}).InsertNewRun(traces2, nil); err != nil {
-		t.Fatalf("second InsertNewRun: %v", err)
-	}
-
-	verify := cloneDataBranch(t, originURL)
-	path := filepath.Join(verify, "traces", EncodeName("p/TestA")+".ndjson")
-	b, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read %s: %v", path, err)
-	}
-	lines := strings.Split(strings.TrimRight(string(b), "\n"), "\n")
-	if len(lines) != 2 {
-		t.Fatalf("expected 2 lines after two runs, got %d:\n%s", len(lines), b)
-	}
-	if !strings.Contains(lines[0], first.RunID) || !strings.Contains(lines[1], second.RunID) {
-		t.Errorf("expected one line per run id; got:\n%s", b)
-	}
-}
-
-func TestHistory_ReturnsSpansSortedByStartTime(t *testing.T) {
+func TestPersist_RoundTrip(t *testing.T) {
 	requireGit(t)
 	repoDir, _ := makeFixture(t)
 
-	run := newRunContext("run-history", "deadbeefcafebabe", "main")
+	run := newRunContext("run-rt", "deadbeefcafebabe", "main")
 	root := NewRootSpan(run)
-	span := &tracepb.Span{
-		TraceId:           run.TraceID,
-		SpanId:            mustHex8(),
-		ParentSpanId:      run.RootSpanID,
-		Name:              "github.com/x/p/TestA",
-		StartTimeUnixNano: 100,
-		EndTimeUnixNano:   200,
-		Status:            &tracepb.Status{Code: tracepb.Status_STATUS_CODE_OK},
-		Attributes: []*commonpb.KeyValue{
-			models.StringAttr("test.case.name", "github.com/x/p/TestA"),
-			models.StringAttr("defrost.run_id", run.RunID),
-		},
+	root.EndTimeUnixNano = uint64(int64(run.StartTimeUnixNano) + 100)
+	root.Status = &tracepb.Status{Code: tracepb.Status_STATUS_CODE_OK}
+
+	tests := []*tracepb.Span{
+		makeTestSpan(run, "github.com/x/p/TestA", tracepb.Status_STATUS_CODE_OK),
+		makeTestSpan(run, "github.com/x/p/TestB", tracepb.Status_STATUS_CODE_ERROR),
 	}
-	traces := WrapSpansInResource(run.Resource, []*tracepb.Span{root, span})
+	traces := WrapSpansInResource(run.Resource, append([]*tracepb.Span{root}, tests...))
+
 	if err := New(Options{RepoDir: repoDir}).InsertNewRun(traces, nil); err != nil {
 		t.Fatalf("InsertNewRun: %v", err)
 	}
@@ -170,14 +112,271 @@ func TestHistory_ReturnsSpansSortedByStartTime(t *testing.T) {
 		t.Fatalf("GetTestHistory: %v", err)
 	}
 	if len(got) != 1 {
-		t.Fatalf("expected 1 span, got %d", len(got))
+		t.Fatalf("want 1 span for TestA, got %d", len(got))
 	}
 	gotSpan := SpanFromResourceSpans(got[0])
-	if gotSpan == nil || gotSpan.Name != "github.com/x/p/TestA" {
-		t.Errorf("name: %v", gotSpan)
+	if gotSpan == nil {
+		t.Fatal("got nil span")
+	}
+	if gotSpan.Name != "github.com/x/p/TestA" {
+		t.Errorf("name: %q", gotSpan.Name)
 	}
 	if rev := models.ResourceString(got[0].Resource, "vcs.repository.ref.revision"); rev != "deadbeefcafebabe" {
-		t.Errorf("resource not inlined: revision=%q", rev)
+		t.Errorf("resource not preserved through round-trip: revision=%q", rev)
+	}
+	if rid := models.ResourceString(got[0].Resource, "cicd.pipeline.run.id"); rid != run.RunID {
+		t.Errorf("cicd.pipeline.run.id missing on round-trip: %q", rid)
+	}
+}
+
+func TestPersist_AtomicWrite_NoTmpLeft(t *testing.T) {
+	requireGit(t)
+	repoDir, originURL := makeFixture(t)
+
+	run := newRunContext("run-tmp", "1234abcd5678ef00", "main")
+	traces := WrapSpansInResource(run.Resource, []*tracepb.Span{NewRootSpan(run)})
+	if err := New(Options{RepoDir: repoDir}).InsertNewRun(traces, nil); err != nil {
+		t.Fatalf("InsertNewRun: %v", err)
+	}
+	verify := cloneDataBranch(t, originURL)
+
+	var leftovers []string
+	if err := filepath.Walk(verify, func(p string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return err
+		}
+		if strings.HasSuffix(info.Name(), ".tmp") {
+			leftovers = append(leftovers, p)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("walk: %v", err)
+	}
+	if len(leftovers) != 0 {
+		t.Errorf("expected no .tmp files left, got: %v", leftovers)
+	}
+}
+
+func TestPersist_AtomicWrite_FailureLeavesNoPartial(t *testing.T) {
+	// Create a directory at the path we're about to write to. The .tmp
+	// write succeeds, but the final rename(tmp, target) fails because
+	// you can't rename a regular file over a non-empty directory. The
+	// deferred cleanup must remove the .tmp so no orphan is left.
+	dir := t.TempDir()
+	target := filepath.Join(dir, "blocker")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+	// Put something inside so rename can't succeed even on Linux's
+	// directory-overwrite-when-empty semantics.
+	if err := os.WriteFile(filepath.Join(target, "in-use"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	if err := writeFileAtomic(target, []byte("payload")); err == nil {
+		t.Fatal("expected writeFileAtomic to fail when target path is a non-empty directory")
+	}
+
+	// No leftover .tmp anywhere under dir — proves the defer cleaned up.
+	var leftovers []string
+	_ = filepath.Walk(dir, func(p string, info os.FileInfo, err error) error {
+		if err != nil || info == nil || info.IsDir() {
+			return err
+		}
+		if strings.HasSuffix(info.Name(), ".tmp") {
+			leftovers = append(leftovers, p)
+		}
+		return nil
+	})
+	if len(leftovers) != 0 {
+		t.Errorf("expected no .tmp orphans, got: %v", leftovers)
+	}
+}
+
+func TestPersist_SpanAttributesSlim(t *testing.T) {
+	requireGit(t)
+	repoDir, _ := makeFixture(t)
+
+	run := newRunContext("run-slim", "11111111aaaaaaaa", "main")
+	root := NewRootSpan(run)
+	test := makeTestSpan(run, "p/TestA", tracepb.Status_STATUS_CODE_OK)
+	traces := WrapSpansInResource(run.Resource, []*tracepb.Span{root, test})
+	if err := New(Options{RepoDir: repoDir}).InsertNewRun(traces, nil); err != nil {
+		t.Fatalf("InsertNewRun: %v", err)
+	}
+
+	got, err := New(Options{RepoDir: repoDir}).GetTestHistory("p/TestA")
+	if err != nil || len(got) != 1 {
+		t.Fatalf("get test history: %v len=%d", err, len(got))
+	}
+	gotSpan := SpanFromResourceSpans(got[0])
+	if gotSpan == nil {
+		t.Fatal("nil span")
+	}
+	wantKeys := map[string]struct{}{"test.case.result.status": {}}
+	if len(gotSpan.Attributes) != len(wantKeys) {
+		t.Errorf("test span attribute count: want %d, got %d (%v)", len(wantKeys), len(gotSpan.Attributes), gotSpan.Attributes)
+	}
+	for _, kv := range gotSpan.Attributes {
+		if _, ok := wantKeys[kv.Key]; !ok {
+			t.Errorf("unexpected test span attribute: %q", kv.Key)
+		}
+	}
+
+	roots, _, err := New(Options{RepoDir: repoDir}).LoadAll()
+	if err != nil || len(roots) != 1 {
+		t.Fatalf("load all roots: %v len=%d", err, len(roots))
+	}
+	if rs := SpanFromResourceSpans(roots[0]); rs == nil {
+		t.Fatal("nil root span")
+	} else if len(rs.Attributes) != 0 {
+		t.Errorf("root span should have no attributes, got %v", rs.Attributes)
+	}
+}
+
+func TestPersist_FQNPreserved(t *testing.T) {
+	requireGit(t)
+	cases := []string{
+		"github.com/bjk95/defrost/internal/x/TestFoo",
+		"tests/test_module.py::TestClass::test_method",
+		"tests/test_module.py::test_top_level",
+		"src/components/Button.test.tsx > Button > renders",
+	}
+	for _, name := range cases {
+		t.Run(name, func(t *testing.T) {
+			repoDir, _ := makeFixture(t)
+			run := newRunContext("run-"+EncodeName(name), "abc123def4567890", "main")
+			traces := WrapSpansInResource(run.Resource, []*tracepb.Span{
+				NewRootSpan(run),
+				makeTestSpan(run, name, tracepb.Status_STATUS_CODE_OK),
+			})
+			if err := New(Options{RepoDir: repoDir}).InsertNewRun(traces, nil); err != nil {
+				t.Fatalf("InsertNewRun: %v", err)
+			}
+			got, err := New(Options{RepoDir: repoDir}).GetTestHistory(name)
+			if err != nil || len(got) != 1 {
+				t.Fatalf("get history: %v len=%d", err, len(got))
+			}
+			s := SpanFromResourceSpans(got[0])
+			if s == nil || s.Name != name {
+				t.Errorf("FQN not preserved: want %q got %q", name, s.GetName())
+			}
+		})
+	}
+}
+
+func TestPersist_ResourceCarriesCicdRunID(t *testing.T) {
+	requireGit(t)
+	repoDir, _ := makeFixture(t)
+	run := newRunContext("run-cicd", "1234567890abcdef", "main")
+	traces := WrapSpansInResource(run.Resource, []*tracepb.Span{
+		NewRootSpan(run),
+		makeTestSpan(run, "p/TestA", tracepb.Status_STATUS_CODE_OK),
+	})
+	if err := New(Options{RepoDir: repoDir}).InsertNewRun(traces, nil); err != nil {
+		t.Fatalf("InsertNewRun: %v", err)
+	}
+	roots, _, err := New(Options{RepoDir: repoDir}).LoadAll()
+	if err != nil || len(roots) != 1 {
+		t.Fatalf("load: %v len=%d", err, len(roots))
+	}
+	if id := models.ResourceString(roots[0].Resource, "cicd.pipeline.run.id"); id != run.RunID {
+		t.Errorf("cicd.pipeline.run.id: want %q got %q", run.RunID, id)
+	}
+	if id := models.ResourceString(roots[0].Resource, "defrost.run_id"); id != "" {
+		t.Errorf("defrost.run_id should be absent, got %q", id)
+	}
+}
+
+func TestPersist_ConcurrentWritersDontConflict(t *testing.T) {
+	requireGit(t)
+	repoDir, originURL := makeFixture(t)
+
+	// Seed first run.
+	first := newRunContext("run-A", "1111111111111111", "main")
+	t1 := WrapSpansInResource(first.Resource, []*tracepb.Span{
+		NewRootSpan(first),
+		makeTestSpan(first, "p/TestA", tracepb.Status_STATUS_CODE_OK),
+	})
+	if err := New(Options{RepoDir: repoDir}).InsertNewRun(t1, nil); err != nil {
+		t.Fatalf("first InsertNewRun: %v", err)
+	}
+
+	// Second run from a different trace_id (different run id).
+	second := newRunContext("run-B", "2222222222222222", "main")
+	t2 := WrapSpansInResource(second.Resource, []*tracepb.Span{
+		NewRootSpan(second),
+		makeTestSpan(second, "p/TestA", tracepb.Status_STATUS_CODE_ERROR),
+	})
+	if err := New(Options{RepoDir: repoDir}).InsertNewRun(t2, nil); err != nil {
+		t.Fatalf("second InsertNewRun: %v", err)
+	}
+
+	verify := cloneDataBranch(t, originURL)
+	files := listFilesWithSuffix(t, filepath.Join(verify, "traces"), fileSuffix)
+	if len(files) != 2 {
+		t.Fatalf("want 2 trace files (one per run), got %d: %v", len(files), files)
+	}
+
+	got, err := New(Options{RepoDir: repoDir}).GetTestHistory("p/TestA")
+	if err != nil {
+		t.Fatalf("GetTestHistory: %v", err)
+	}
+	if len(got) != 2 {
+		t.Errorf("want 2 history rows for TestA, got %d", len(got))
+	}
+}
+
+func TestPersist_SizeBudget(t *testing.T) {
+	// Pin the headline win: a 100-test run should land well under 10 KB
+	// on disk (proto + zstd). Catches regressions where someone inflates
+	// per-span attributes again.
+	requireGit(t)
+	repoDir, originURL := makeFixture(t)
+
+	run := newRunContext("run-size", "deadbeefcafebabe", "main")
+	spans := []*tracepb.Span{NewRootSpan(run)}
+	for i := 0; i < 100; i++ {
+		spans = append(spans, makeTestSpan(run, "github.com/x/p/TestSize"+itoa(i), tracepb.Status_STATUS_CODE_OK))
+	}
+	traces := WrapSpansInResource(run.Resource, spans)
+	if err := New(Options{RepoDir: repoDir}).InsertNewRun(traces, nil); err != nil {
+		t.Fatalf("InsertNewRun: %v", err)
+	}
+
+	verify := cloneDataBranch(t, originURL)
+	files := listFilesWithSuffix(t, filepath.Join(verify, "traces"), fileSuffix)
+	if len(files) != 1 {
+		t.Fatalf("want 1 file, got %d", len(files))
+	}
+	st, err := os.Stat(files[0])
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	const budget = 10 * 1024 // 10 KB hard ceiling for 100 spans.
+	if st.Size() > budget {
+		t.Errorf("100-span trace file too large: %d bytes (budget %d)", st.Size(), budget)
+	}
+}
+
+func TestPersist_DatePartitioning(t *testing.T) {
+	requireGit(t)
+	repoDir, originURL := makeFixture(t)
+
+	run := newRunContext("run-date", "abcdefabcdefabcd", "main")
+	// Pin the start time to a known UTC day so we can predict the path.
+	known := time.Date(2026, 4, 15, 12, 0, 0, 0, time.UTC)
+	run.StartTimeUnixNano = known.UnixNano()
+	root := NewRootSpan(run)
+	root.StartTimeUnixNano = uint64(run.StartTimeUnixNano)
+	traces := WrapSpansInResource(run.Resource, []*tracepb.Span{root})
+	if err := New(Options{RepoDir: repoDir}).InsertNewRun(traces, nil); err != nil {
+		t.Fatalf("InsertNewRun: %v", err)
+	}
+	verify := cloneDataBranch(t, originURL)
+	wantDir := filepath.Join(verify, "traces", "2026", "04", "15")
+	if _, err := os.Stat(wantDir); err != nil {
+		t.Errorf("expected date-partitioned dir %s: %v", wantDir, err)
 	}
 }
 
@@ -190,69 +389,6 @@ func TestHistory_UnknownTestReturnsEmpty(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Errorf("expected 0 spans, got %d", len(got))
-	}
-}
-
-func TestPushWithRetry_RebasesOnConflict(t *testing.T) {
-	requireGit(t)
-	repoDir, originURL := makeFixture(t)
-
-	seedRun := newRunContext("run-seed", "1111111111111111", "main")
-	seedTraces := WrapSpansInResource(seedRun.Resource, []*tracepb.Span{
-		NewRootSpan(seedRun),
-		makeTestSpan(seedRun, "p/TestA", tracepb.Status_STATUS_CODE_OK),
-	})
-	if err := New(Options{RepoDir: repoDir}).InsertNewRun(seedTraces, nil); err != nil {
-		t.Fatalf("seed InsertNewRun: %v", err)
-	}
-
-	w1Dir := filepath.Join(t.TempDir(), "w1")
-	branchExisted, err := openOrInitDataRepo(w1Dir, originURL, DefaultDataBranch)
-	if err != nil {
-		t.Fatalf("w1 openOrInit: %v", err)
-	}
-	if !branchExisted {
-		t.Fatal("w1: expected branch to exist after seed")
-	}
-	w1Run := newRunContext("run-w1", "2222222222222222", "main")
-	w1Traces := WrapSpansInResource(w1Run.Resource, []*tracepb.Span{
-		NewRootSpan(w1Run),
-		makeTestSpan(w1Run, "p/TestA", tracepb.Status_STATUS_CODE_ERROR),
-	})
-	if err := appendSpans(w1Dir, w1Traces); err != nil {
-		t.Fatalf("w1 appendSpans: %v", err)
-	}
-	if err := commitAll(w1Dir, "writer 1"); err != nil {
-		t.Fatalf("w1 commit: %v", err)
-	}
-
-	racerRun := newRunContext("run-racer", "3333333333333333", "main")
-	racerTraces := WrapSpansInResource(racerRun.Resource, []*tracepb.Span{
-		NewRootSpan(racerRun),
-		makeTestSpan(racerRun, "p/TestA", tracepb.Status_STATUS_CODE_OK),
-	})
-	if err := New(Options{RepoDir: repoDir}).InsertNewRun(racerTraces, nil); err != nil {
-		t.Fatalf("racer InsertNewRun: %v", err)
-	}
-
-	if err := pushWithRetry(w1Dir, DefaultDataBranch, true); err != nil {
-		t.Fatalf("pushWithRetry: %v", err)
-	}
-
-	verify := cloneDataBranch(t, originURL)
-	path := filepath.Join(verify, "traces", EncodeName("p/TestA")+".ndjson")
-	b, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read final ndjson: %v", err)
-	}
-	final := string(b)
-	for _, runID := range []string{"run-seed", "run-w1", "run-racer"} {
-		if !strings.Contains(final, runID) {
-			t.Errorf("expected run_id %s entry in final file:\n%s", runID, final)
-		}
-	}
-	if got := strings.Count(strings.TrimRight(final, "\n"), "\n") + 1; got != 3 {
-		t.Errorf("expected 3 lines after rebase, got %d:\n%s", got, final)
 	}
 }
 
@@ -292,61 +428,12 @@ func TestPersist_LocalOnlyNoRemote(t *testing.T) {
 		t.Fatalf("InsertNewRun (no-remote): %v", err)
 	}
 
-	out, err := exec.Command("git", "-C", dir, "show", DefaultDataBranch+":traces/"+EncodeName("p/TestA")+".ndjson").CombinedOutput()
+	got, err := New(Options{RepoDir: dir, NoRemote: true}).GetTestHistory("p/TestA")
 	if err != nil {
-		t.Fatalf("read traces file from data branch: %v: %s", err, out)
+		t.Fatalf("GetTestHistory: %v", err)
 	}
-	if !strings.Contains(string(out), run.RunID) {
-		t.Errorf("trace ndjson missing run_id %q:\n%s", run.RunID, out)
-	}
-}
-
-func TestPersist_LocalOnlyNoRemote_RelativeRepoDir(t *testing.T) {
-	requireGit(t)
-	parent := t.TempDir()
-	gitMust(t, "", "init", "-b", "main", filepath.Join(parent, "repo"))
-	gitMust(t, filepath.Join(parent, "repo"), "config", "user.email", "t@example.com")
-	gitMust(t, filepath.Join(parent, "repo"), "config", "user.name", "t")
-	gitMust(t, filepath.Join(parent, "repo"), "commit", "--allow-empty", "-m", "init")
-
-	t.Chdir(parent)
-
-	run := newRunContext("rel-run", "abc123", "main")
-	traces := WrapSpansInResource(run.Resource, []*tracepb.Span{NewRootSpan(run), makeTestSpan(run, "p/TestA", tracepb.Status_STATUS_CODE_OK)})
-	if err := New(Options{RepoDir: "repo", NoRemote: true}).InsertNewRun(traces, nil); err != nil {
-		t.Fatalf("InsertNewRun (no-remote, relative): %v", err)
-	}
-
-	out, err := exec.Command("git", "-C", "repo", "show", DefaultDataBranch+":traces/"+EncodeName("p/TestA")+".ndjson").CombinedOutput()
-	if err != nil {
-		t.Fatalf("read traces file from data branch: %v: %s", err, out)
-	}
-	if !strings.Contains(string(out), run.RunID) {
-		t.Errorf("trace ndjson missing run_id %q:\n%s", run.RunID, out)
-	}
-}
-
-func TestReadOriginURL_WorksInWorktree(t *testing.T) {
-	requireGit(t)
-	base := t.TempDir()
-	bareDir := filepath.Join(base, "origin.git")
-	repoDir := filepath.Join(base, "main")
-	wtDir := filepath.Join(base, "wt")
-
-	gitMust(t, "", "init", "--bare", bareDir)
-	gitMust(t, "", "init", "-b", "main", repoDir)
-	gitMust(t, repoDir, "remote", "add", "origin", bareDir)
-	gitMust(t, repoDir, "config", "user.email", "t@example.com")
-	gitMust(t, repoDir, "config", "user.name", "t")
-	gitMust(t, repoDir, "commit", "--allow-empty", "-m", "init")
-	gitMust(t, repoDir, "worktree", "add", "-b", "feature", wtDir)
-
-	url, err := readOriginURL(wtDir)
-	if err != nil {
-		t.Fatalf("readOriginURL in worktree: %v", err)
-	}
-	if url != bareDir {
-		t.Errorf("expected URL %q, got %q", bareDir, url)
+	if len(got) != 1 {
+		t.Errorf("want 1 history row, got %d", len(got))
 	}
 }
 
@@ -362,9 +449,9 @@ func TestPersist_DevModeWritesScratchDirAndSkipsGit(t *testing.T) {
 	}
 
 	scratch := filepath.Join(dir, DevDir)
-	tracesPath := filepath.Join(scratch, "traces", EncodeName("p/TestA")+".ndjson")
-	if _, err := os.Stat(tracesPath); err != nil {
-		t.Errorf("trace file not written to scratch dir: %v", err)
+	files := listFilesWithSuffix(t, filepath.Join(scratch, "traces"), fileSuffix)
+	if len(files) != 1 {
+		t.Errorf("want 1 dev trace file, got %d", len(files))
 	}
 	if out, err := exec.Command("git", "-C", dir, "rev-parse", "--verify", DefaultDataBranch).CombinedOutput(); err == nil {
 		t.Errorf("expected no %s branch, but rev-parse succeeded: %s", DefaultDataBranch, out)
@@ -403,7 +490,7 @@ func TestLoadAll_ReturnsRootSpansAndTestSpansGroupedByEncodedName(t *testing.T) 
 	}
 	gotRunIDs := map[string]bool{}
 	for _, rs := range roots {
-		if id := models.ResourceString(rs.Resource, "defrost.run_id"); id != "" {
+		if id := models.ResourceString(rs.Resource, "cicd.pipeline.run.id"); id != "" {
 			gotRunIDs[id] = true
 		}
 	}
@@ -574,13 +661,12 @@ func TestMetricResource_StripsHighCardinalityFields(t *testing.T) {
 	}
 	for _, kv := range mr.Attributes {
 		switch kv.Key {
-		case "defrost.run_id", "cicd.pipeline.run.id", "defrost.cmd",
+		case "cicd.pipeline.run.id", "defrost.cmd",
 			"vcs.repository.ref.revision", "defrost.dirty_hash",
 			"defrost.author_email", "defrost.author_name", "defrost.parent_commit":
 			t.Errorf("metric resource should not contain %q", kv.Key)
 		}
 	}
-	// Stable identity attrs should still be there.
 	if got := models.ResourceString(mr, "service.name"); got != "defrost" {
 		t.Errorf("service.name: %q", got)
 	}
@@ -596,7 +682,6 @@ func newRunContext(runID, commit, branch string) models.RunContext {
 		models.StringAttr("service.name", "defrost"),
 		models.StringAttr("vcs.repository.ref.revision", commit),
 		models.StringAttr("vcs.repository.ref.name", branch),
-		models.StringAttr("defrost.run_id", runID),
 		models.StringAttr("cicd.pipeline.run.id", runID),
 	}
 	return models.RunContext{
@@ -618,15 +703,23 @@ func makeTestSpan(run models.RunContext, name string, statusCode tracepb.Status_
 		EndTimeUnixNano:   uint64(run.StartTimeUnixNano + 5),
 		Status:            &tracepb.Status{Code: statusCode},
 		Attributes: []*commonpb.KeyValue{
-			models.StringAttr("test.case.name", name),
-			models.StringAttr("defrost.run_id", run.RunID),
+			models.StringAttr("test.case.result.status", statusToText(statusCode)),
 		},
 	}
 }
 
-func mustHex8() []byte {
-	return models.NewSpanID()
+func statusToText(c tracepb.Status_StatusCode) string {
+	switch c {
+	case tracepb.Status_STATUS_CODE_OK:
+		return "passed"
+	case tracepb.Status_STATUS_CODE_ERROR:
+		return "failed"
+	default:
+		return "skipped"
+	}
 }
+
+func mustHex8() []byte { return models.NewSpanID() }
 
 func requireGit(t *testing.T) {
 	t.Helper()
@@ -663,4 +756,37 @@ func cloneDataBranch(t *testing.T, originURL string) string {
 	dir := filepath.Join(t.TempDir(), "verify")
 	gitMust(t, "", "clone", "--quiet", "--single-branch", "--branch", DefaultDataBranch, originURL, dir)
 	return dir
+}
+
+func listFilesWithSuffix(t *testing.T, root, suffix string) []string {
+	t.Helper()
+	var out []string
+	if _, err := os.Stat(root); err != nil {
+		return out
+	}
+	if err := filepath.Walk(root, func(p string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return err
+		}
+		if strings.HasSuffix(info.Name(), suffix) {
+			out = append(out, p)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("walk %s: %v", root, err)
+	}
+	return out
+}
+
+func itoa(i int) string {
+	if i == 0 {
+		return "0"
+	}
+	digits := "0123456789"
+	out := ""
+	for i > 0 {
+		out = string(digits[i%10]) + out
+		i /= 10
+	}
+	return out
 }

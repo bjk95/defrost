@@ -1,29 +1,31 @@
 package persist
 
 import (
-	"bufio"
 	"bytes"
 	"crypto/rand"
 	"crypto/sha1"
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
+	goruntime "runtime"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/klauspost/compress/zstd"
+	cmetricspb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
+	ctracepb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
 	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
 	resourcepb "go.opentelemetry.io/proto/otlp/resource/v1"
 	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
-	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/bjk95/defrost/internal/models"
 )
@@ -34,12 +36,15 @@ const (
 	botName  = "defrost[bot]"
 	botEmail = "defrost[bot]@users.noreply.github.com"
 
-	gitAttributes = "traces/*.ndjson merge=union\nmetrics/*.ndjson merge=union\n"
-	readme        = "# defrost data branch\n\nManaged by the defrost CLI. Do not edit by hand.\n"
+	readme = "# defrost data branch\n\nManaged by the defrost CLI. Do not edit by hand.\n"
 
 	maxPushAttempts = 5
 
 	rootSpanName = "defrost.run"
+
+	// fileSuffix is appended to every per-trace and per-run-metrics file
+	// on disk. Zstd-compressed OTLP/Protobuf.
+	fileSuffix = ".otlp.pb.zst"
 )
 
 // RootSpanName is the OTel span.Name used for every defrost.run root span.
@@ -59,26 +64,25 @@ type Options struct {
 const DevDir = ".defrost-dev"
 
 // Backend is the swappable persistence layer. Spans and metrics are
-// passed and returned as the canonical OTel proto types — *tracepb.Span,
-// *metricspb.Metric — wrapped in their per-record Resource via
-// *tracepb.ResourceSpans / *metricspb.ResourceMetrics. On disk each
-// line is one ResourceSpans (single Span) or one ResourceMetrics
-// (single Metric with one data point).
+// passed in as canonical OTel proto types and stored as zstd-compressed
+// OTLP/Protobuf payloads — one file per signal per defrost exec
+// invocation, named by the run's trace_id and partitioned by run-start
+// UTC date.
 type Backend interface {
 	InitialisePersistence() error
 
 	// InsertNewRun atomically persists everything produced by one
 	// defrost exec invocation: the root run span, every test span, and
-	// every metric data point. Each ResourceSpans / ResourceMetrics
-	// carries its own Resource — span and metric Resources may differ
-	// (caller strips run-unique fields from the metric Resource to keep
-	// metric cardinality bounded).
+	// every metric data point. Writes one trace file and (if metrics
+	// are present) one metrics file. Span and metric Resources may
+	// differ — callers strip run-unique fields from the metric Resource
+	// to keep metric cardinality bounded.
 	InsertNewRun(traces []*tracepb.ResourceSpans, metrics []*metricspb.ResourceMetrics) error
 
-	// GetTestHistory returns every span persisted under
-	// traces/<testName>.ndjson, sorted oldest first by start time. Each
-	// element is a ResourceSpans containing exactly one Span. Empty
-	// slice when nothing matches.
+	// GetTestHistory returns every span whose Name == testName across
+	// every persisted trace file, sorted oldest first by start time.
+	// Each returned element is a ResourceSpans containing exactly one
+	// Span. Empty slice when nothing matches.
 	GetTestHistory(testName string) ([]*tracepb.ResourceSpans, error)
 
 	// GetSuppressions returns the current list of suppressed test IDs,
@@ -90,16 +94,16 @@ type Backend interface {
 	UpdateSuppressions(mutate func([]string) []string, msg string) error
 
 	// LoadAll returns every root run span and every test span across
-	// all files, grouped by encoded span name. Used by `defrost serve`
-	// to populate the heatmap grid in a single read instead of N.
-	// Returns nil slices/maps when there is no data yet.
+	// all persisted trace files, grouped by encoded span name. Used by
+	// `defrost serve` to populate the heatmap grid in a single read
+	// instead of N. Returns nil slices/maps when there is no data yet.
 	LoadAll() (rootSpans []*tracepb.ResourceSpans, byEncodedName map[string][]*tracepb.ResourceSpans, err error)
 
 	// LoadAllMetrics returns every persisted metric data point across
-	// all metrics/*.ndjson files. Each element is a ResourceMetrics
-	// containing exactly one Metric with one data point — the storage
-	// shape produced by InsertNewRun. Returns nil when there is no
-	// metrics data on disk.
+	// all metrics files. Each element is a ResourceMetrics containing
+	// exactly one Metric — the same shape callers produced before the
+	// per-run bundling under WrapMetricsInResource. Returns nil when
+	// there is no metrics data on disk.
 	LoadAllMetrics() ([]*metricspb.ResourceMetrics, error)
 }
 
@@ -147,12 +151,11 @@ func DetectRunContext(opts Options, cmd []string, defrostVersion string) (models
 		models.StringAttr("service.name", "defrost"),
 		models.StringAttr("service.version", defrostVersion),
 		models.StringAttr("cicd.pipeline.run.id", runID),
-		models.StringAttr("host.os.type", runtime.GOOS),
-		models.StringAttr("host.arch", runtime.GOARCH),
-		models.StringAttr("process.runtime.version", runtime.Version()),
+		models.StringAttr("host.os.type", goruntime.GOOS),
+		models.StringAttr("host.arch", goruntime.GOARCH),
+		models.StringAttr("process.runtime.version", goruntime.Version()),
 		models.StringArrayAttr("defrost.cmd", cmd),
 		models.StringAttr("defrost.cmd_hash", cmdHash(cmd)),
-		models.StringAttr("defrost.run_id", runID),
 		models.StringAttr("defrost.runner", inferRunner(cmd)),
 	}
 
@@ -213,13 +216,12 @@ func MetricResource(run models.RunContext) *resourcepb.Resource {
 		return nil
 	}
 	skip := map[string]struct{}{
-		"defrost.run_id":             {},
-		"cicd.pipeline.run.id":       {},
-		"defrost.cmd":                {},
-		"defrost.dirty_hash":         {},
-		"defrost.author_email":       {},
-		"defrost.author_name":        {},
-		"defrost.parent_commit":      {},
+		"cicd.pipeline.run.id":        {},
+		"defrost.cmd":                 {},
+		"defrost.dirty_hash":          {},
+		"defrost.author_email":        {},
+		"defrost.author_name":         {},
+		"defrost.parent_commit":       {},
 		"vcs.repository.ref.revision": {},
 	}
 	out := &resourcepb.Resource{}
@@ -260,7 +262,6 @@ func NewRootSpan(run models.RunContext) *tracepb.Span {
 		Kind:              tracepb.Span_SPAN_KIND_INTERNAL,
 		StartTimeUnixNano: uint64(run.StartTimeUnixNano),
 		Status:            &tracepb.Status{Code: tracepb.Status_STATUS_CODE_UNSET},
-		Attributes:        []*commonpb.KeyValue{models.StringAttr("defrost.run_id", run.RunID)},
 	}
 }
 
@@ -297,50 +298,50 @@ func runFQN(repoDir string, cmd []string) string {
 	return strings.TrimSuffix(prefix, "/") + "¬" + joined
 }
 
-// WrapSpansInResource constructs one *tracepb.ResourceSpans per span,
-// each carrying the same Resource. This is the storage shape: each line
-// in traces/<name>.ndjson is one ResourceSpans with a single Span.
+// WrapSpansInResource bundles every span produced by one defrost exec
+// invocation (root + every test span) into a single *tracepb.ResourceSpans
+// — the on-disk shape under traces/. The caller passes the run's full
+// Resource; we stash the spans under a single ScopeSpans named "defrost"
+// so all attribute identity lives exactly once on the Resource.
+//
+// Returned slice has at most one element; nil if no spans.
 func WrapSpansInResource(resource *resourcepb.Resource, spans []*tracepb.Span) []*tracepb.ResourceSpans {
 	if len(spans) == 0 {
 		return nil
 	}
-	out := make([]*tracepb.ResourceSpans, 0, len(spans))
-	for _, s := range spans {
-		out = append(out, &tracepb.ResourceSpans{
-			Resource: resource,
-			ScopeSpans: []*tracepb.ScopeSpans{{
-				Scope: &commonpb.InstrumentationScope{Name: "defrost"},
-				Spans: []*tracepb.Span{s},
-			}},
-		})
-	}
-	return out
+	return []*tracepb.ResourceSpans{{
+		Resource: resource,
+		ScopeSpans: []*tracepb.ScopeSpans{{
+			Scope: &commonpb.InstrumentationScope{Name: "defrost"},
+			Spans: spans,
+		}},
+	}}
 }
 
-// WrapMetricsInResource constructs one *metricspb.ResourceMetrics per
-// metric, each carrying the same Resource. This is the storage shape:
-// each line in metrics/<name>.ndjson is one ResourceMetrics with a
-// single Metric (which itself contains one data point).
+// WrapMetricsInResource bundles every metric data point emitted during
+// one defrost exec invocation into a single *metricspb.ResourceMetrics.
+//
+// Returned slice has at most one element; nil if no metrics.
 func WrapMetricsInResource(resource *resourcepb.Resource, metrics []*metricspb.Metric) []*metricspb.ResourceMetrics {
 	if len(metrics) == 0 {
 		return nil
 	}
-	out := make([]*metricspb.ResourceMetrics, 0, len(metrics))
-	for _, m := range metrics {
-		out = append(out, &metricspb.ResourceMetrics{
-			Resource: resource,
-			ScopeMetrics: []*metricspb.ScopeMetrics{{
-				Scope:   &commonpb.InstrumentationScope{Name: "defrost"},
-				Metrics: []*metricspb.Metric{m},
-			}},
-		})
-	}
-	return out
+	return []*metricspb.ResourceMetrics{{
+		Resource: resource,
+		ScopeMetrics: []*metricspb.ScopeMetrics{{
+			Scope:   &commonpb.InstrumentationScope{Name: "defrost"},
+			Metrics: metrics,
+		}},
+	}}
 }
 
-// SpanFromResourceSpans returns the single *tracepb.Span inside a
-// ResourceSpans we wrote. Panics if the ResourceSpans is empty (we never
-// write empty wrappers).
+// SpanFromResourceSpans returns the first *tracepb.Span inside a
+// ResourceSpans we wrote. Returns nil if there are no spans.
+//
+// Used by the read path (history, dashboard) where spans are filtered
+// individually after a file is decoded — at decode time the per-trace
+// file has been split back into one ResourceSpans per span via
+// SplitResourceSpans.
 func SpanFromResourceSpans(rs *tracepb.ResourceSpans) *tracepb.Span {
 	if rs == nil || len(rs.ScopeSpans) == 0 || len(rs.ScopeSpans[0].Spans) == 0 {
 		return nil
@@ -348,13 +349,55 @@ func SpanFromResourceSpans(rs *tracepb.ResourceSpans) *tracepb.Span {
 	return rs.ScopeSpans[0].Spans[0]
 }
 
-// MetricFromResourceMetrics returns the single *metricspb.Metric inside
+// MetricFromResourceMetrics returns the first *metricspb.Metric inside
 // a ResourceMetrics we wrote.
 func MetricFromResourceMetrics(rm *metricspb.ResourceMetrics) *metricspb.Metric {
 	if rm == nil || len(rm.ScopeMetrics) == 0 || len(rm.ScopeMetrics[0].Metrics) == 0 {
 		return nil
 	}
 	return rm.ScopeMetrics[0].Metrics[0]
+}
+
+// SplitResourceSpans expands one *tracepb.ResourceSpans (containing N
+// spans across its ScopeSpans) into N single-span *tracepb.ResourceSpans
+// values — each carrying the original Resource. This is the inverse of
+// WrapSpansInResource at read time, so existing callers that expect
+// one Span per ResourceSpans (history, dashboard grid, run resolver)
+// keep working unchanged.
+func SplitResourceSpans(rs *tracepb.ResourceSpans) []*tracepb.ResourceSpans {
+	if rs == nil {
+		return nil
+	}
+	var out []*tracepb.ResourceSpans
+	for _, ss := range rs.ScopeSpans {
+		for _, s := range ss.Spans {
+			out = append(out, &tracepb.ResourceSpans{
+				Resource:   rs.Resource,
+				ScopeSpans: []*tracepb.ScopeSpans{{Scope: ss.Scope, Spans: []*tracepb.Span{s}}},
+			})
+		}
+	}
+	return out
+}
+
+// SplitResourceMetrics is the inverse of WrapMetricsInResource at read
+// time: it expands one *metricspb.ResourceMetrics into one
+// *metricspb.ResourceMetrics per *metricspb.Metric, each carrying the
+// original Resource. Existing callers expect one Metric per record.
+func SplitResourceMetrics(rm *metricspb.ResourceMetrics) []*metricspb.ResourceMetrics {
+	if rm == nil {
+		return nil
+	}
+	var out []*metricspb.ResourceMetrics
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			out = append(out, &metricspb.ResourceMetrics{
+				Resource:     rm.Resource,
+				ScopeMetrics: []*metricspb.ScopeMetrics{{Scope: sm.Scope, Metrics: []*metricspb.Metric{m}}},
+			})
+		}
+	}
+	return out
 }
 
 // gitBackend stores spans and metrics on a dedicated git data branch.
@@ -367,10 +410,7 @@ func (b *gitBackend) InsertNewRun(traces []*tracepb.ResourceSpans, metrics []*me
 		return nil
 	}
 
-	branch := b.opts.DataBranch
-	if branch == "" {
-		branch = DefaultDataBranch
-	}
+	branch := b.dataBranch()
 
 	remoteURL, err := resolveTargetURL(b.opts)
 	if err != nil {
@@ -394,10 +434,7 @@ func (b *gitBackend) InsertNewRun(traces []*tracepb.ResourceSpans, metrics []*me
 		}
 	}
 
-	if err := appendSpans(workDir, traces); err != nil {
-		return err
-	}
-	if err := appendMetrics(workDir, metrics); err != nil {
+	if err := writeRunFiles(workDir, traces, metrics); err != nil {
 		return err
 	}
 
@@ -409,94 +446,69 @@ func (b *gitBackend) InsertNewRun(traces []*tracepb.ResourceSpans, metrics []*me
 }
 
 func (b *gitBackend) GetTestHistory(testName string) ([]*tracepb.ResourceSpans, error) {
-	branch := b.opts.DataBranch
-	if branch == "" {
-		branch = DefaultDataBranch
-	}
-	remoteURL, err := resolveTargetURL(b.opts)
-	if err != nil {
+	dir, cleanup, err := b.cloneForRead()
+	if err != nil || dir == "" {
 		return nil, err
 	}
-	exists, err := branchExistsOnRemote(remoteURL, branch)
-	if err != nil {
-		return nil, err
-	}
-	if !exists {
-		return nil, nil
-	}
-
-	workDir, err := os.MkdirTemp("", "defrost-read-")
-	if err != nil {
-		return nil, fmt.Errorf("mktemp: %w", err)
-	}
-	defer os.RemoveAll(workDir)
-	_ = os.Remove(workDir)
-
-	if _, err := runGit("", "clone", "--quiet", "--depth=1", "--single-branch", "--branch", branch, remoteURL, workDir); err != nil {
-		return nil, fmt.Errorf("clone data branch: %w", err)
-	}
-
-	return readSpansFromDir(workDir, testName)
+	defer cleanup()
+	return readTestHistoryFromDir(dir, testName)
 }
 
 func (b *gitBackend) LoadAll() ([]*tracepb.ResourceSpans, map[string][]*tracepb.ResourceSpans, error) {
-	branch := b.opts.DataBranch
-	if branch == "" {
-		branch = DefaultDataBranch
-	}
-	remoteURL, err := resolveTargetURL(b.opts)
-	if err != nil {
+	dir, cleanup, err := b.cloneForRead()
+	if err != nil || dir == "" {
 		return nil, nil, err
 	}
-	exists, err := branchExistsOnRemote(remoteURL, branch)
-	if err != nil {
-		return nil, nil, err
-	}
-	if !exists {
-		return nil, nil, nil
-	}
-
-	workDir, err := os.MkdirTemp("", "defrost-read-")
-	if err != nil {
-		return nil, nil, fmt.Errorf("mktemp: %w", err)
-	}
-	defer os.RemoveAll(workDir)
-	_ = os.Remove(workDir)
-
-	if _, err := runGit("", "clone", "--quiet", "--depth=1", "--single-branch", "--branch", branch, remoteURL, workDir); err != nil {
-		return nil, nil, fmt.Errorf("clone data branch: %w", err)
-	}
-	return readAllSpans(workDir)
+	defer cleanup()
+	return readAllSpans(dir)
 }
 
 func (b *gitBackend) LoadAllMetrics() ([]*metricspb.ResourceMetrics, error) {
-	branch := b.opts.DataBranch
-	if branch == "" {
-		branch = DefaultDataBranch
+	dir, cleanup, err := b.cloneForRead()
+	if err != nil || dir == "" {
+		return nil, err
 	}
+	defer cleanup()
+	return readAllMetrics(dir)
+}
+
+func (b *gitBackend) dataBranch() string {
+	if b.opts.DataBranch != "" {
+		return b.opts.DataBranch
+	}
+	return DefaultDataBranch
+}
+
+// cloneForRead clones the data branch with a strategy tuned for bulk
+// reads: full checkout (no blob filtering) so subsequent file opens hit
+// the local working tree and don't require per-blob HTTP fetches. Returns
+// ("", noop, nil) when the data branch doesn't exist on the remote.
+func (b *gitBackend) cloneForRead() (string, func(), error) {
+	branch := b.dataBranch()
 	remoteURL, err := resolveTargetURL(b.opts)
 	if err != nil {
-		return nil, err
+		return "", func() {}, err
 	}
 	exists, err := branchExistsOnRemote(remoteURL, branch)
 	if err != nil {
-		return nil, err
+		return "", func() {}, err
 	}
 	if !exists {
-		return nil, nil
+		return "", func() {}, nil
 	}
 
 	workDir, err := os.MkdirTemp("", "defrost-read-")
 	if err != nil {
-		return nil, fmt.Errorf("mktemp: %w", err)
+		return "", func() {}, fmt.Errorf("mktemp: %w", err)
 	}
-	defer os.RemoveAll(workDir)
-	_ = os.Remove(workDir)
+	cleanup := func() { _ = os.RemoveAll(workDir) }
+	_ = os.Remove(workDir) // git clone wants the path absent
 
 	if _, err := runGit("", "clone", "--quiet", "--depth=1", "--single-branch", "--branch", branch, remoteURL, workDir); err != nil {
-		return nil, fmt.Errorf("clone data branch: %w", err)
+		cleanup()
+		return "", func() {}, fmt.Errorf("clone data branch: %w", err)
 	}
-	return readAllMetrics(workDir)
+	return workDir, cleanup, nil
 }
 
 // fileBackend writes spans/metrics to a plain directory; no git operations.
@@ -513,10 +525,7 @@ func (b *fileBackend) InsertNewRun(traces []*tracepb.ResourceSpans, metrics []*m
 	if err := b.InitialisePersistence(); err != nil {
 		return err
 	}
-	if err := appendSpans(b.dir, traces); err != nil {
-		return err
-	}
-	return appendMetrics(b.dir, metrics)
+	return writeRunFiles(b.dir, traces, metrics)
 }
 
 func (b *fileBackend) GetTestHistory(testName string) ([]*tracepb.ResourceSpans, error) {
@@ -526,7 +535,7 @@ func (b *fileBackend) GetTestHistory(testName string) ([]*tracepb.ResourceSpans,
 		}
 		return nil, err
 	}
-	return readSpansFromDir(b.dir, testName)
+	return readTestHistoryFromDir(b.dir, testName)
 }
 
 func (b *fileBackend) LoadAll() ([]*tracepb.ResourceSpans, map[string][]*tracepb.ResourceSpans, error) {
@@ -551,232 +560,497 @@ func (b *fileBackend) LoadAllMetrics() ([]*metricspb.ResourceMetrics, error) {
 
 // --- write helpers ---
 
-// protoMarshalCompact writes a single-line JSON encoding of a proto
-// message using the canonical OTLP/JSON form. We strip whitespace so each
-// line is one record (NDJSON discipline).
-var protoMarshal = protojson.MarshalOptions{UseProtoNames: true, EmitUnpopulated: false}
+// zstdEncoder is shared across writes. Default compression level is fine
+// for text-heavy proto payloads with run metadata.
+var (
+	zstdEncoderOnce sync.Once
+	zstdEncoder     *zstd.Encoder
+	zstdEncoderErr  error
+)
 
+func sharedZstdEncoder() (*zstd.Encoder, error) {
+	zstdEncoderOnce.Do(func() {
+		zstdEncoder, zstdEncoderErr = zstd.NewWriter(nil)
+	})
+	return zstdEncoder, zstdEncoderErr
+}
+
+var (
+	zstdDecoderOnce sync.Once
+	zstdDecoder     *zstd.Decoder
+	zstdDecoderErr  error
+)
+
+func sharedZstdDecoder() (*zstd.Decoder, error) {
+	zstdDecoderOnce.Do(func() {
+		zstdDecoder, zstdDecoderErr = zstd.NewReader(nil)
+	})
+	return zstdDecoder, zstdDecoderErr
+}
+
+// writeSeed writes the README at branch creation time. We deliberately do
+// NOT write a `.gitattributes` with `merge=union` rules anymore: per-trace
+// files are writer-owned (one file per run, named by trace_id) so two
+// concurrent runs can never target the same path.
 func writeSeed(workDir string) error {
-	if err := os.WriteFile(filepath.Join(workDir, ".gitattributes"), []byte(gitAttributes), 0o644); err != nil {
-		return err
-	}
 	return os.WriteFile(filepath.Join(workDir, "README.md"), []byte(readme), 0o644)
 }
 
-func appendSpans(workDir string, traces []*tracepb.ResourceSpans) error {
-	if len(traces) == 0 {
-		return nil
-	}
-	dir := filepath.Join(workDir, "traces")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	for _, rs := range traces {
-		span := SpanFromResourceSpans(rs)
-		if span == nil {
-			continue
+// writeRunFiles is the single entry point used by both backends. It
+// writes at most one zstd-compressed OTLP/protobuf file under traces/ and
+// at most one under metrics/, partitioned by run-start UTC date.
+func writeRunFiles(workDir string, traces []*tracepb.ResourceSpans, metrics []*metricspb.ResourceMetrics) error {
+	if len(traces) > 0 {
+		if err := writeTraceFile(workDir, traces); err != nil {
+			return err
 		}
-		line, err := protoMarshal.Marshal(rs)
-		if err != nil {
-			return fmt.Errorf("marshal span %s: %w", span.Name, err)
-		}
-		line = bytes.ReplaceAll(line, []byte("\n"), []byte(" "))
-		path := filepath.Join(dir, EncodeName(span.Name)+".ndjson")
-		if err := appendLine(path, line); err != nil {
+	}
+	if len(metrics) > 0 {
+		if err := writeMetricsFile(workDir, traces, metrics); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func appendMetrics(workDir string, metrics []*metricspb.ResourceMetrics) error {
-	if len(metrics) == 0 {
-		return nil
+func writeTraceFile(workDir string, traces []*tracepb.ResourceSpans) error {
+	traceID, runStart := traceIdentityFromSpans(traces)
+	if len(traceID) == 0 {
+		return errors.New("write traces: no trace_id in run")
 	}
-	dir := filepath.Join(workDir, "metrics")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	for _, rm := range metrics {
-		m := MetricFromResourceMetrics(rm)
-		if m == nil {
-			continue
-		}
-		line, err := protoMarshal.Marshal(rm)
-		if err != nil {
-			return fmt.Errorf("marshal metric %s: %w", m.Name, err)
-		}
-		line = bytes.ReplaceAll(line, []byte("\n"), []byte(" "))
-		path := filepath.Join(dir, EncodeName(m.Name)+".ndjson")
-		if err := appendLine(path, line); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func appendLine(path string, line []byte) error {
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	data, err := marshalTraceRequest(traces)
 	if err != nil {
-		return fmt.Errorf("open %s: %w", path, err)
+		return fmt.Errorf("marshal traces: %w", err)
 	}
-	_, werr := f.Write(append(line, '\n'))
-	cerr := f.Close()
-	if werr != nil {
-		return fmt.Errorf("write %s: %w", path, werr)
+	compressed, err := compressZstd(data)
+	if err != nil {
+		return fmt.Errorf("compress traces: %w", err)
 	}
-	if cerr != nil {
-		return fmt.Errorf("close %s: %w", path, cerr)
+	path := tracePath(workDir, traceID, runStart)
+	return writeFileAtomic(path, compressed)
+}
+
+func writeMetricsFile(workDir string, traces []*tracepb.ResourceSpans, metrics []*metricspb.ResourceMetrics) error {
+	traceID, runStart := traceIdentityFromSpans(traces)
+	data, err := marshalMetricsRequest(metrics)
+	if err != nil {
+		return fmt.Errorf("marshal metrics: %w", err)
+	}
+	compressed, err := compressZstd(data)
+	if err != nil {
+		return fmt.Errorf("compress metrics: %w", err)
+	}
+	path := metricsPath(workDir, traceID, runStart)
+	return writeFileAtomic(path, compressed)
+}
+
+// traceIdentityFromSpans returns the run's trace_id and start time so the
+// caller can derive the date-partitioned filename. Reads from the root
+// span's TraceId / StartTimeUnixNano. Falls back to time.Now() if the root
+// span has no start time set (shouldn't happen on a real run, but keeps
+// the writer robust).
+func traceIdentityFromSpans(traces []*tracepb.ResourceSpans) ([]byte, time.Time) {
+	for _, rs := range traces {
+		for _, ss := range rs.ScopeSpans {
+			for _, s := range ss.Spans {
+				if s == nil || len(s.TraceId) == 0 {
+					continue
+				}
+				ns := int64(s.StartTimeUnixNano)
+				if ns == 0 {
+					return s.TraceId, time.Now().UTC()
+				}
+				return s.TraceId, time.Unix(0, ns).UTC()
+			}
+		}
+	}
+	return nil, time.Time{}
+}
+
+// marshalTraceRequest builds an ExportTraceServiceRequest carrying every
+// ResourceSpans the caller passed in, then proto-marshals it. This is the
+// canonical OTLP/Protobuf payload shape.
+func marshalTraceRequest(traces []*tracepb.ResourceSpans) ([]byte, error) {
+	req := &ctracepb.ExportTraceServiceRequest{ResourceSpans: traces}
+	return proto.Marshal(req)
+}
+
+// marshalMetricsRequest builds an ExportMetricsServiceRequest the same way
+// for metrics.
+func marshalMetricsRequest(metrics []*metricspb.ResourceMetrics) ([]byte, error) {
+	req := &cmetricspb.ExportMetricsServiceRequest{ResourceMetrics: metrics}
+	return proto.Marshal(req)
+}
+
+func compressZstd(data []byte) ([]byte, error) {
+	enc, err := sharedZstdEncoder()
+	if err != nil {
+		return nil, err
+	}
+	return enc.EncodeAll(data, nil), nil
+}
+
+func decompressZstd(data []byte) ([]byte, error) {
+	dec, err := sharedZstdDecoder()
+	if err != nil {
+		return nil, err
+	}
+	return dec.DecodeAll(data, nil)
+}
+
+// tracePath returns the date-partitioned absolute path for one run's
+// trace file: <workDir>/traces/<YYYY>/<MM>/<DD>/<hex trace_id>.otlp.pb.zst.
+func tracePath(workDir string, traceID []byte, runStart time.Time) string {
+	return signalPath(workDir, "traces", traceID, runStart)
+}
+
+// metricsPath is the metrics counterpart of tracePath.
+func metricsPath(workDir string, traceID []byte, runStart time.Time) string {
+	return signalPath(workDir, "metrics", traceID, runStart)
+}
+
+func signalPath(workDir, signal string, traceID []byte, runStart time.Time) string {
+	id := hex.EncodeToString(traceID)
+	if runStart.IsZero() {
+		runStart = time.Now().UTC()
+	}
+	y, m, d := runStart.UTC().Date()
+	return filepath.Join(workDir, signal,
+		fmt.Sprintf("%04d", y),
+		fmt.Sprintf("%02d", int(m)),
+		fmt.Sprintf("%02d", d),
+		id+fileSuffix,
+	)
+}
+
+// writeFileAtomic writes data to path atomically: write a sibling .tmp,
+// fsync the file, rename onto the final name, then fsync the parent dir
+// so the rename itself survives a crash. Directory fsync is a no-op on
+// macOS APFS / Windows but required on Linux ext4/xfs to make the rename
+// durable; calling it everywhere is cheap and harmless.
+func writeFileAtomic(path string, data []byte) (err error) {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			_ = os.Remove(tmp)
+		}
+	}()
+	if _, err = f.Write(data); err != nil {
+		f.Close()
+		return err
+	}
+	if err = f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
+	if err = f.Close(); err != nil {
+		return err
+	}
+	if err = os.Rename(tmp, path); err != nil {
+		return err
+	}
+	if d, derr := os.Open(dir); derr == nil {
+		_ = d.Sync()
+		_ = d.Close()
 	}
 	return nil
 }
 
 // --- read helpers ---
 
-func readSpansFromDir(dir, testName string) ([]*tracepb.ResourceSpans, error) {
-	path := filepath.Join(dir, "traces", EncodeName(testName)+".ndjson")
-	f, err := os.Open(path)
-	if err != nil {
+// readTestHistoryFromDir walks every per-run trace file under dir/traces,
+// extracts spans whose Name matches testName, and returns them sorted
+// oldest-first by start time. Decoding is parallelised across CPU cores.
+func readTestHistoryFromDir(dir, testName string) ([]*tracepb.ResourceSpans, error) {
+	tracesDir := filepath.Join(dir, "traces")
+	if _, err := os.Stat(tracesDir); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
 		}
 		return nil, err
 	}
-	defer f.Close()
-
-	traces, err := parseSpansNDJSON(f)
+	var out []*tracepb.ResourceSpans
+	err := walkOTLPTraceFilesParallel(tracesDir, func(rss []*tracepb.ResourceSpans) {
+		for _, rs := range rss {
+			for _, ss := range rs.ScopeSpans {
+				for _, s := range ss.Spans {
+					if s.Name != testName {
+						continue
+					}
+					out = append(out, &tracepb.ResourceSpans{
+						Resource:   rs.Resource,
+						ScopeSpans: []*tracepb.ScopeSpans{{Scope: ss.Scope, Spans: []*tracepb.Span{s}}},
+					})
+				}
+			}
+		}
+	})
 	if err != nil {
 		return nil, err
 	}
-	sort.Slice(traces, func(i, j int) bool {
-		a := SpanFromResourceSpans(traces[i])
-		b := SpanFromResourceSpans(traces[j])
+	sort.Slice(out, func(i, j int) bool {
+		a := SpanFromResourceSpans(out[i])
+		b := SpanFromResourceSpans(out[j])
 		if a == nil || b == nil {
 			return false
 		}
 		return a.StartTimeUnixNano < b.StartTimeUnixNano
 	})
-	return traces, nil
+	return out, nil
 }
 
+// readAllSpans walks every per-run trace file, splits each into one
+// ResourceSpans per span, separates root spans from test spans, and
+// groups test spans by encoded span name (matching the existing serve-
+// layer key shape). Decoding is parallelised across CPU cores.
 func readAllSpans(dir string) ([]*tracepb.ResourceSpans, map[string][]*tracepb.ResourceSpans, error) {
 	tracesDir := filepath.Join(dir, "traces")
-	files, err := os.ReadDir(tracesDir)
-	if err != nil {
+	if _, err := os.Stat(tracesDir); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil, nil
 		}
 		return nil, nil, err
 	}
-	rootFile := EncodeName(rootSpanName) + ".ndjson"
 	var roots []*tracepb.ResourceSpans
 	byEncodedName := make(map[string][]*tracepb.ResourceSpans)
-	for _, f := range files {
-		if f.IsDir() || !strings.HasSuffix(f.Name(), ".ndjson") {
-			continue
+	err := walkOTLPTraceFilesParallel(tracesDir, func(rss []*tracepb.ResourceSpans) {
+		for _, rs := range rss {
+			for _, ss := range rs.ScopeSpans {
+				for _, s := range ss.Spans {
+					single := &tracepb.ResourceSpans{
+						Resource:   rs.Resource,
+						ScopeSpans: []*tracepb.ScopeSpans{{Scope: ss.Scope, Spans: []*tracepb.Span{s}}},
+					}
+					if s.Name == rootSpanName {
+						roots = append(roots, single)
+						continue
+					}
+					byEncodedName[EncodeName(s.Name)] = append(byEncodedName[EncodeName(s.Name)], single)
+				}
+			}
 		}
-		full := filepath.Join(tracesDir, f.Name())
-		fh, err := os.Open(full)
-		if err != nil {
-			return nil, nil, err
-		}
-		traces, err := parseSpansNDJSON(fh)
-		fh.Close()
-		if err != nil {
-			return nil, nil, fmt.Errorf("parse %s: %w", full, err)
-		}
-		if f.Name() == rootFile {
-			roots = append(roots, traces...)
-			continue
-		}
-		key := strings.TrimSuffix(f.Name(), ".ndjson")
-		byEncodedName[key] = traces
+	})
+	if err != nil {
+		return nil, nil, err
 	}
 	return roots, byEncodedName, nil
 }
 
-func parseSpansNDJSON(r io.Reader) ([]*tracepb.ResourceSpans, error) {
-	var out []*tracepb.ResourceSpans
-	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 64*1024), 8*1024*1024)
-	for sc.Scan() {
-		line := bytes.TrimSpace(sc.Bytes())
-		if len(line) == 0 {
-			continue
-		}
-		rs := &tracepb.ResourceSpans{}
-		if err := protojson.Unmarshal(line, rs); err != nil {
-			return nil, fmt.Errorf("parse ndjson line: %w", err)
-		}
-		out = append(out, rs)
-	}
-	return out, sc.Err()
-}
-
+// readAllMetrics walks every per-run metrics file and returns one
+// *metricspb.ResourceMetrics per stored Metric (matching the existing
+// caller contract from the NDJSON era). Decoding is parallelised across
+// CPU cores.
 func readAllMetrics(dir string) ([]*metricspb.ResourceMetrics, error) {
 	metricsDir := filepath.Join(dir, "metrics")
-	files, err := os.ReadDir(metricsDir)
-	if err != nil {
+	if _, err := os.Stat(metricsDir); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
 		}
 		return nil, err
 	}
 	var out []*metricspb.ResourceMetrics
-	for _, f := range files {
-		if f.IsDir() || !strings.HasSuffix(f.Name(), ".ndjson") {
-			continue
+	err := walkOTLPMetricsFilesParallel(metricsDir, func(rms []*metricspb.ResourceMetrics) {
+		for _, rm := range rms {
+			out = append(out, SplitResourceMetrics(rm)...)
 		}
-		full := filepath.Join(metricsDir, f.Name())
-		fh, err := os.Open(full)
-		if err != nil {
-			return nil, err
-		}
-		records, err := parseMetricsNDJSON(fh)
-		fh.Close()
-		if err != nil {
-			return nil, fmt.Errorf("parse %s: %w", full, err)
-		}
-		out = append(out, records...)
+	})
+	if err != nil {
+		return nil, err
 	}
 	return out, nil
 }
 
-func parseMetricsNDJSON(r io.Reader) ([]*metricspb.ResourceMetrics, error) {
-	var out []*metricspb.ResourceMetrics
-	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 64*1024), 8*1024*1024)
-	for sc.Scan() {
-		line := bytes.TrimSpace(sc.Bytes())
-		if len(line) == 0 {
-			continue
+// listOTLPFiles returns every <root>/<YYYY>/<MM>/<DD>/<id>.otlp.pb.zst
+// path beneath root, in arbitrary order. Returns an empty slice if root
+// does not exist.
+func listOTLPFiles(root string) ([]string, error) {
+	var out []string
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil
+			}
+			return err
 		}
-		rm := &metricspb.ResourceMetrics{}
-		if err := protojson.Unmarshal(line, rm); err != nil {
-			return nil, fmt.Errorf("parse ndjson line: %w", err)
+		if d.IsDir() {
+			return nil
 		}
-		out = append(out, rm)
+		if !strings.HasSuffix(d.Name(), fileSuffix) {
+			return nil
+		}
+		out = append(out, path)
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
-	return out, sc.Err()
+	return out, nil
+}
+
+// walkOTLPTraceFilesParallel decodes every trace file under root with a
+// worker pool sized to NumCPU, calling emit on the main goroutine for each
+// file's worth of decoded ResourceSpans. emit is serialised across
+// workers so the caller can mutate shared maps/slices without locks.
+func walkOTLPTraceFilesParallel(root string, emit func([]*tracepb.ResourceSpans)) error {
+	files, err := listOTLPFiles(root)
+	if err != nil {
+		return err
+	}
+	if len(files) == 0 {
+		return nil
+	}
+	type result struct {
+		path string
+		rss  []*tracepb.ResourceSpans
+		err  error
+	}
+	jobs := make(chan string)
+	results := make(chan result)
+	workers := goruntime.NumCPU()
+	if workers > len(files) {
+		workers = len(files)
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for p := range jobs {
+				req, err := readOTLPTraceFile(p)
+				if err != nil {
+					results <- result{path: p, err: err}
+					continue
+				}
+				results <- result{path: p, rss: req.GetResourceSpans()}
+			}
+		}()
+	}
+	go func() {
+		for _, p := range files {
+			jobs <- p
+		}
+		close(jobs)
+		wg.Wait()
+		close(results)
+	}()
+	for r := range results {
+		if r.err != nil {
+			return fmt.Errorf("decode %s: %w", r.path, r.err)
+		}
+		emit(r.rss)
+	}
+	return nil
+}
+
+func walkOTLPMetricsFilesParallel(root string, emit func([]*metricspb.ResourceMetrics)) error {
+	files, err := listOTLPFiles(root)
+	if err != nil {
+		return err
+	}
+	if len(files) == 0 {
+		return nil
+	}
+	type result struct {
+		path string
+		rms  []*metricspb.ResourceMetrics
+		err  error
+	}
+	jobs := make(chan string)
+	results := make(chan result)
+	workers := goruntime.NumCPU()
+	if workers > len(files) {
+		workers = len(files)
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for p := range jobs {
+				req, err := readOTLPMetricsFile(p)
+				if err != nil {
+					results <- result{path: p, err: err}
+					continue
+				}
+				results <- result{path: p, rms: req.GetResourceMetrics()}
+			}
+		}()
+	}
+	go func() {
+		for _, p := range files {
+			jobs <- p
+		}
+		close(jobs)
+		wg.Wait()
+		close(results)
+	}()
+	for r := range results {
+		if r.err != nil {
+			return fmt.Errorf("decode %s: %w", r.path, r.err)
+		}
+		emit(r.rms)
+	}
+	return nil
+}
+
+func readOTLPTraceFile(path string) (*ctracepb.ExportTraceServiceRequest, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	plain, err := decompressZstd(raw)
+	if err != nil {
+		return nil, fmt.Errorf("zstd decode: %w", err)
+	}
+	req := &ctracepb.ExportTraceServiceRequest{}
+	if err := proto.Unmarshal(plain, req); err != nil {
+		return nil, fmt.Errorf("proto unmarshal: %w", err)
+	}
+	return req, nil
+}
+
+func readOTLPMetricsFile(path string) (*cmetricspb.ExportMetricsServiceRequest, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	plain, err := decompressZstd(raw)
+	if err != nil {
+		return nil, fmt.Errorf("zstd decode: %w", err)
+	}
+	req := &cmetricspb.ExportMetricsServiceRequest{}
+	if err := proto.Unmarshal(plain, req); err != nil {
+		return nil, fmt.Errorf("proto unmarshal: %w", err)
+	}
+	return req, nil
 }
 
 func commitMessage(traces []*tracepb.ResourceSpans, metrics []*metricspb.ResourceMetrics) string {
 	short := ""
+	spanCount := 0
 	for _, rs := range traces {
-		span := SpanFromResourceSpans(rs)
-		if span == nil || span.Name != rootSpanName {
+		for _, ss := range rs.ScopeSpans {
+			spanCount += len(ss.Spans)
+		}
+		if short != "" {
 			continue
 		}
-		commit := models.ResourceString(rs.Resource, "vcs.repository.ref.revision")
-		if commit != "" {
+		if commit := models.ResourceString(rs.Resource, "vcs.repository.ref.revision"); commit != "" {
 			short = commit
 			if len(short) > 7 {
 				short = short[:7]
 			}
-			break
+			continue
 		}
-		runID := models.ResourceString(rs.Resource, "defrost.run_id")
-		if runID != "" {
+		if runID := models.ResourceString(rs.Resource, "cicd.pipeline.run.id"); runID != "" {
 			short = runID
 			if len(short) > 8 {
 				short = short[:8]
@@ -786,7 +1060,13 @@ func commitMessage(traces []*tracepb.ResourceSpans, metrics []*metricspb.Resourc
 	if short == "" {
 		short = "unknown"
 	}
-	return fmt.Sprintf("results for %s (%d spans, %d metrics)", short, len(traces), len(metrics))
+	metricCount := 0
+	for _, rm := range metrics {
+		for _, sm := range rm.ScopeMetrics {
+			metricCount += len(sm.Metrics)
+		}
+	}
+	return fmt.Sprintf("results for %s (%d spans, %d metrics)", short, spanCount, metricCount)
 }
 
 // --- preserved helpers (unchanged) ---

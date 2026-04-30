@@ -246,21 +246,15 @@ func lookupEntry(ds Dataset, tid, rid string) (entryDTO, runDetailDTO, bool) {
 	return entryDTO{}, runDetailDTO{}, false
 }
 
-// runIDOf reads the defrost.run_id from either the ResourceSpans's
-// Resource (preferred for root spans) or the contained Span's Attributes
-// (preferred for test spans).
+// runIDOf reads the run id from a ResourceSpans's Resource, using OTel's
+// `cicd.pipeline.run.id` semconv key. Schema 4 stores this only on the
+// Resource — never on individual spans — so there is no span-attribute
+// fallback.
 func runIDOf(rs *tracepb.ResourceSpans) string {
 	if rs == nil {
 		return ""
 	}
-	if id := models.ResourceString(rs.Resource, "defrost.run_id"); id != "" {
-		return id
-	}
-	span := persist.SpanFromResourceSpans(rs)
-	if span == nil {
-		return ""
-	}
-	return models.AttrString(span.Attributes, "defrost.run_id")
+	return models.ResourceString(rs.Resource, "cicd.pipeline.run.id")
 }
 
 func spanToEntryDTO(rs *tracepb.ResourceSpans) entryDTO {
@@ -318,7 +312,7 @@ func rootSpanToRunDTO(rs *tracepb.ResourceSpans) runDetailDTO {
 		}
 	}
 	return runDetailDTO{
-		RunID:       models.ResourceString(rs.Resource, "defrost.run_id"),
+		RunID:       models.ResourceString(rs.Resource, "cicd.pipeline.run.id"),
 		Commit:      models.ResourceString(rs.Resource, "vcs.repository.ref.revision"),
 		Parent:      models.ResourceString(rs.Resource, "defrost.parent_commit"),
 		Branch:      models.ResourceString(rs.Resource, "vcs.repository.ref.name"),
