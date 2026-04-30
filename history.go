@@ -1,16 +1,20 @@
 package main
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 
+	"google.golang.org/protobuf/encoding/protojson"
+
 	"github.com/bjk95/defrost/internal/persist"
 )
 
+// historyMarshal emits one ResourceSpans per line as canonical OTLP/JSON.
+var historyMarshal = protojson.MarshalOptions{UseProtoNames: true, EmitUnpopulated: false}
+
 func HandleHistory(testName, repoDir, dataBranch string, noRemote bool) int {
-	entries, err := persist.New(persist.Options{
+	traces, err := persist.New(persist.Options{
 		RepoDir:    repoDir,
 		DataBranch: dataBranch,
 		AuthToken:  os.Getenv("GITHUB_TOKEN"),
@@ -24,12 +28,26 @@ func HandleHistory(testName, repoDir, dataBranch string, noRemote bool) int {
 		fmt.Fprintln(os.Stderr, "history:", err)
 		return 1
 	}
-	enc := json.NewEncoder(os.Stdout)
-	for _, e := range entries {
-		if err := enc.Encode(e); err != nil {
+	for _, rs := range traces {
+		line, err := historyMarshal.Marshal(rs)
+		if err != nil {
 			fmt.Fprintln(os.Stderr, "history:", err)
 			return 1
 		}
+		// Strip embedded newlines so each ResourceSpans is one NDJSON line.
+		fmt.Println(string(replaceBytes(line, '\n', ' ')))
 	}
 	return 0
+}
+
+func replaceBytes(s []byte, from, to byte) []byte {
+	out := make([]byte, len(s))
+	for i, c := range s {
+		if c == from {
+			out[i] = to
+		} else {
+			out[i] = c
+		}
+	}
+	return out
 }

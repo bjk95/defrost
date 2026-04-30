@@ -8,7 +8,12 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"time"
 
+	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
+	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
+
+	"github.com/bjk95/defrost/internal/models"
 	"github.com/bjk95/defrost/internal/persist"
 )
 
@@ -53,7 +58,7 @@ func New(opts persist.Options, assets fs.FS) http.Handler {
 			writeJSONError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		entry, run, ok := lookupEntry(ds, tid, rid)
+		test, run, ok := lookupEntry(ds, tid, rid)
 		if !ok {
 			writeJSONError(w, http.StatusNotFound, "unknown test or run")
 			return
@@ -61,9 +66,9 @@ func New(opts persist.Options, assets fs.FS) http.Handler {
 		w.Header().Set("Cache-Control", "public, max-age=86400")
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(struct {
-			Test persist.Entry     `json:"test"`
-			Run  persist.RunRecord `json:"run"`
-		}{Test: entry, Run: run})
+			Test entryDTO     `json:"test"`
+			Run  runDetailDTO `json:"run"`
+		}{Test: test, Run: run})
 	})
 
 	mux.HandleFunc("/", spaHandler(assets))
@@ -94,55 +99,275 @@ type gridResponse struct {
 	Tests []testDTO `json:"tests"`
 }
 
+// entryDTO mirrors the wire shape of the schema-2 persist.Entry struct
+// the frontend was built against. Populated from a span at request time.
+type entryDTO struct {
+	TestID     string `json:"test_id"`
+	TestName   string `json:"test_name"`
+	RunID      string `json:"run_id"`
+	Timestamp  string `json:"ts"`
+	Ran        bool   `json:"ran"`
+	Passed     bool   `json:"passed"`
+	Status     string `json:"status"`
+	DurationMs int64  `json:"duration_ms"`
+	Output     string `json:"output,omitempty"`
+}
+
+// runDetailDTO mirrors the wire shape of the schema-2 persist.RunRecord
+// struct the frontend was built against. Populated from a root run span
+// at request time, pulling fields from Resource attributes.
+type runDetailDTO struct {
+	RunID       string   `json:"run_id"`
+	Commit      string   `json:"commit,omitempty"`
+	Parent      string   `json:"parent,omitempty"`
+	Branch      string   `json:"branch,omitempty"`
+	PR          int      `json:"pr,omitempty"`
+	AuthorEmail string   `json:"author_email,omitempty"`
+	AuthorName  string   `json:"author_name,omitempty"`
+	Dirty       bool     `json:"dirty"`
+	DirtyHash   string   `json:"dirty_hash,omitempty"`
+	Cmd         []string `json:"cmd,omitempty"`
+	CmdHash     string   `json:"cmd_hash,omitempty"`
+	GoVersion   string   `json:"go_version,omitempty"`
+	OS          string   `json:"os,omitempty"`
+	Arch        string   `json:"arch,omitempty"`
+	Timestamp   string   `json:"ts"`
+}
+
 func buildGridResponse(ds Dataset) gridResponse {
 	out := gridResponse{
-		Runs:  make([]runDTO, 0, len(ds.Runs)),
-		Tests: make([]testDTO, 0, len(ds.TestEntries)),
+		Runs:  make([]runDTO, 0, len(ds.Roots)),
+		Tests: make([]testDTO, 0, len(ds.TestSpans)),
 	}
-	for _, r := range ds.Runs {
+	for _, rs := range ds.Roots {
+		span := persist.SpanFromResourceSpans(rs)
+		if span == nil {
+			continue
+		}
 		out.Runs = append(out.Runs, runDTO{
-			RunID: r.RunID, Timestamp: r.Timestamp, Commit: r.Commit, Branch: r.Branch,
+			RunID:     runIDOf(rs),
+			Timestamp: nanosToRFC3339(int64(span.StartTimeUnixNano)),
+			Commit:    models.ResourceString(rs.Resource, "vcs.repository.ref.revision"),
+			Branch:    models.ResourceString(rs.Resource, "vcs.repository.ref.name"),
 		})
 	}
-	for tid, entries := range ds.TestEntries {
-		// Sort entries by Timestamp ascending so cells flow left→right as
-		// older→newer (matches the "← older · newer →" header).
-		sortedEntries := append([]persist.Entry(nil), entries...)
-		sort.Slice(sortedEntries, func(i, j int) bool {
-			return sortedEntries[i].Timestamp < sortedEntries[j].Timestamp
+	for tid, traces := range ds.TestSpans {
+		// Sort spans by StartTimeUnixNano ascending so cells flow
+		// left→right as older→newer (matches the "← older · newer →"
+		// header).
+		sorted := append([]*tracepb.ResourceSpans(nil), traces...)
+		sort.Slice(sorted, func(i, j int) bool {
+			a := persist.SpanFromResourceSpans(sorted[i])
+			b := persist.SpanFromResourceSpans(sorted[j])
+			if a == nil || b == nil {
+				return false
+			}
+			return a.StartTimeUnixNano < b.StartTimeUnixNano
 		})
-		t := testDTO{TestID: tid, TestName: sortedEntries[0].TestName}
-		for _, e := range sortedEntries {
-			t.Cells = append(t.Cells, cellDTO{RunID: e.RunID, Status: e.Status, DurationMs: e.DurationMs})
+		first := persist.SpanFromResourceSpans(sorted[0])
+		if first == nil {
+			continue
+		}
+		t := testDTO{TestID: tid, TestName: first.Name}
+		for _, rs := range sorted {
+			s := persist.SpanFromResourceSpans(rs)
+			if s == nil {
+				continue
+			}
+			durMs := int64(0)
+			if s.EndTimeUnixNano > s.StartTimeUnixNano {
+				durMs = int64((s.EndTimeUnixNano - s.StartTimeUnixNano) / 1_000_000)
+			}
+			t.Cells = append(t.Cells, cellDTO{
+				RunID:      runIDOf(rs),
+				Status:     spanResultStatus(s),
+				DurationMs: durMs,
+			})
 		}
 		out.Tests = append(out.Tests, t)
 	}
 	return out
 }
 
-func lookupEntry(ds Dataset, tid, rid string) (persist.Entry, persist.RunRecord, bool) {
-	entries, ok := ds.TestEntries[tid]
+func lookupEntry(ds Dataset, tid, rid string) (entryDTO, runDetailDTO, bool) {
+	traces, ok := ds.TestSpans[tid]
 	if !ok {
-		return persist.Entry{}, persist.RunRecord{}, false
+		return entryDTO{}, runDetailDTO{}, false
 	}
-	var entry persist.Entry
-	found := false
-	for _, e := range entries {
-		if e.RunID == rid {
-			entry = e
-			found = true
+	var hit *tracepb.ResourceSpans
+	for _, rs := range traces {
+		if runIDOf(rs) == rid {
+			hit = rs
 			break
 		}
 	}
-	if !found {
-		return persist.Entry{}, persist.RunRecord{}, false
+	if hit == nil {
+		return entryDTO{}, runDetailDTO{}, false
 	}
-	for _, r := range ds.Runs {
-		if r.RunID == rid {
-			return entry, r, true
+	for _, root := range ds.Roots {
+		if runIDOf(root) == rid {
+			return spanToEntryDTO(hit), rootSpanToRunDTO(root), true
 		}
 	}
-	return persist.Entry{}, persist.RunRecord{}, false
+	return entryDTO{}, runDetailDTO{}, false
+}
+
+// runIDOf reads the defrost.run_id from either the ResourceSpans's
+// Resource (preferred for root spans) or the contained Span's Attributes
+// (preferred for test spans).
+func runIDOf(rs *tracepb.ResourceSpans) string {
+	if rs == nil {
+		return ""
+	}
+	if id := models.ResourceString(rs.Resource, "defrost.run_id"); id != "" {
+		return id
+	}
+	span := persist.SpanFromResourceSpans(rs)
+	if span == nil {
+		return ""
+	}
+	return models.AttrString(span.Attributes, "defrost.run_id")
+}
+
+func spanToEntryDTO(rs *tracepb.ResourceSpans) entryDTO {
+	s := persist.SpanFromResourceSpans(rs)
+	if s == nil {
+		return entryDTO{}
+	}
+	resultStatus := models.AttrString(s.Attributes, "test.case.result.status")
+	output := ""
+	for _, ev := range s.Events {
+		if ev.Name == "test.output" {
+			output = models.AttrString(ev.Attributes, "body")
+			if output != "" {
+				break
+			}
+		}
+	}
+	durMs := int64(0)
+	if s.EndTimeUnixNano > s.StartTimeUnixNano {
+		durMs = int64((s.EndTimeUnixNano - s.StartTimeUnixNano) / 1_000_000)
+	}
+	return entryDTO{
+		TestID:     persist.EncodeName(s.Name),
+		TestName:   s.Name,
+		RunID:      runIDOf(rs),
+		Timestamp:  nanosToRFC3339(int64(s.StartTimeUnixNano)),
+		Ran:        resultStatus != "skipped",
+		Passed:     resultStatus == "passed",
+		Status:     compactStatusFromSemconv(resultStatus),
+		DurationMs: durMs,
+		Output:     output,
+	}
+}
+
+func rootSpanToRunDTO(rs *tracepb.ResourceSpans) runDetailDTO {
+	span := persist.SpanFromResourceSpans(rs)
+	if span == nil {
+		return runDetailDTO{}
+	}
+	prStr := models.ResourceString(rs.Resource, "vcs.repository.change.id")
+	pr := 0
+	if prStr != "" {
+		var n int
+		_, _ = fmtSscanf(prStr, &n)
+		pr = n
+	}
+	cmd := readStringArrayAttr(rs.Resource.GetAttributes(), "defrost.cmd")
+	dirty := false
+	for _, kv := range rs.Resource.GetAttributes() {
+		if kv.Key == "defrost.dirty" {
+			if v, ok := kv.Value.GetValue().(*commonpb.AnyValue_BoolValue); ok {
+				dirty = v.BoolValue
+			}
+			break
+		}
+	}
+	return runDetailDTO{
+		RunID:       models.ResourceString(rs.Resource, "defrost.run_id"),
+		Commit:      models.ResourceString(rs.Resource, "vcs.repository.ref.revision"),
+		Parent:      models.ResourceString(rs.Resource, "defrost.parent_commit"),
+		Branch:      models.ResourceString(rs.Resource, "vcs.repository.ref.name"),
+		PR:          pr,
+		AuthorEmail: models.ResourceString(rs.Resource, "defrost.author_email"),
+		AuthorName:  models.ResourceString(rs.Resource, "defrost.author_name"),
+		Dirty:       dirty,
+		DirtyHash:   models.ResourceString(rs.Resource, "defrost.dirty_hash"),
+		Cmd:         cmd,
+		CmdHash:     models.ResourceString(rs.Resource, "defrost.cmd_hash"),
+		GoVersion:   models.ResourceString(rs.Resource, "process.runtime.version"),
+		OS:          models.ResourceString(rs.Resource, "host.os.type"),
+		Arch:        models.ResourceString(rs.Resource, "host.arch"),
+		Timestamp:   nanosToRFC3339(int64(span.StartTimeUnixNano)),
+	}
+}
+
+func readStringArrayAttr(attrs []*commonpb.KeyValue, key string) []string {
+	for _, kv := range attrs {
+		if kv.Key != key {
+			continue
+		}
+		arr, ok := kv.Value.GetValue().(*commonpb.AnyValue_ArrayValue)
+		if !ok {
+			return nil
+		}
+		out := make([]string, 0, len(arr.ArrayValue.Values))
+		for _, v := range arr.ArrayValue.Values {
+			if s, ok := v.GetValue().(*commonpb.AnyValue_StringValue); ok {
+				out = append(out, s.StringValue)
+			}
+		}
+		return out
+	}
+	return nil
+}
+
+// nanosToRFC3339 formats a Unix-nano timestamp as RFC 3339, the same wire
+// shape the schema-2 frontend was built against.
+func nanosToRFC3339(ns int64) string {
+	if ns == 0 {
+		return ""
+	}
+	return time.Unix(0, ns).UTC().Format(time.RFC3339Nano)
+}
+
+// spanResultStatus reads the OTel `test.case.result.status` attribute
+// (passed/failed/skipped/aborted) from a span and converts to the
+// frontend's compact status string.
+func spanResultStatus(s *tracepb.Span) string {
+	if s == nil {
+		return ""
+	}
+	return compactStatusFromSemconv(models.AttrString(s.Attributes, "test.case.result.status"))
+}
+
+func compactStatusFromSemconv(v string) string {
+	switch v {
+	case "passed":
+		return "pass"
+	case "failed":
+		return "fail"
+	case "skipped":
+		return "skip"
+	case "aborted":
+		return "panic"
+	}
+	return v
+}
+
+// fmtSscanf is a tiny helper for parsing one decimal int from a string
+// without pulling strconv in.
+func fmtSscanf(s string, n *int) (int, error) {
+	parsed := 0
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c < '0' || c > '9' {
+			return i, nil
+		}
+		parsed = parsed*10 + int(c-'0')
+	}
+	*n = parsed
+	return len(s), nil
 }
 
 // parseTestRunPath parses /api/test/{tid}/run/{rid}. Returns ok=false

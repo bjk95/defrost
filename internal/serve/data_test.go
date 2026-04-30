@@ -3,27 +3,39 @@ package serve
 import (
 	"testing"
 
+	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
+	resourcepb "go.opentelemetry.io/proto/otlp/resource/v1"
+	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
+
+	"github.com/bjk95/defrost/internal/models"
 	"github.com/bjk95/defrost/internal/persist"
 )
 
 func TestLoad_SortsRunsNewestFirstAndCapsAtFifty(t *testing.T) {
-	runs := []persist.RunRecord{}
+	roots := []*tracepb.ResourceSpans{}
 	for i := 0; i < 60; i++ {
-		runs = append(runs, persist.RunRecord{
-			RunID:     idFor(i),
-			Timestamp: timestampFor(i),
+		roots = append(roots, &tracepb.ResourceSpans{
+			Resource: &resourcepb.Resource{Attributes: []*commonpb.KeyValue{
+				models.StringAttr("defrost.run_id", idFor(i)),
+			}},
+			ScopeSpans: []*tracepb.ScopeSpans{{
+				Spans: []*tracepb.Span{{
+					Name:              "defrost.run",
+					StartTimeUnixNano: uint64(i + 1),
+				}},
+			}},
 		})
 	}
-	byTest := map[string][]persist.Entry{
+	byName := map[string][]*tracepb.ResourceSpans{
 		"tid-A": {
-			{TestID: "tid-A", TestName: "pkg.TestA", RunID: idFor(0), Status: "pass"},
-			{TestID: "tid-A", TestName: "pkg.TestA", RunID: idFor(59), Status: "fail"},
+			testRSWithRun(idFor(0), "passed", 1),
+			testRSWithRun(idFor(59), "failed", 60),
 		},
 	}
 
 	prevLoadAll := persistLoadAll
-	persistLoadAll = func(_ persist.Options) ([]persist.RunRecord, map[string][]persist.Entry, error) {
-		return runs, byTest, nil
+	persistLoadAll = func(_ persist.Options) ([]*tracepb.ResourceSpans, map[string][]*tracepb.ResourceSpans, error) {
+		return roots, byName, nil
 	}
 	defer func() { persistLoadAll = prevLoadAll }()
 
@@ -31,28 +43,42 @@ func TestLoad_SortsRunsNewestFirstAndCapsAtFifty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if len(ds.Runs) != 50 {
-		t.Errorf("want 50 runs after cap, got %d", len(ds.Runs))
+	if len(ds.Roots) != 50 {
+		t.Errorf("want 50 roots after cap, got %d", len(ds.Roots))
 	}
-	if ds.Runs[0].RunID != idFor(59) {
-		t.Errorf("want newest run first, got %q", ds.Runs[0].RunID)
+	if rid := models.ResourceString(ds.Roots[0].Resource, "defrost.run_id"); rid != idFor(59) {
+		t.Errorf("want newest root first, got %q", rid)
 	}
-	// Entry whose RunID is no longer in the capped set must be dropped.
-	if len(ds.TestEntries["tid-A"]) != 1 {
-		t.Errorf("want 1 entry for tid-A after run-cap filter, got %d", len(ds.TestEntries["tid-A"]))
+	// Span whose run_id is no longer in the capped set must be dropped.
+	if len(ds.TestSpans["tid-A"]) != 1 {
+		t.Errorf("want 1 span for tid-A after run-cap filter, got %d", len(ds.TestSpans["tid-A"]))
 	}
-	if ds.TestEntries["tid-A"][0].RunID != idFor(59) {
-		t.Errorf("want surviving entry to reference run %q, got %q", idFor(59), ds.TestEntries["tid-A"][0].RunID)
+	survivor := persist.SpanFromResourceSpans(ds.TestSpans["tid-A"][0])
+	if survivor == nil {
+		t.Fatal("survivor span unexpectedly nil")
+	}
+	if rid := models.AttrString(survivor.Attributes, "defrost.run_id"); rid != idFor(59) {
+		t.Errorf("want surviving span to reference run %q, got %q", idFor(59), rid)
+	}
+}
+
+func testRSWithRun(runID, status string, startNs uint64) *tracepb.ResourceSpans {
+	return &tracepb.ResourceSpans{
+		ScopeSpans: []*tracepb.ScopeSpans{{
+			Spans: []*tracepb.Span{{
+				Name:              "pkg.TestA",
+				StartTimeUnixNano: startNs,
+				Attributes: []*commonpb.KeyValue{
+					models.StringAttr("defrost.run_id", runID),
+					models.StringAttr("test.case.result.status", status),
+				},
+			}},
+		}},
 	}
 }
 
 func idFor(i int) string {
 	return "run-" + leftPad(i)
-}
-
-func timestampFor(i int) string {
-	// Lex-sortable timestamps. RFC3339 ascending with i.
-	return "2026-01-01T00:00:" + leftPad(i) + "Z"
 }
 
 func leftPad(i int) string {
