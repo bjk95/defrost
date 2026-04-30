@@ -3,27 +3,46 @@ package serve
 import (
 	"testing"
 
+	"github.com/bjk95/defrost/internal/models"
 	"github.com/bjk95/defrost/internal/persist"
 )
 
 func TestLoad_SortsRunsNewestFirstAndCapsAtFifty(t *testing.T) {
-	runs := []persist.RunRecord{}
+	roots := []models.Span{}
 	for i := 0; i < 60; i++ {
-		runs = append(runs, persist.RunRecord{
-			RunID:     idFor(i),
-			Timestamp: timestampFor(i),
+		roots = append(roots, models.Span{
+			Schema:            models.SchemaV3,
+			Name:              "defrost.run",
+			StartTimeUnixNano: int64(i + 1),
+			Resource:          map[string]any{"defrost.run_id": idFor(i)},
 		})
 	}
-	byTest := map[string][]persist.Entry{
+	byName := map[string][]models.Span{
 		"tid-A": {
-			{TestID: "tid-A", TestName: "pkg.TestA", RunID: idFor(0), Status: "pass"},
-			{TestID: "tid-A", TestName: "pkg.TestA", RunID: idFor(59), Status: "fail"},
+			{
+				Schema:            models.SchemaV3,
+				Name:              "pkg.TestA",
+				StartTimeUnixNano: 1,
+				Attributes: map[string]any{
+					"defrost.run_id":          idFor(0),
+					"test.case.result.status": "passed",
+				},
+			},
+			{
+				Schema:            models.SchemaV3,
+				Name:              "pkg.TestA",
+				StartTimeUnixNano: 60,
+				Attributes: map[string]any{
+					"defrost.run_id":          idFor(59),
+					"test.case.result.status": "failed",
+				},
+			},
 		},
 	}
 
 	prevLoadAll := persistLoadAll
-	persistLoadAll = func(_ persist.Options) ([]persist.RunRecord, map[string][]persist.Entry, error) {
-		return runs, byTest, nil
+	persistLoadAll = func(_ persist.Options) ([]models.Span, map[string][]models.Span, error) {
+		return roots, byName, nil
 	}
 	defer func() { persistLoadAll = prevLoadAll }()
 
@@ -31,28 +50,23 @@ func TestLoad_SortsRunsNewestFirstAndCapsAtFifty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if len(ds.Runs) != 50 {
-		t.Errorf("want 50 runs after cap, got %d", len(ds.Runs))
+	if len(ds.Roots) != 50 {
+		t.Errorf("want 50 roots after cap, got %d", len(ds.Roots))
 	}
-	if ds.Runs[0].RunID != idFor(59) {
-		t.Errorf("want newest run first, got %q", ds.Runs[0].RunID)
+	if rid, _ := ds.Roots[0].Resource["defrost.run_id"].(string); rid != idFor(59) {
+		t.Errorf("want newest root first, got %q", rid)
 	}
-	// Entry whose RunID is no longer in the capped set must be dropped.
-	if len(ds.TestEntries["tid-A"]) != 1 {
-		t.Errorf("want 1 entry for tid-A after run-cap filter, got %d", len(ds.TestEntries["tid-A"]))
+	// Span whose run_id is no longer in the capped set must be dropped.
+	if len(ds.TestSpans["tid-A"]) != 1 {
+		t.Errorf("want 1 span for tid-A after run-cap filter, got %d", len(ds.TestSpans["tid-A"]))
 	}
-	if ds.TestEntries["tid-A"][0].RunID != idFor(59) {
-		t.Errorf("want surviving entry to reference run %q, got %q", idFor(59), ds.TestEntries["tid-A"][0].RunID)
+	if rid, _ := ds.TestSpans["tid-A"][0].Attributes["defrost.run_id"].(string); rid != idFor(59) {
+		t.Errorf("want surviving span to reference run %q, got %q", idFor(59), rid)
 	}
 }
 
 func idFor(i int) string {
 	return "run-" + leftPad(i)
-}
-
-func timestampFor(i int) string {
-	// Lex-sortable timestamps. RFC3339 ascending with i.
-	return "2026-01-01T00:00:" + leftPad(i) + "Z"
 }
 
 func leftPad(i int) string {

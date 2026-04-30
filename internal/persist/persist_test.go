@@ -430,49 +430,49 @@ func cloneDataBranch(t *testing.T, originURL string) string {
 	return dir
 }
 
-func TestLoadAll_ReturnsAllRunsAndEntriesGroupedByTest(t *testing.T) {
+func TestLoadAll_ReturnsRootSpansAndTestSpansGroupedByEncodedName(t *testing.T) {
 	requireGit(t)
 	repoDir, _ := makeFixture(t)
 
-	resultsRun1 := []models.TestResult{
-		{Id: "github.com/x/p/TestA", Ran: true, Passed: true, Duration: 5 * time.Millisecond, StartTime: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)},
-		{Id: "github.com/x/p/TestB", Ran: true, Passed: false, Duration: 9 * time.Millisecond, StartTime: time.Date(2026, 1, 1, 0, 0, 1, 0, time.UTC), Output: "fail one"},
-	}
-	run1 := newTestRun("run-1", "1111111111111111", "main")
-	if err := New(Options{RepoDir: repoDir}).InsertNewTestResults(run1, resultsRun1); err != nil {
+	run1 := newRunContext("run-1", "1111111111111111", "main")
+	if err := New(Options{RepoDir: repoDir}).InsertNewRun(NewRootSpan(run1), []models.Span{
+		makeTestSpan(run1, "github.com/x/p/TestA", "OK"),
+		makeTestSpan(run1, "github.com/x/p/TestB", "ERROR"),
+	}, nil); err != nil {
 		t.Fatalf("persist run1: %v", err)
 	}
 
-	resultsRun2 := []models.TestResult{
-		{Id: "github.com/x/p/TestA", Ran: true, Passed: true, Duration: 4 * time.Millisecond, StartTime: time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)},
-	}
-	run2 := newTestRun("run-2", "2222222222222222", "main")
-	if err := New(Options{RepoDir: repoDir}).InsertNewTestResults(run2, resultsRun2); err != nil {
+	run2 := newRunContext("run-2", "2222222222222222", "main")
+	if err := New(Options{RepoDir: repoDir}).InsertNewRun(NewRootSpan(run2), []models.Span{
+		makeTestSpan(run2, "github.com/x/p/TestA", "OK"),
+	}, nil); err != nil {
 		t.Fatalf("persist run2: %v", err)
 	}
 
-	runs, byTest, err := New(Options{RepoDir: repoDir}).LoadAll()
+	roots, byEncodedName, err := New(Options{RepoDir: repoDir}).LoadAll()
 	if err != nil {
 		t.Fatalf("LoadAll: %v", err)
 	}
-	if len(runs) != 2 {
-		t.Fatalf("want 2 runs, got %d", len(runs))
+	if len(roots) != 2 {
+		t.Fatalf("want 2 root spans, got %d", len(roots))
 	}
 	gotRunIDs := map[string]bool{}
-	for _, r := range runs {
-		gotRunIDs[r.RunID] = true
+	for _, r := range roots {
+		if id, _ := r.Resource["defrost.run_id"].(string); id != "" {
+			gotRunIDs[id] = true
+		}
 	}
 	if !gotRunIDs["run-1"] || !gotRunIDs["run-2"] {
 		t.Errorf("missing run IDs in %v", gotRunIDs)
 	}
 
-	idA := EncodeTestID("github.com/x/p/TestA")
-	idB := EncodeTestID("github.com/x/p/TestB")
-	if len(byTest[idA]) != 2 {
-		t.Errorf("TestA: want 2 entries, got %d", len(byTest[idA]))
+	idA := EncodeName("github.com/x/p/TestA")
+	idB := EncodeName("github.com/x/p/TestB")
+	if len(byEncodedName[idA]) != 2 {
+		t.Errorf("TestA: want 2 spans, got %d", len(byEncodedName[idA]))
 	}
-	if len(byTest[idB]) != 1 {
-		t.Errorf("TestB: want 1 entry, got %d", len(byTest[idB]))
+	if len(byEncodedName[idB]) != 1 {
+		t.Errorf("TestB: want 1 span, got %d", len(byEncodedName[idB]))
 	}
 }
 
@@ -480,14 +480,14 @@ func TestLoadAll_NoBranch_ReturnsEmpty(t *testing.T) {
 	requireGit(t)
 	repoDir, _ := makeFixture(t)
 
-	runs, byTest, err := New(Options{RepoDir: repoDir}).LoadAll()
+	roots, byEncodedName, err := New(Options{RepoDir: repoDir}).LoadAll()
 	if err != nil {
 		t.Fatalf("LoadAll: %v", err)
 	}
-	if len(runs) != 0 {
-		t.Errorf("expected 0 runs, got %d", len(runs))
+	if len(roots) != 0 {
+		t.Errorf("expected 0 root spans, got %d", len(roots))
 	}
-	if len(byTest) != 0 {
-		t.Errorf("expected 0 test groups, got %d", len(byTest))
+	if len(byEncodedName) != 0 {
+		t.Errorf("expected 0 test groups, got %d", len(byEncodedName))
 	}
 }

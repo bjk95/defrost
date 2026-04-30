@@ -8,19 +8,60 @@ import (
 	"testing"
 	"testing/fstest"
 
+	"github.com/bjk95/defrost/internal/models"
 	"github.com/bjk95/defrost/internal/persist"
 )
 
 func stubDataset() Dataset {
 	return Dataset{
-		Runs: []persist.RunRecord{
-			{RunID: "run-2", Timestamp: "2026-01-02T00:00:00Z", Commit: "deadbee", Branch: "main"},
-			{RunID: "run-1", Timestamp: "2026-01-01T00:00:00Z", Commit: "cafebab", Branch: "main"},
+		Roots: []models.Span{
+			{
+				Schema:            models.SchemaV3,
+				Name:              "defrost.run",
+				StartTimeUnixNano: 1735_776_000_000_000_000, // 2026-01-02T00:00:00Z
+				Resource: map[string]any{
+					"defrost.run_id":              "run-2",
+					"vcs.repository.ref.revision": "deadbee",
+					"vcs.repository.ref.name":     "main",
+				},
+			},
+			{
+				Schema:            models.SchemaV3,
+				Name:              "defrost.run",
+				StartTimeUnixNano: 1735_689_600_000_000_000, // 2026-01-01T00:00:00Z
+				Resource: map[string]any{
+					"defrost.run_id":              "run-1",
+					"vcs.repository.ref.revision": "cafebab",
+					"vcs.repository.ref.name":     "main",
+				},
+			},
 		},
-		TestEntries: map[string][]persist.Entry{
+		TestSpans: map[string][]models.Span{
 			"tid-A": {
-				{TestID: "tid-A", TestName: "pkg.TestA", RunID: "run-1", Status: "pass", DurationMs: 5},
-				{TestID: "tid-A", TestName: "pkg.TestA", RunID: "run-2", Status: "fail", DurationMs: 9, Output: "BOOM"},
+				{
+					Schema:            models.SchemaV3,
+					Name:              "pkg.TestA",
+					StartTimeUnixNano: 1735_689_600_000_000_000,
+					EndTimeUnixNano:   1735_689_600_005_000_000,
+					Attributes: map[string]any{
+						"defrost.run_id":          "run-1",
+						"test.case.result.status": "passed",
+					},
+				},
+				{
+					Schema:            models.SchemaV3,
+					Name:              "pkg.TestA",
+					StartTimeUnixNano: 1735_776_000_000_000_000,
+					EndTimeUnixNano:   1735_776_000_009_000_000,
+					Attributes: map[string]any{
+						"defrost.run_id":          "run-2",
+						"test.case.result.status": "failed",
+					},
+					Events: []models.SpanEvent{{
+						Name:       "test.output",
+						Attributes: map[string]any{"body": "BOOM"},
+					}},
+				},
 			},
 		},
 	}
@@ -98,8 +139,12 @@ func TestServer_GetTestRun_HappyPath(t *testing.T) {
 	}
 
 	var body struct {
-		Test persist.Entry     `json:"test"`
-		Run  persist.RunRecord `json:"run"`
+		Test struct {
+			Output string `json:"output"`
+		} `json:"test"`
+		Run struct {
+			RunID string `json:"run_id"`
+		} `json:"run"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatalf("decode: %v", err)
@@ -132,12 +177,30 @@ func TestServer_GetTestRun_HandlesDoubleEncodedTestIDs(t *testing.T) {
 	// Map key is the on-disk single-encoded ID:
 	encodedTID := "github.com%2Fx%2Fp%2FTestA"
 	ds := Dataset{
-		Runs: []persist.RunRecord{
-			{RunID: "run-1", Timestamp: "2026-01-01T00:00:00Z"},
+		Roots: []models.Span{
+			{
+				Schema:            models.SchemaV3,
+				Name:              "defrost.run",
+				StartTimeUnixNano: 1735_689_600_000_000_000,
+				Resource:          map[string]any{"defrost.run_id": "run-1"},
+			},
 		},
-		TestEntries: map[string][]persist.Entry{
+		TestSpans: map[string][]models.Span{
 			encodedTID: {
-				{TestID: encodedTID, TestName: "github.com/x/p/TestA", RunID: "run-1", Status: "pass", DurationMs: 4, Output: "ok"},
+				{
+					Schema:            models.SchemaV3,
+					Name:              "github.com/x/p/TestA",
+					StartTimeUnixNano: 1735_689_600_000_000_000,
+					EndTimeUnixNano:   1735_689_600_004_000_000,
+					Attributes: map[string]any{
+						"defrost.run_id":          "run-1",
+						"test.case.result.status": "passed",
+					},
+					Events: []models.SpanEvent{{
+						Name:       "test.output",
+						Attributes: map[string]any{"body": "ok"},
+					}},
+				},
 			},
 		},
 	}

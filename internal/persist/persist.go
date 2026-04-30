@@ -57,6 +57,18 @@ type Backend interface {
 	// GetTestHistory returns every span persisted under traces/<testName>.ndjson,
 	// sorted oldest first by start time. Empty slice when nothing matches.
 	GetTestHistory(testName string) ([]models.Span, error)
+	// GetSuppressions returns the current list of suppressed test IDs,
+	// or an empty slice if none have been recorded. A missing data branch
+	// is not an error.
+	GetSuppressions() ([]string, error)
+	// UpdateSuppressions reads the current list, applies mutate, and
+	// writes the result. msg is the commit message used for the update.
+	UpdateSuppressions(mutate func([]string) []string, msg string) error
+	// LoadAll returns every root run span and every test span across
+	// all files, grouped by encoded span name. Used by `defrost serve`
+	// to populate the heatmap grid in a single read instead of N.
+	// Returns nil slices/maps when there is no data yet.
+	LoadAll() (rootSpans []models.Span, byEncodedName map[string][]models.Span, err error)
 }
 
 // New returns the Backend implied by opts. Dev mode selects the local
@@ -257,6 +269,36 @@ func (b *gitBackend) GetTestHistory(testName string) ([]models.Span, error) {
 	return readSpansFromDir(workDir, testName)
 }
 
+func (b *gitBackend) LoadAll() ([]models.Span, map[string][]models.Span, error) {
+	branch := b.opts.DataBranch
+	if branch == "" {
+		branch = DefaultDataBranch
+	}
+	remoteURL, err := resolveTargetURL(b.opts)
+	if err != nil {
+		return nil, nil, err
+	}
+	exists, err := branchExistsOnRemote(remoteURL, branch)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !exists {
+		return nil, nil, nil
+	}
+
+	workDir, err := os.MkdirTemp("", "defrost-read-")
+	if err != nil {
+		return nil, nil, fmt.Errorf("mktemp: %w", err)
+	}
+	defer os.RemoveAll(workDir)
+	_ = os.Remove(workDir)
+
+	if _, err := runGit("", "clone", "--quiet", "--depth=1", "--single-branch", "--branch", branch, remoteURL, workDir); err != nil {
+		return nil, nil, fmt.Errorf("clone data branch: %w", err)
+	}
+	return readAllSpans(workDir)
+}
+
 // fileBackend writes spans/metrics to a plain directory; no git operations.
 type fileBackend struct{ dir string }
 
@@ -285,6 +327,16 @@ func (b *fileBackend) GetTestHistory(testName string) ([]models.Span, error) {
 		return nil, err
 	}
 	return readSpansFromDir(b.dir, testName)
+}
+
+func (b *fileBackend) LoadAll() ([]models.Span, map[string][]models.Span, error) {
+	if _, err := os.Stat(b.dir); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil, nil
+		}
+		return nil, nil, err
+	}
+	return readAllSpans(b.dir)
 }
 
 // --- write helpers ---
@@ -373,6 +425,46 @@ func readSpansFromDir(dir, testName string) ([]models.Span, error) {
 	}
 	sort.Slice(spans, func(i, j int) bool { return spans[i].StartTimeUnixNano < spans[j].StartTimeUnixNano })
 	return spans, nil
+}
+
+// readAllSpans walks dir/traces/, parses every NDJSON file, and returns
+// (root run spans, test spans grouped by file basename without .ndjson).
+// The grouping key matches what the file system stored — i.e. EncodeName
+// of the span name. Empty inputs return (nil, nil, nil).
+func readAllSpans(dir string) ([]models.Span, map[string][]models.Span, error) {
+	tracesDir := filepath.Join(dir, "traces")
+	files, err := os.ReadDir(tracesDir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil, nil
+		}
+		return nil, nil, err
+	}
+	const rootFile = "defrost.run.ndjson"
+	var roots []models.Span
+	byEncodedName := make(map[string][]models.Span)
+	for _, f := range files {
+		if f.IsDir() || !strings.HasSuffix(f.Name(), ".ndjson") {
+			continue
+		}
+		full := filepath.Join(tracesDir, f.Name())
+		fh, err := os.Open(full)
+		if err != nil {
+			return nil, nil, err
+		}
+		spans, err := parseSpansNDJSON(fh)
+		fh.Close()
+		if err != nil {
+			return nil, nil, fmt.Errorf("parse %s: %w", full, err)
+		}
+		if f.Name() == rootFile {
+			roots = append(roots, spans...)
+			continue
+		}
+		key := strings.TrimSuffix(f.Name(), ".ndjson")
+		byEncodedName[key] = spans
+	}
+	return roots, byEncodedName, nil
 }
 
 func parseSpansNDJSON(r io.Reader) ([]models.Span, error) {
