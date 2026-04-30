@@ -38,25 +38,75 @@ func HandleExecution(cmd []string, opts ExecOpts) int {
 		return 2
 	}
 
+	return execWith(a, cmd, opts)
+}
+
+// execWith runs a known adapter and applies persistence + suppression
+// rewrite. Split out from HandleExecution so tests can drive it with a
+// stub adapter.
+func execWith(a runner.Adapter, cmd []string, opts ExecOpts) int {
 	results, code := a.Run(cmd)
 
 	for _, r := range results {
 		fmt.Printf("%+v\n", r)
 	}
 
+	pOpts := persist.Options{
+		RepoDir:    opts.RepoDir,
+		DataBranch: opts.DataBranch,
+		AuthToken:  os.Getenv("GITHUB_TOKEN"),
+		NoRemote:   opts.NoRemote,
+		Dev:        opts.Dev,
+	}
+
 	if opts.Persist && len(results) > 0 {
 		if err := persistResults(opts, cmd, results); err != nil {
 			fmt.Fprintln(os.Stderr, "persist: failed:", err)
-			// A persist failure should surface even when the test command
-			// itself succeeded — otherwise CI silently loses data and no
-			// one notices. If tests already failed, keep that exit code
-			// (it's the more important signal).
 			if code == 0 {
 				code = 1
 			}
 		}
 	}
+
+	if code != 0 {
+		code = maybeRewriteExitCode(code, results, pOpts)
+	}
 	return code
+}
+
+func maybeRewriteExitCode(code int, results []models.TestResult, pOpts persist.Options) int {
+	failingIDs := collectFailingTestIDs(results)
+	if len(failingIDs) == 0 {
+		return code
+	}
+	suppressed, err := persist.New(pOpts).GetSuppressions()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "suppress: read failed (exit code unchanged):", err)
+		return code
+	}
+	suppSet := make(map[string]struct{}, len(suppressed))
+	for _, s := range suppressed {
+		suppSet[s] = struct{}{}
+	}
+	for _, id := range failingIDs {
+		if _, ok := suppSet[id]; !ok {
+			return code
+		}
+	}
+	fmt.Fprintf(os.Stderr,
+		"defrost: suppressed %d failing test(s); rewriting exit %d → 0\n",
+		len(failingIDs), code)
+	return 0
+}
+
+func collectFailingTestIDs(results []models.TestResult) []string {
+	out := make([]string, 0, len(results))
+	for _, r := range results {
+		if r.Ran && !r.Passed {
+			out = append(out, r.Id)
+		}
+	}
+	return out
 }
 
 func persistResults(opts ExecOpts, cmd []string, results []models.TestResult) error {
