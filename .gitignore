@@ -1,0 +1,12 @@
+# Build artefacts
+defrost
+defrost.exe
+
+# Web tooling
+web/node_modules/
+
+# Brainstorm session content (Visual Companion)
+.superpowers/
+
+# OS noise
+.DS_Store
