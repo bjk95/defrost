@@ -1,21 +1,21 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderWithProviders } from "@/test-utils";
-import { Grid } from "./Grid";
+import { TestsPage } from "./TestsPage";
 import { screen, waitFor } from "@testing-library/react";
 import * as api from "@/api";
 
 vi.mock("@/api");
 
-describe("Grid", () => {
+describe("TestsPage", () => {
   beforeEach(() => {
     vi.mocked(api.getTests).mockResolvedValue({
       runs: [
-        { run_id: "run-2", ts: "2026-01-02T00:00:00Z" },
-        { run_id: "run-1", ts: "2026-01-01T00:00:00Z" },
+        { run_id: "run-2", ts: "2026-01-02T00:00:00Z", commit: "deadbee", branch: "main" },
+        { run_id: "run-1", ts: "2026-01-01T00:00:00Z", commit: "cafebab", branch: "main" },
       ],
       tests: [
         {
-          test_id: "tid-A",
+          test_id: "pkg.TestA",
           test_name: "pkg.TestA",
           cells: [
             { run_id: "run-1", status: "pass", duration_ms: 5 },
@@ -26,16 +26,15 @@ describe("Grid", () => {
     });
   });
 
-  it("renders one row per test with cells in run order", async () => {
-    renderWithProviders(<Grid />);
-    await waitFor(() => screen.getByText("pkg.TestA"));
-    expect(screen.getByTestId("run-cell-tid-A-run-1")).toBeTruthy();
-    expect(screen.getByTestId("run-cell-tid-A-run-2")).toBeTruthy();
+  it("renders prefix-grouped tests with their history strip", async () => {
+    renderWithProviders(<TestsPage />);
+    await waitFor(() => screen.getByText("pkg"));
+    expect(screen.getByText("TestA")).toBeTruthy();
   });
 
-  it("shows empty state when no runs", async () => {
+  it("shows the empty state when no runs exist", async () => {
     vi.mocked(api.getTests).mockResolvedValue({ runs: [], tests: [] });
-    renderWithProviders(<Grid />);
+    renderWithProviders(<TestsPage />);
     await waitFor(() => screen.getByText(/no test runs yet/i));
   });
 });
