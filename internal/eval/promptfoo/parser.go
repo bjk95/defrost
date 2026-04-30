@@ -75,8 +75,8 @@ func Parse(r io.Reader) ([]models.TestResult, []*metricspb.Metric, error) {
 		tests   []models.TestResult
 		metrics []*metricspb.Metric
 	)
-	for _, r := range doc.Results.Results {
-		caseName := caseName(r.Vars)
+	for i, r := range doc.Results.Results {
+		caseName := caseName(r.Vars, i)
 		tests = append(tests, mapResult(r, caseName))
 		for _, c := range r.GradingResult.ComponentResults {
 			metrics = append(metrics, mapComponentResult(c, caseName, providerLabel(r.Provider), now))
@@ -85,9 +85,9 @@ func Parse(r io.Reader) ([]models.TestResult, []*metricspb.Metric, error) {
 	return tests, metrics, nil
 }
 
-func caseName(vars map[string]any) string {
+func caseName(vars map[string]any, idx int) string {
 	if len(vars) == 0 {
-		return "<unnamed>"
+		return fmt.Sprintf("<unnamed>#%d", idx)
 	}
 	keys := make([]string, 0, len(vars))
 	for k := range vars {

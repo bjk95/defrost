@@ -202,3 +202,28 @@ func TestParseEmpty(t *testing.T) {
 		t.Fatalf("expected zero results, got %d tests / %d metrics", len(tests), len(metrics))
 	}
 }
+
+func TestParseEmptyVarsKeepsCasesDistinct(t *testing.T) {
+	tests, metrics, err := Parse(bytes.NewReader(loadFixture(t, "empty_vars_collision.json")))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(tests) != 2 {
+		t.Fatalf("expected 2 tests, got %d", len(tests))
+	}
+	if tests[0].Id == tests[1].Id {
+		t.Fatalf("expected distinct case ids for empty-vars cases, both got %q", tests[0].Id)
+	}
+	if tests[0].Id != "<unnamed>#0" || tests[1].Id != "<unnamed>#1" {
+		t.Fatalf("unexpected ids: %q, %q", tests[0].Id, tests[1].Id)
+	}
+	if len(metrics) != 2 {
+		t.Fatalf("expected 2 metrics, got %d", len(metrics))
+	}
+	// The metric attributes should also reflect the unique case names.
+	name0 := attrString(metrics[0], "test.case.name")
+	name1 := attrString(metrics[1], "test.case.name")
+	if name0 == name1 {
+		t.Fatalf("expected distinct test.case.name attrs, both got %q", name0)
+	}
+}
