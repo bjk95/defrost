@@ -1,6 +1,7 @@
 package promptfoo
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -141,16 +142,22 @@ func caseName(vars map[string]any, idx int, providerLabel, promptID string) stri
 }
 
 // promptIdentity returns a stable, compact identifier for a prompt.
-// Always prefer the id (a short hash) over the label, because labels
-// can be the full prompt template — long enough to push URL-encoded
-// case-name filenames past common 255-byte FS limits when used as
-// metric/trace partition keys. Returns "" when no id is present, in
-// which case the case name omits prompt info.
+// Prefer prompt.id (promptfoo emits a short hash) over prompt.label
+// because labels are often the full prompt template — long enough to
+// push URL-encoded case-name filenames past common 255-byte FS limits
+// when used as metric/trace partition keys. When id is empty (some
+// promptfoo versions don't populate it), hash the label ourselves to
+// keep the cross-product disambiguation property without bloating
+// filenames. Returns "" when neither is present.
 func promptIdentity(p promptfooPrompt) string {
 	if p.ID != "" {
 		return p.ID
 	}
-	return p.Label
+	if p.Label == "" {
+		return ""
+	}
+	h := sha256.Sum256([]byte(p.Label))
+	return fmt.Sprintf("%x", h[:6])
 }
 
 func providerLabel(p promptfooProvider) string {
