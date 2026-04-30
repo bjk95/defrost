@@ -15,4 +15,11 @@ var CLI struct {
 		DataBranch string `name:"data-branch" default:"_defrost" help:"Branch name to read from."`
 		NoRemote   bool   `name:"no-remote" help:"Read from the local repo only — do not consult origin."`
 	} `cmd:"" help:"Print recorded history for a single test as NDJSON."`
+
+	Serve struct {
+		Port       int    `name:"port" default:"6969" help:"Port to bind on 127.0.0.1."`
+		RepoDir    string `name:"repo-dir" default:"." help:"Path to the git repo."`
+		DataBranch string `name:"data-branch" default:"_defrost" help:"Branch name to read from."`
+		NoRemote   bool   `name:"no-remote" help:"Read from the local repo only — do not consult origin."`
+	} `cmd:"" help:"Serve a local UI for inspecting test history."`
 }
