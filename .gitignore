@@ -11,5 +11,9 @@ web/node_modules/
 # Brainstorm session content (Visual Companion)
 .superpowers/
 
+# Implementation plans are agent-session artefacts; only the specs are
+# maintained as documentation.
+docs/superpowers/plans/
+
 # OS noise
 .DS_Store
