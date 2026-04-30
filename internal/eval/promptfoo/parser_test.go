@@ -84,8 +84,8 @@ func TestParseSingleAssertion(t *testing.T) {
 	if !tests[0].Passed {
 		t.Fatalf("expected Passed=true, got false")
 	}
-	if tests[0].Id != `country="France"` {
-		t.Fatalf("expected Id=country=\"France\", got %q", tests[0].Id)
+	if tests[0].Id != `country="France",provider="openai:gpt-4o"` {
+		t.Fatalf("expected Id=country=\"France\",provider=\"openai:gpt-4o\", got %q", tests[0].Id)
 	}
 	if len(metrics) != 1 {
 		t.Fatalf("expected 1 metric, got %d", len(metrics))
@@ -103,8 +103,8 @@ func TestParseSingleAssertion(t *testing.T) {
 	if got := attrString(m, "gen_ai.evaluation.score.label"); got != "pass" {
 		t.Fatalf("expected gen_ai.evaluation.score.label=pass, got %q", got)
 	}
-	if got := attrString(m, "test.case.name"); got != `country="France"` {
-		t.Fatalf("expected test.case.name=country=\"France\", got %q", got)
+	if got := attrString(m, "test.case.name"); got != `country="France",provider="openai:gpt-4o"` {
+		t.Fatalf("expected test.case.name=country=\"France\",provider=\"openai:gpt-4o\", got %q", got)
 	}
 	if got := attrString(m, "gen_ai.request.model"); got != "openai:gpt-4o" {
 		t.Fatalf("expected gen_ai.request.model=openai:gpt-4o, got %q", got)
@@ -226,8 +226,8 @@ func TestParseNestedVarsDeterministic(t *testing.T) {
 	if tests1[0].Id != tests2[0].Id {
 		t.Fatalf("identical vars produced different ids across runs: %q vs %q", tests1[0].Id, tests2[0].Id)
 	}
-	// Sanity check: id contains both var keys (config and name).
-	if !strings.Contains(tests1[0].Id, "config=") || !strings.Contains(tests1[0].Id, "name=") {
+	// Sanity check: id contains both var keys (config and name) and the provider.
+	if !strings.Contains(tests1[0].Id, "config=") || !strings.Contains(tests1[0].Id, "name=") || !strings.Contains(tests1[0].Id, "provider=") {
 		t.Fatalf("id missing expected keys: %q", tests1[0].Id)
 	}
 }
@@ -243,7 +243,7 @@ func TestParseEmptyVarsKeepsCasesDistinct(t *testing.T) {
 	if tests[0].Id == tests[1].Id {
 		t.Fatalf("expected distinct case ids for empty-vars cases, both got %q", tests[0].Id)
 	}
-	if tests[0].Id != "<unnamed>#0" || tests[1].Id != "<unnamed>#1" {
+	if tests[0].Id != `<unnamed>#0,provider="openai:gpt-4o"` || tests[1].Id != `<unnamed>#1,provider="openai:gpt-4o"` {
 		t.Fatalf("unexpected ids: %q, %q", tests[0].Id, tests[1].Id)
 	}
 	if len(metrics) != 2 {
@@ -254,5 +254,21 @@ func TestParseEmptyVarsKeepsCasesDistinct(t *testing.T) {
 	name1 := attrString(metrics[1], "test.case.name")
 	if name0 == name1 {
 		t.Fatalf("expected distinct test.case.name attrs, both got %q", name0)
+	}
+}
+
+func TestParseSameVarsDifferentProvidersGetDistinctIds(t *testing.T) {
+	tests, _, err := Parse(bytes.NewReader(loadFixture(t, "cross_product.json")))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(tests) != 2 {
+		t.Fatalf("expected 2 tests, got %d", len(tests))
+	}
+	if tests[0].Id == tests[1].Id {
+		t.Fatalf("identical vars across two providers must produce distinct ids, both got %q", tests[0].Id)
+	}
+	if !strings.Contains(tests[0].Id, "provider=") || !strings.Contains(tests[1].Id, "provider=") {
+		t.Fatalf("provider missing from ids: %q / %q", tests[0].Id, tests[1].Id)
 	}
 }

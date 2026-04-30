@@ -76,34 +76,48 @@ func Parse(r io.Reader) ([]models.TestResult, []*metricspb.Metric, error) {
 		metrics []*metricspb.Metric
 	)
 	for i, r := range doc.Results.Results {
-		caseName := caseName(r.Vars, i)
+		provider := providerLabel(r.Provider)
+		caseName := caseName(r.Vars, i, provider)
 		tests = append(tests, mapResult(r, caseName))
 		for _, c := range r.GradingResult.ComponentResults {
-			metrics = append(metrics, mapComponentResult(c, caseName, providerLabel(r.Provider), now))
+			metrics = append(metrics, mapComponentResult(c, caseName, provider, now))
 		}
 	}
 	return tests, metrics, nil
 }
 
-func caseName(vars map[string]any, idx int) string {
+func caseName(vars map[string]any, idx int, providerLabel string) string {
+	var parts []string
 	if len(vars) == 0 {
-		return fmt.Sprintf("<unnamed>#%d", idx)
-	}
-	keys := make([]string, 0, len(vars))
-	for k := range vars {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	parts := make([]string, 0, len(keys))
-	for _, k := range keys {
-		b, err := json.Marshal(vars[k])
-		if err != nil {
-			// Defensive: a vars value that can't marshal is exotic
-			// (channels, funcs); fall back to %v rather than fail the run.
-			parts = append(parts, fmt.Sprintf("%s=%v", k, vars[k]))
-			continue
+		parts = []string{fmt.Sprintf("<unnamed>#%d", idx)}
+	} else {
+		keys := make([]string, 0, len(vars))
+		for k := range vars {
+			keys = append(keys, k)
 		}
-		parts = append(parts, fmt.Sprintf("%s=%s", k, b))
+		sort.Strings(keys)
+		parts = make([]string, 0, len(keys)+1)
+		for _, k := range keys {
+			b, err := json.Marshal(vars[k])
+			if err != nil {
+				// Defensive: a vars value that can't marshal is exotic
+				// (channels, funcs); fall back to %v rather than fail the run.
+				parts = append(parts, fmt.Sprintf("%s=%v", k, vars[k]))
+				continue
+			}
+			parts = append(parts, fmt.Sprintf("%s=%s", k, b))
+		}
+	}
+	if providerLabel != "" {
+		// json.Marshal so a label containing commas/quotes round-trips
+		// stably. Most labels are scalar identifiers like
+		// "openai:gpt-4o-mini" so this is mostly cosmetic.
+		b, err := json.Marshal(providerLabel)
+		if err != nil {
+			parts = append(parts, fmt.Sprintf("provider=%s", providerLabel))
+		} else {
+			parts = append(parts, fmt.Sprintf("provider=%s", b))
+		}
 	}
 	return strings.Join(parts, ",")
 }
