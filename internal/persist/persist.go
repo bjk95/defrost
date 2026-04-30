@@ -312,6 +312,105 @@ func History(opts Options, testName string) ([]HistoricalEntry, error) {
 	return out, nil
 }
 
+// LoadAll returns every persisted RunRecord and every Entry across all
+// tests on the data branch. Entries are grouped by encoded test ID
+// (the on-disk filename). Used by `defrost serve`. Returns empty (nil)
+// slices/maps if the data branch does not yet exist.
+func LoadAll(opts Options) ([]RunRecord, map[string][]Entry, error) {
+	branch := opts.DataBranch
+	if branch == "" {
+		branch = DefaultDataBranch
+	}
+
+	remoteURL, err := resolveTargetURL(opts)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	exists, err := branchExistsOnRemote(remoteURL, branch)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !exists {
+		return nil, nil, nil
+	}
+
+	workDir, err := os.MkdirTemp("", "defrost-read-")
+	if err != nil {
+		return nil, nil, fmt.Errorf("mktemp: %w", err)
+	}
+	defer os.RemoveAll(workDir)
+	_ = os.Remove(workDir)
+
+	if _, err := runGit("", "clone", "--quiet", "--depth=1", "--single-branch", "--branch", branch, remoteURL, workDir); err != nil {
+		return nil, nil, fmt.Errorf("clone data branch: %w", err)
+	}
+
+	runs, err := readAllRunRecords(workDir)
+	if err != nil {
+		return nil, nil, err
+	}
+	byTest, err := readAllEntries(workDir)
+	if err != nil {
+		return nil, nil, err
+	}
+	return runs, byTest, nil
+}
+
+func readAllRunRecords(workDir string) ([]RunRecord, error) {
+	dir := filepath.Join(workDir, "runs")
+	files, err := os.ReadDir(dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	out := make([]RunRecord, 0, len(files))
+	for _, f := range files {
+		if f.IsDir() || !strings.HasSuffix(f.Name(), ".json") {
+			continue
+		}
+		runID := strings.TrimSuffix(f.Name(), ".json")
+		rec, err := readRunRecord(workDir, runID)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, rec)
+	}
+	return out, nil
+}
+
+func readAllEntries(workDir string) (map[string][]Entry, error) {
+	dir := filepath.Join(workDir, "tests")
+	files, err := os.ReadDir(dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return map[string][]Entry{}, nil
+		}
+		return nil, err
+	}
+	out := map[string][]Entry{}
+	for _, f := range files {
+		if f.IsDir() || !strings.HasSuffix(f.Name(), ".ndjson") {
+			continue
+		}
+		path := filepath.Join(dir, f.Name())
+		rf, err := os.Open(path)
+		if err != nil {
+			return nil, err
+		}
+		entries, err := parseNDJSON(rf)
+		rf.Close()
+		if err != nil {
+			return nil, err
+		}
+		testID := strings.TrimSuffix(f.Name(), ".ndjson")
+		out[testID] = entries
+	}
+	return out, nil
+}
+
 // --- internal helpers ---
 
 // gitErr carries the captured stderr and exit code so callers can branch
