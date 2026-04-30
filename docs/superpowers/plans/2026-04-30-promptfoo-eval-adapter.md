@@ -4,22 +4,22 @@
 
 **Goal:** Add Promptfoo support to defrost so `defrost exec promptfoo eval -c <config>` (and the common JS-runtime invocation forms — `npx promptfoo`, `pnpm promptfoo`) wraps a Promptfoo run, parses the resulting JSON, persists per-test pass/fail to `traces/<test_name>.ndjson`, and persists per-assertion scores to `metrics/eval.<assertion-name>.ndjson`. This is step 1 of the eval framework integration build order.
 
-**Architecture:** Slot a fourth runner adapter into the existing `internal/runner` registry. The adapter auto-injects `--output <tempfile>.json` if the user did not supply one, runs `promptfoo eval` to completion, parses Promptfoo's `results.json` shape, and emits both `[]models.TestResult` (one per result row) and `[]models.MetricEntry` (one per `gradingResult.componentResults[]` entry). Eval-specific attributes follow the OTel Gen-AI semconv with a thin `defrost.eval.*` layer for the gaps (threshold). Lands the `runner.Adapter.Run` signature change from `([]TestResult, int)` to `([]TestResult, []MetricEntry, int)`.
+**Architecture:** Slot a fourth runner adapter into the existing `internal/runner` registry. The adapter auto-injects `--output <tempfile>.json` if the user did not supply one, runs `promptfoo eval` to completion, parses Promptfoo's `results.json` shape, and emits both `[]models.TestResult` (one per result row) and `[]*metricspb.Metric` (one gauge per `gradingResult.componentResults[]` entry, each containing exactly one `NumberDataPoint` — same shape `MetricsToEntries` produces on the OTLP path). Eval-specific attributes follow the OTel Gen-AI semconv with a thin `defrost.eval.*` layer for the gaps (threshold). Lands the `runner.Adapter.Run` signature change from `([]TestResult, int)` to `([]TestResult, []*metricspb.Metric, int)`.
 
-**Tech Stack:** Go 1.24 (matches `go.mod`), `encoding/json` (stdlib), `os/exec` (stdlib), `path/filepath` (stdlib). No new third-party Go dependencies. Examples use `promptfoo@^0.x` from npm.
+**Tech Stack:** Go 1.24 (matches `go.mod`), `encoding/json` (stdlib), `os/exec` (stdlib), `path/filepath` (stdlib), `go.opentelemetry.io/proto/otlp/metrics/v1` and `.../common/v1` (already in `go.mod` — see `go.sum`). No new third-party Go dependencies. Examples use `promptfoo@^0.x` from npm.
 
 **Spec:** [docs/superpowers/specs/2026-04-30-eval-framework-integration-design.md](docs/superpowers/specs/2026-04-30-eval-framework-integration-design.md)
 
 ## Prerequisites
 
-This plan depends on the **OTel-Aligned Storage and Metrics** spec landing on `main` first. Specifically the following must already exist when Task 1 runs:
+The **OTel-Aligned Storage and Metrics** PR (#7) is merged on `main` as of 2026-04-30. Before executing Task 1, ensure this branch has been merged with `origin/main` so the following are present:
 
-- `internal/models/metric.go` defining `models.MetricEntry`.
-- The persistence path that accepts a `[]MetricEntry` slice alongside test results (whether that lands as `Backend.InsertNewRun(...)` or another shape — this plan only requires that *some* persisted-metrics path exists and is wired through `exec.go`).
+- `internal/models/runcontext.go` with `RunContext`, `StringAttr`, `IntAttr`, `BoolAttr`, `NewSpanID`.
+- `internal/otlp/translate.go` with `TestResultsToSpans` and `MetricsToEntries`.
+- `internal/persist/persist.go` with `Backend.InsertNewRun(traces, metrics)`, `WrapSpansInResource`, `WrapMetricsInResource`, `MetricResource`, `NewRootSpan`.
+- `exec.go` already has the `persistRun(pOpts, run, results, metrics, exitCode)` helper that takes `metrics []*metricspb.Metric` from the OTLP receiver path. This plan adds a *second source* for that slice (adapter-emitted metrics), to be merged in alongside receiver-emitted metrics.
 
-If neither has merged when execution begins, **stop and surface this**. Do NOT inline a stub `MetricEntry` into this plan — that would guarantee a merge conflict against the parallel branch (`claude/peaceful-gould-70ecaa`) that owns those types. The two branches must merge in order: OTel storage first, then this plan.
-
-If the OTel storage PR has already merged at execution time, the rest of the plan applies as written.
+Run `git status` and confirm `internal/otlp/`, `internal/models/runcontext.go`, and the proto imports in `exec.go` are present. If they're not, merge `origin/main` first.
 
 ---
 
@@ -27,17 +27,19 @@ If the OTel storage PR has already merged at execution time, the rest of the pla
 
 | Path | Status | Responsibility |
 |---|---|---|
-| `internal/runner/adapter.go` | edit | `Run` signature changes to return `([]TestResult, []MetricEntry, int)` |
+| `internal/runner/adapter.go` | edit | `Run` signature changes to return `([]TestResult, []*metricspb.Metric, int)` |
 | `internal/runner/registry_test.go` | edit | `fakeAdapter.Run` matches new signature |
-| `internal/golang/adapter.go` | edit | Returns `nil` for the new metrics slot |
+| `internal/golang/adapter.go` (or sibling files) | edit | Returns `nil` for the new metrics slot |
 | `internal/python/pytest/adapter.go` | edit | Returns `nil` for the new metrics slot |
 | `internal/python/pytest/adapter_test.go` | edit | Stub adapters / call sites match the new shape |
 | `internal/javascript/jest/adapter.go` | edit | Returns `nil` for the new metrics slot |
 | `internal/javascript/jest/adapter_test.go` | edit | Stub adapters / call sites match the new shape |
-| `exec.go` | edit | Plumbs the `[]MetricEntry` return through to persistence; registers the new adapter |
-| `exec_test.go` | edit | `stubAdapter.Run` matches new signature; one new test asserts the metrics slice flows through to persistence |
-| `internal/eval/promptfoo/parser.go` | new | Promptfoo `results.json` → `([]TestResult, []MetricEntry)` (pure) |
-| `internal/eval/promptfoo/parser_test.go` | new | Table-driven parser tests over fixtures |
+| `internal/models/runcontext.go` | edit | Add a `DoubleAttr` helper alongside the existing `StringAttr`/`IntAttr`/`BoolAttr` |
+| `internal/models/runcontext_test.go` | edit | One unit test covering `DoubleAttr` |
+| `exec.go` | edit | Captures adapter-emitted metrics from the new `Run` slot; merges with the receiver-emitted slice already in `persistRun`; registers the new adapter |
+| `exec_test.go` | edit | `stubAdapter.Run` matches new signature; one new test asserts adapter-emitted metrics reach `persistRun` |
+| `internal/eval/promptfoo/parser.go` | new | Promptfoo `results.json` → `([]TestResult, []*metricspb.Metric)` (pure) |
+| `internal/eval/promptfoo/parser_test.go` | new | Table-driven parser tests over fixtures, asserting proto field values |
 | `internal/eval/promptfoo/adapter.go` | new | Matcher (pure-argv) + Run flow + arg injection helpers |
 | `internal/eval/promptfoo/adapter_test.go` | new | Table-driven matcher tests + arg-injection tests |
 | `internal/eval/promptfoo/testdata/single_assertion.json` | new | One result, one assertion |
@@ -59,7 +61,7 @@ If the OTel storage PR has already merged at execution time, the rest of the pla
 - Modify: `internal/runner/adapter.go`
 - Modify: `internal/runner/registry_test.go`
 
-The `Run` signature gains a third return value: `[]models.MetricEntry`. Existing adapters return `nil` for the new slot. This is a mechanical, contained change confined to one interface plus its test fakes.
+The `Run` signature gains a third return value: `[]*metricspb.Metric`. Existing adapters return `nil` for the new slot. This is a mechanical, contained change confined to one interface plus its test fakes.
 
 - [ ] **Step 1: Update the interface in `internal/runner/adapter.go`**
 
@@ -68,16 +70,25 @@ Replace the existing `Adapter` interface:
 ```go
 package runner
 
-import "github.com/bjk95/defrost/internal/models"
+import (
+	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
+
+	"github.com/bjk95/defrost/internal/models"
+)
 
 // Adapter wraps a single language/test-framework integration. Implementations
 // inspect a defrost-exec argv and decide whether they handle it (Matches),
 // then run the underlying child command and return the parsed test results,
 // any framework-emitted eval/score metric data points, and the child's exit
 // code (Run). Adapters that don't emit metrics return a nil slice.
+//
+// Each *metricspb.Metric in the returned slice MUST contain exactly one
+// data point (gauge / sum / histogram). This matches the convention
+// established by `otlp.MetricsToEntries` for receiver-emitted metrics —
+// the persistence layer writes one line per *metricspb.Metric.
 type Adapter interface {
 	Matches(cmd []string) bool
-	Run(cmd []string) ([]models.TestResult, []models.MetricEntry, int)
+	Run(cmd []string) ([]models.TestResult, []*metricspb.Metric, int)
 }
 ```
 
@@ -91,10 +102,20 @@ Expected: compile errors in `internal/runner/registry_test.go`, `internal/golang
 Find the existing `fakeAdapter.Run` method and update its signature:
 
 ```go
-func (a fakeAdapter) Run(cmd []string) ([]models.TestResult, []models.MetricEntry, int) {
+import (
+	"testing"
+
+	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
+
+	"github.com/bjk95/defrost/internal/models"
+)
+
+func (a fakeAdapter) Run(cmd []string) ([]models.TestResult, []*metricspb.Metric, int) {
 	return nil, nil, a.exit
 }
 ```
+
+(Merge the `metricspb` import into the existing import block.)
 
 - [ ] **Step 4: Run the registry tests**
 
@@ -105,7 +126,7 @@ Expected: PASS.
 
 ```bash
 git add internal/runner/adapter.go internal/runner/registry_test.go
-git commit -m "feat(runner): Adapter.Run returns metric entries"
+git commit -m "feat(runner): Adapter.Run returns *metricspb.Metric slice"
 ```
 
 ---
@@ -113,7 +134,7 @@ git commit -m "feat(runner): Adapter.Run returns metric entries"
 ## Task 2: Update existing runner adapters to new signature
 
 **Files:**
-- Modify: `internal/golang/adapter.go`
+- Modify: `internal/golang/adapter.go` (locate the `Run` method via `grep -n "func.*Run.*[]models.TestResult" internal/golang/`)
 - Modify: `internal/python/pytest/adapter.go`
 - Modify: `internal/python/pytest/adapter_test.go`
 - Modify: `internal/javascript/jest/adapter.go`
@@ -123,19 +144,32 @@ Each existing adapter's `Run` returns the same `[]TestResult, exit` it did befor
 
 - [ ] **Step 1: Update `internal/golang/adapter.go`**
 
-Find the `func (a Adapter) Run(cmd []string) ([]models.TestResult, int)` method (not in `internal/golang/adapter.go` itself necessarily — Go test work is split across `adapter.go`/`executor.go`/`parser.go` in that package; locate the method by `grep -n "func.*Run.*[]models.TestResult" internal/golang/`). Change the signature and the single existing return statement:
+Locate the `Run` method (`grep -n "func.*Run.*[]models.TestResult" internal/golang/`). Add the `metricspb` import to the file's import block, then change the signature and every `return ...` statement so `nil` is inserted in the new metrics slot.
 
-Existing return form (the actual function body is multi-line):
+For example:
+
 ```go
-return results, exitCode
+// before
+func (a Adapter) Run(cmd []string) ([]models.TestResult, int) {
+    ...
+    return results, exitCode
+}
 ```
 
-Becomes:
 ```go
-return results, nil, exitCode
+// after
+import (
+    // ...existing imports
+    metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
+)
+
+func (a Adapter) Run(cmd []string) ([]models.TestResult, []*metricspb.Metric, int) {
+    ...
+    return results, nil, exitCode
+}
 ```
 
-Also update any error-path returns in the same function (e.g. `return nil, 1` → `return nil, nil, 1`).
+Update every error-path return in the same function (e.g. `return nil, 1` → `return nil, nil, 1`).
 
 - [ ] **Step 2: Run go test for the golang adapter**
 
@@ -144,14 +178,14 @@ Expected: PASS.
 
 - [ ] **Step 3: Update `internal/python/pytest/adapter.go`**
 
-Same pattern as Step 1 — find `func.*Run.*[]models.TestResult` in `internal/python/pytest/adapter.go`, change the signature and every `return ...` in the function body so `nil` is inserted in the new metrics slot.
+Same pattern — find `func.*Run.*[]models.TestResult` in `internal/python/pytest/adapter.go`, add the `metricspb` import, change the signature and every `return ...` in the function body so `nil` is inserted in the new metrics slot.
 
 - [ ] **Step 4: Update `internal/python/pytest/adapter_test.go`**
 
 Run: `go vet ./internal/python/pytest/...`
 Expected: every compile error names a `Run(...)` call site or stub. For each error, locate the line and:
 - If it's a stub adapter mocking `Run`, update the method signature to return `(results, nil, code)`.
-- If it's a call site reading `Run(cmd)`'s return, update the receiving `_, _, _ := a.Run(cmd)` (or appropriate variable names) to accept three values.
+- If it's a call site reading `Run(cmd)`'s return, update `_, _ := a.Run(cmd)` to accept three values.
 
 - [ ] **Step 5: Run pytest adapter tests**
 
@@ -160,9 +194,7 @@ Expected: PASS.
 
 - [ ] **Step 6: Update `internal/javascript/jest/adapter.go`**
 
-Same as Step 1 — `internal/javascript/jest/adapter.go:186-243` already shows the existing `Run` method. Change the signature and every `return ...`.
-
-For example:
+Same as Step 1 — `internal/javascript/jest/adapter.go` already shows the existing `Run` method (`grep -n "func.*Adapter.*Run" internal/javascript/jest/adapter.go`). Add the `metricspb` import, change the signature, change every `return ...`.
 
 ```go
 // before
@@ -178,7 +210,7 @@ func (a *Adapter) Run(cmd []string) ([]models.TestResult, int) {
 
 ```go
 // after
-func (a *Adapter) Run(cmd []string) ([]models.TestResult, []models.MetricEntry, int) {
+func (a *Adapter) Run(cmd []string) ([]models.TestResult, []*metricspb.Metric, int) {
     if hasUserJSONFlag(cmd) {
         ...
         return nil, nil, 2
@@ -206,17 +238,17 @@ git commit -m "feat(adapters): existing runners return nil metrics under new Ada
 
 ---
 
-## Task 3: Plumb metrics through `exec.go`
+## Task 3: Plumb adapter metrics into `exec.go`'s persistence path
 
 **Files:**
 - Modify: `exec.go`
 - Modify: `exec_test.go`
 
-The exec loop captures the new `[]MetricEntry` slot and passes it into the persistence call.
+`exec.go` already has a `metrics []*metricspb.Metric` slice that accumulates receiver-emitted metrics before calling `persistRun`. This task captures the adapter's new return slot and merges it into that same slice.
 
 - [ ] **Step 1: Update `stubAdapter` in `exec_test.go`**
 
-The existing stub at `exec_test.go:14-22` looks like:
+The existing stub at `exec_test.go` (around line 14) looks like:
 
 ```go
 type stubAdapter struct {
@@ -230,24 +262,29 @@ func (s stubAdapter) Run(cmd []string) ([]models.TestResult, int) {
 }
 ```
 
-Add a `metrics` field and update the signature:
+Add a `metrics` field, update the signature, and add the `metricspb` import:
 
 ```go
+import (
+	// ...existing imports
+	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
+)
+
 type stubAdapter struct {
 	results []models.TestResult
-	metrics []models.MetricEntry
+	metrics []*metricspb.Metric
 	code    int
 }
 
 func (s stubAdapter) Matches(cmd []string) bool { return cmd[0] == "stub" }
-func (s stubAdapter) Run(cmd []string) ([]models.TestResult, []models.MetricEntry, int) {
+func (s stubAdapter) Run(cmd []string) ([]models.TestResult, []*metricspb.Metric, int) {
 	return s.results, s.metrics, s.code
 }
 ```
 
 - [ ] **Step 2: Update the call site in `exec.go`**
 
-`exec.go:48` currently reads:
+`exec.go` currently has (around line 102):
 
 ```go
 results, code := a.Run(cmd)
@@ -256,41 +293,54 @@ results, code := a.Run(cmd)
 Change to:
 
 ```go
-results, metrics, code := a.Run(cmd)
+results, adapterMetrics, code := a.Run(cmd)
 ```
 
-Then change `persistResults(pOpts, cmd, results)` (line 64) to `persistResults(pOpts, cmd, results, metrics)`. Update the helper at `exec.go:162-174` to accept the additional argument and forward it into the existing persistence path. The persistence path's exact call shape is whatever the OTel storage spec landed; this plan does not prescribe it, but the metrics slice MUST be passed through (do not drop it on the floor).
-
-If the persistence path takes metrics as a separate argument, append:
+Then, in the block that already accumulates receiver metrics (around line 109-120, the `var metrics []*metricspb.Metric` block), prepend the adapter-emitted metrics so they reach `persistRun`:
 
 ```go
-func persistResults(pOpts persist.Options, cmd []string, results []models.TestResult, metrics []models.MetricEntry) error {
-	run, err := persist.DetectRun(pOpts, cmd)
+var metrics []*metricspb.Metric
+metrics = append(metrics, adapterMetrics...)
+if receiver != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), drainGrace)
+	buffered, err := receiver.Shutdown(ctx)
+	cancel()
 	if err != nil {
-		return fmt.Errorf("detect run: %w", err)
+		fmt.Fprintln(os.Stderr, "exec: otlp receiver shutdown:", err)
 	}
-	if err := persist.New(pOpts).InsertNewRun(run, results, metrics); err != nil {
-		// existing error handling unchanged
-		...
+	for _, req := range buffered {
+		metrics = append(metrics, otlp.MetricsToEntries(req, run)...)
 	}
-	return nil
 }
 ```
 
-(If the OTel storage spec exposed a different method name — `InsertNewTestResults` extended, or some other shape — match what's actually on `main` at execution time. The plan's contract is "metrics flow through", not the exact method name.)
+The rest of `persistRun` and exit-code logic is unchanged.
 
-- [ ] **Step 3: Add a focused test that the metrics slice is plumbed through**
+- [ ] **Step 3: Add a focused test that adapter metrics reach persistence**
 
-Add to `exec_test.go`:
+Append to `exec_test.go`:
 
 ```go
-func TestExecPlumbsMetricsToPersistence(t *testing.T) {
+func TestExecPlumbsAdapterMetricsToPersistence(t *testing.T) {
 	repo := makeRepo(t)
 	pOpts := persist.Options{RepoDir: repo, NoRemote: true}
-	_ = pOpts // keep the linter happy if persist isn't called yet in your test harness
 
 	results := []models.TestResult{{Id: "x.y.Z", Ran: true, Passed: true, Duration: time.Millisecond}}
-	metrics := []models.MetricEntry{{Name: "eval.foo", InstrumentType: "gauge"}}
+	score := 0.87
+	now := uint64(time.Now().UnixNano())
+	metrics := []*metricspb.Metric{{
+		Name: "eval.faithfulness",
+		Data: &metricspb.Metric_Gauge{Gauge: &metricspb.Gauge{
+			DataPoints: []*metricspb.NumberDataPoint{{
+				TimeUnixNano: now,
+				Value:        &metricspb.NumberDataPoint_AsDouble{AsDouble: score},
+				Attributes: []*commonpb.KeyValue{
+					models.StringAttr("test.case.name", "x.y.Z"),
+					models.StringAttr("gen_ai.evaluation.name", "faithfulness"),
+				},
+			}},
+		}},
+	}}
 	a := stubAdapter{results: results, metrics: metrics, code: 0}
 
 	code := execWith(a, []string{"stub"}, ExecOpts{
@@ -302,22 +352,28 @@ func TestExecPlumbsMetricsToPersistence(t *testing.T) {
 		t.Fatalf("expected exit 0, got %d", code)
 	}
 
-	// Read back from the data branch and assert one MetricEntry landed.
-	// The exact read API is whatever the OTel storage spec exposed
-	// (e.g. persist.New(pOpts).GetMetrics("eval.foo")).
-	got, err := persist.New(pOpts).GetMetrics("eval.foo")
+	// Read back the metric from the data branch.
+	got, err := persist.New(pOpts).GetMetricHistory("eval.faithfulness")
 	if err != nil {
 		t.Fatalf("read metrics: %v", err)
 	}
-	if len(got) != 1 || got[0].Name != "eval.foo" {
-		t.Fatalf("expected one eval.foo metric, got %v", got)
+	if len(got) != 1 {
+		t.Fatalf("expected one persisted metric, got %d", len(got))
 	}
 }
 ```
 
-If `persist.GetMetrics` doesn't exist on `main` at execution time, replace the assertion with whatever read API the OTel storage spec actually shipped — but the test MUST exist and MUST verify the metric round-trips through `execWith`. The point of this test is to lock in that the new return slot isn't being silently dropped.
+Add the imports (merge into the existing `import (...)` block):
 
-Add the necessary import: `"time"`.
+```go
+import (
+	// ...existing imports
+	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
+	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
+)
+```
+
+If `persist.GetMetricHistory` is named differently in the merged-from-main branch (the OTel storage spec calls the read API `GetTestHistory` for spans; the metrics-side analog may be `GetMetricHistory`, `LoadMetrics`, or similar — check `internal/persist/persist.go`), use whatever read API is actually exposed. The test's contract is "the metric round-trips through `execWith`"; the exact API name follows what shipped.
 
 - [ ] **Step 4: Run the exec tests**
 
@@ -333,7 +389,7 @@ Expected: PASS.
 
 ```bash
 git add exec.go exec_test.go
-git commit -m "feat(exec): plumb adapter-emitted metrics through persistence"
+git commit -m "feat(exec): merge adapter-emitted metrics into persistence path"
 ```
 
 ---
@@ -554,15 +610,58 @@ git commit -m "test(promptfoo): add results.json fixtures for parser tests"
 ## Task 5: Promptfoo parser
 
 **Files:**
+- Modify: `internal/models/runcontext.go` (add `DoubleAttr` helper)
+- Modify: `internal/models/runcontext_test.go` (one unit test for the helper)
 - Create: `internal/eval/promptfoo/parser.go`
 - Create: `internal/eval/promptfoo/parser_test.go`
 
-Pure function: `Parse(r io.Reader) ([]models.TestResult, []models.MetricEntry, error)`. Each `results.results[i]` produces:
+Pure function: `Parse(r io.Reader) ([]models.TestResult, []*metricspb.Metric, error)`. Each `results.results[i]` produces:
 
 - One `TestResult` with `Id` synthesised from `vars` (sorted-key concatenation, e.g. `country=France`), `Passed` from `success`, `Output` from `response.output` plus joined assertion reasons on failure.
-- One `MetricEntry` per `componentResults[k]` with metric name `eval.<assertion.metric>` if `metric` is set, else `eval.<assertion.type>`. Score in `Value`. Attributes carry `gen_ai.evaluation.*` per the spec, plus `defrost.eval.threshold` when present.
+- One `*metricspb.Metric` (gauge, single `NumberDataPoint`) per `componentResults[k]` with metric name `eval.<assertion.metric>` if `metric` is set, else `eval.<assertion.type>`. Score in `NumberDataPoint.Value` as `AsDouble`. Attributes carry `gen_ai.evaluation.*` per the spec, plus `defrost.eval.threshold` when present.
 
-- [ ] **Step 1: Write a failing parser test**
+- [ ] **Step 1: Add `DoubleAttr` helper to `internal/models/runcontext.go`**
+
+Append to the existing helpers block (just below `IntAttr`):
+
+```go
+// DoubleAttr returns a *commonpb.KeyValue carrying a float64.
+func DoubleAttr(key string, value float64) *commonpb.KeyValue {
+	return &commonpb.KeyValue{
+		Key:   key,
+		Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_DoubleValue{DoubleValue: value}},
+	}
+}
+```
+
+- [ ] **Step 2: Add a unit test for `DoubleAttr`**
+
+Append to `internal/models/runcontext_test.go`:
+
+```go
+func TestDoubleAttr(t *testing.T) {
+	kv := DoubleAttr("eval.score", 0.87)
+	if kv.Key != "eval.score" {
+		t.Fatalf("expected key eval.score, got %q", kv.Key)
+	}
+	dv, ok := kv.Value.Value.(*commonpb.AnyValue_DoubleValue)
+	if !ok {
+		t.Fatalf("expected DoubleValue payload, got %T", kv.Value.Value)
+	}
+	if dv.DoubleValue != 0.87 {
+		t.Fatalf("expected 0.87, got %v", dv.DoubleValue)
+	}
+}
+```
+
+(The test file already imports `commonpb` for the existing `String/Int/Bool` tests; if not, add `commonpb "go.opentelemetry.io/proto/otlp/common/v1"`.)
+
+- [ ] **Step 3: Run the helper test**
+
+Run: `go test ./internal/models/...`
+Expected: PASS.
+
+- [ ] **Step 4: Write a failing parser test**
 
 Create `internal/eval/promptfoo/parser_test.go`:
 
@@ -575,7 +674,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/bjk95/defrost/internal/models"
+	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
+	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
 )
 
 func loadFixture(t *testing.T, name string) []byte {
@@ -585,6 +685,59 @@ func loadFixture(t *testing.T, name string) []byte {
 		t.Fatalf("read fixture %s: %v", name, err)
 	}
 	return raw
+}
+
+// gaugeValue returns the AsDouble value of a single-data-point gauge metric.
+// Fails the test if m isn't a gauge with exactly one numeric data point.
+func gaugeValue(t *testing.T, m *metricspb.Metric) float64 {
+	t.Helper()
+	g, ok := m.Data.(*metricspb.Metric_Gauge)
+	if !ok {
+		t.Fatalf("expected gauge, got %T", m.Data)
+	}
+	if len(g.Gauge.DataPoints) != 1 {
+		t.Fatalf("expected 1 data point, got %d", len(g.Gauge.DataPoints))
+	}
+	dp := g.Gauge.DataPoints[0]
+	dv, ok := dp.Value.(*metricspb.NumberDataPoint_AsDouble)
+	if !ok {
+		t.Fatalf("expected AsDouble, got %T", dp.Value)
+	}
+	return dv.AsDouble
+}
+
+// attrString returns the string value of the named attribute on the gauge's
+// data point, or "" if missing or non-string.
+func attrString(m *metricspb.Metric, key string) string {
+	g, _ := m.Data.(*metricspb.Metric_Gauge)
+	if g == nil || len(g.Gauge.DataPoints) == 0 {
+		return ""
+	}
+	for _, kv := range g.Gauge.DataPoints[0].Attributes {
+		if kv.Key == key {
+			if sv, ok := kv.Value.Value.(*commonpb.AnyValue_StringValue); ok {
+				return sv.StringValue
+			}
+		}
+	}
+	return ""
+}
+
+// attrDouble returns the double value of the named attribute on the gauge's
+// data point, plus a bool indicating presence.
+func attrDouble(m *metricspb.Metric, key string) (float64, bool) {
+	g, _ := m.Data.(*metricspb.Metric_Gauge)
+	if g == nil || len(g.Gauge.DataPoints) == 0 {
+		return 0, false
+	}
+	for _, kv := range g.Gauge.DataPoints[0].Attributes {
+		if kv.Key == key {
+			if dv, ok := kv.Value.Value.(*commonpb.AnyValue_DoubleValue); ok {
+				return dv.DoubleValue, true
+			}
+		}
+	}
+	return 0, false
 }
 
 func TestParseSingleAssertion(t *testing.T) {
@@ -608,35 +761,30 @@ func TestParseSingleAssertion(t *testing.T) {
 	if m.Name != "eval.contains" {
 		t.Fatalf("expected metric name eval.contains, got %q", m.Name)
 	}
-	if m.Value == nil || *m.Value != 1.0 {
-		t.Fatalf("expected score 1.0, got %v", m.Value)
+	if got := gaugeValue(t, m); got != 1.0 {
+		t.Fatalf("expected score 1.0, got %v", got)
 	}
-	if m.InstrumentType != "gauge" {
-		t.Fatalf("expected instrument_type=gauge, got %q", m.InstrumentType)
-	}
-	if got, _ := m.Attributes["gen_ai.evaluation.name"].(string); got != "contains" {
+	if got := attrString(m, "gen_ai.evaluation.name"); got != "contains" {
 		t.Fatalf("expected gen_ai.evaluation.name=contains, got %q", got)
 	}
-	if got, _ := m.Attributes["gen_ai.evaluation.score.label"].(string); got != "pass" {
+	if got := attrString(m, "gen_ai.evaluation.score.label"); got != "pass" {
 		t.Fatalf("expected gen_ai.evaluation.score.label=pass, got %q", got)
 	}
-	if got, _ := m.Attributes["test.case.name"].(string); got != "country=France" {
+	if got := attrString(m, "test.case.name"); got != "country=France" {
 		t.Fatalf("expected test.case.name=country=France, got %q", got)
 	}
-	if got, _ := m.Attributes["gen_ai.request.model"].(string); got != "openai:gpt-4o" {
+	if got := attrString(m, "gen_ai.request.model"); got != "openai:gpt-4o" {
 		t.Fatalf("expected gen_ai.request.model=openai:gpt-4o, got %q", got)
 	}
 }
-
-var _ = models.TestResult{}
 ```
 
-- [ ] **Step 2: Run the test to verify it fails to compile**
+- [ ] **Step 5: Run the test to verify it fails**
 
 Run: `go test ./internal/eval/promptfoo/...`
 Expected: FAIL — `parser.go` does not exist; `Parse` is undefined.
 
-- [ ] **Step 3: Implement `Parse` in `internal/eval/promptfoo/parser.go`**
+- [ ] **Step 6: Implement `Parse` in `internal/eval/promptfoo/parser.go`**
 
 ```go
 package promptfoo
@@ -647,6 +795,10 @@ import (
 	"io"
 	"sort"
 	"strings"
+	"time"
+
+	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
+	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
 
 	"github.com/bjk95/defrost/internal/models"
 )
@@ -684,10 +836,10 @@ type promptfooGradingShape struct {
 }
 
 type promptfooComponentResult struct {
-	Pass      bool                `json:"pass"`
-	Score     float64             `json:"score"`
-	Reason    string              `json:"reason"`
-	Assertion promptfooAssertion  `json:"assertion"`
+	Pass      bool               `json:"pass"`
+	Score     float64            `json:"score"`
+	Reason    string             `json:"reason"`
+	Assertion promptfooAssertion `json:"assertion"`
 }
 
 type promptfooAssertion struct {
@@ -698,22 +850,25 @@ type promptfooAssertion struct {
 }
 
 // Parse reads a `promptfoo eval --output X.json` document and emits the
-// per-result TestResult plus one MetricEntry per assertion's componentResult.
+// per-result TestResult plus one *metricspb.Metric (gauge, single data
+// point) per assertion's componentResult.
+//
 // Returns nil/nil/error only on JSON decode failure.
-func Parse(r io.Reader) ([]models.TestResult, []models.MetricEntry, error) {
+func Parse(r io.Reader) ([]models.TestResult, []*metricspb.Metric, error) {
 	var doc promptfooDoc
 	if err := json.NewDecoder(r).Decode(&doc); err != nil {
 		return nil, nil, fmt.Errorf("parse promptfoo json: %w", err)
 	}
+	now := uint64(time.Now().UnixNano())
 	var (
 		tests   []models.TestResult
-		metrics []models.MetricEntry
+		metrics []*metricspb.Metric
 	)
 	for _, r := range doc.Results.Results {
 		caseName := caseName(r.Vars)
 		tests = append(tests, mapResult(r, caseName))
 		for _, c := range r.GradingResult.ComponentResults {
-			metrics = append(metrics, mapComponentResult(c, caseName, providerLabel(r.Provider)))
+			metrics = append(metrics, mapComponentResult(c, caseName, providerLabel(r.Provider), now))
 		}
 	}
 	return tests, metrics, nil
@@ -763,27 +918,33 @@ func mapResult(r promptfooResult, caseName string) models.TestResult {
 	}
 }
 
-func mapComponentResult(c promptfooComponentResult, caseName, model string) models.MetricEntry {
+func mapComponentResult(c promptfooComponentResult, caseName, model string, timeUnixNano uint64) *metricspb.Metric {
 	criterion := assertionMetricName(c.Assertion)
 	score := c.Score
-	attrs := map[string]any{
-		"gen_ai.evaluation.name":        criterion,
-		"gen_ai.evaluation.score.value": score,
-		"gen_ai.evaluation.score.label": passFailLabel(c.Pass),
-		"gen_ai.evaluation.explanation": c.Reason,
-		"test.case.name":                caseName,
+
+	attrs := []*commonpb.KeyValue{
+		models.StringAttr("gen_ai.evaluation.name", criterion),
+		models.DoubleAttr("gen_ai.evaluation.score.value", score),
+		models.StringAttr("gen_ai.evaluation.score.label", passFailLabel(c.Pass)),
+		models.StringAttr("gen_ai.evaluation.explanation", c.Reason),
+		models.StringAttr("test.case.name", caseName),
 	}
 	if model != "" {
-		attrs["gen_ai.request.model"] = model
+		attrs = append(attrs, models.StringAttr("gen_ai.request.model", model))
 	}
 	if c.Assertion.Threshold != nil {
-		attrs["defrost.eval.threshold"] = *c.Assertion.Threshold
+		attrs = append(attrs, models.DoubleAttr("defrost.eval.threshold", *c.Assertion.Threshold))
 	}
-	return models.MetricEntry{
-		Name:           "eval." + criterion,
-		InstrumentType: "gauge",
-		Value:          &score,
-		Attributes:     attrs,
+
+	return &metricspb.Metric{
+		Name: "eval." + criterion,
+		Data: &metricspb.Metric_Gauge{Gauge: &metricspb.Gauge{
+			DataPoints: []*metricspb.NumberDataPoint{{
+				TimeUnixNano: timeUnixNano,
+				Value:        &metricspb.NumberDataPoint_AsDouble{AsDouble: score},
+				Attributes:   attrs,
+			}},
+		}},
 	}
 }
 
@@ -802,12 +963,12 @@ func passFailLabel(pass bool) string {
 }
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [ ] **Step 7: Run the test to verify it passes**
 
 Run: `go test ./internal/eval/promptfoo/...`
 Expected: PASS for `TestParseSingleAssertion`.
 
-- [ ] **Step 5: Add tests for the remaining fixtures**
+- [ ] **Step 8: Add tests for the remaining fixtures**
 
 Append to `internal/eval/promptfoo/parser_test.go`:
 
@@ -872,9 +1033,9 @@ func TestParseWithThreshold(t *testing.T) {
 	if len(metrics) != 1 {
 		t.Fatalf("expected 1 metric, got %d", len(metrics))
 	}
-	got, ok := metrics[0].Attributes["defrost.eval.threshold"].(float64)
+	got, ok := attrDouble(metrics[0], "defrost.eval.threshold")
 	if !ok {
-		t.Fatalf("expected defrost.eval.threshold to be float64, got %T", metrics[0].Attributes["defrost.eval.threshold"])
+		t.Fatalf("expected defrost.eval.threshold attribute")
 	}
 	if got != 0.85 {
 		t.Fatalf("expected threshold=0.85, got %v", got)
@@ -905,18 +1066,18 @@ func TestParseEmpty(t *testing.T) {
 }
 ```
 
-Add the import: `"strings"`.
+Add the import `"strings"` to the existing import block at the top of `parser_test.go`.
 
-- [ ] **Step 6: Run all parser tests**
+- [ ] **Step 9: Run all parser tests**
 
 Run: `go test ./internal/eval/promptfoo/... -v`
 Expected: every test PASSES.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 10: Commit**
 
 ```bash
-git add internal/eval/promptfoo/parser.go internal/eval/promptfoo/parser_test.go
-git commit -m "feat(promptfoo): parse results.json into TestResults + MetricEntries"
+git add internal/models/runcontext.go internal/models/runcontext_test.go internal/eval/promptfoo/parser.go internal/eval/promptfoo/parser_test.go
+git commit -m "feat(promptfoo): parse results.json into TestResults + *metricspb.Metric"
 ```
 
 ---
@@ -1086,8 +1247,7 @@ func (a *Adapter) Matches(cmd []string) bool {
 		if base != "promptfoo" {
 			continue
 		}
-		// Need an `eval` subcommand somewhere after this token, before the
-		// next non-flag positional that isn't a flag value.
+		// Need an `eval` subcommand somewhere after this token.
 		for j := i + 1; j < len(cmd); j++ {
 			if cmd[j] == "eval" {
 				return true
@@ -1228,7 +1388,6 @@ exit 7
 		t.Fatalf("expected exit 7, got %d", code)
 	}
 }
-
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
@@ -1249,6 +1408,8 @@ import (
 	"os/exec"
 	"strings"
 
+	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
+
 	"github.com/bjk95/defrost/internal/models"
 	"github.com/bjk95/defrost/internal/runner"
 )
@@ -1257,7 +1418,7 @@ import (
 Then append the `Run` method to the end of the file:
 
 ```go
-func (a *Adapter) Run(cmd []string) ([]models.TestResult, []models.MetricEntry, int) {
+func (a *Adapter) Run(cmd []string) ([]models.TestResult, []*metricspb.Metric, int) {
 	if len(cmd) == 0 {
 		return nil, nil, 2
 	}
@@ -1346,7 +1507,7 @@ At the top of `exec.go`, add the import (alphabetically with the existing import
 "github.com/bjk95/defrost/internal/eval/promptfoo"
 ```
 
-In `HandleExecution` (line 30 area), find the existing block:
+In `HandleExecution` (line 39 area), find the existing block:
 
 ```go
 reg := runner.NewRegistry()
@@ -1361,7 +1522,7 @@ Add the line:
 reg.Register(&promptfoo.Adapter{})
 ```
 
-(Promptfoo's `Adapter` is a pointer receiver since `Adapter` is currently a zero-state struct but follows the jest pattern of pointer-receiver methods for consistency with future state.)
+(Promptfoo's `Adapter` is a pointer receiver since it follows the jest pattern of pointer-receiver methods for consistency with future state.)
 
 - [ ] **Step 2: Run the full Go suite**
 
@@ -1447,7 +1608,8 @@ npx promptfoo@latest eval -c promptfooconfig.yaml   # bare promptfoo
 defrost exec npx promptfoo@latest eval -c promptfooconfig.yaml  # via defrost
 ```
 
-Requires `OPENAI_API_KEY` in the environment. CI uses a mocked provider.
+Requires `OPENAI_API_KEY` in the environment. CI uses the same key from a
+gated secret; on forks the job is skipped.
 ```
 
 - [ ] **Step 4: Read the existing integration workflow**
@@ -1458,22 +1620,13 @@ Identify the existing job structure (jobs are listed for `golang`, `python`, `ja
 
 - [ ] **Step 5: Add a promptfoo job**
 
-Append a new `promptfoo:` job to `.github/workflows/integration.yml` matching the structure of the existing `javascript:` job. The job:
-
-1. Sets up Go and Node.js.
-2. Builds the defrost binary (`go build -o ./defrost .`).
-3. Installs promptfoo via `npm install -g promptfoo@latest`.
-4. cd into `examples/promptfoo/`.
-5. Sets `OPENAI_API_KEY` from a CI secret OR uses promptfoo's mock provider (preferred — no external API calls in CI).
-6. Runs `../../defrost exec promptfoo eval -c promptfooconfig.yaml --no-cache`.
-7. Asserts the run exited 0 (or the documented test-failure code) and that `metrics/eval.contains.ndjson` and `metrics/eval.llm-rubric.ndjson` exist on the data branch.
-
-Sketch (adapt to the workflow's conventions in your branch — variable names, action versions, etc.):
+Append a new `promptfoo:` job to `.github/workflows/integration.yml` matching the structure of the existing `javascript:` job. Sketch (adapt to the workflow's conventions in your branch — variable names, action versions, etc.):
 
 ```yaml
   promptfoo:
     needs: unit-tests
     runs-on: ubuntu-latest
+    if: ${{ secrets.OPENAI_API_KEY != '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -1496,7 +1649,7 @@ Sketch (adapt to the workflow's conventions in your branch — variable names, a
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
 ```
 
-If the project does not have an `OPENAI_API_KEY` CI secret available, gate the job behind `if: ${{ secrets.OPENAI_API_KEY != '' }}` so it skips on forks. Document this gate in the README.
+The `if: ${{ secrets.OPENAI_API_KEY != '' }}` gate skips on forks where the secret isn't available.
 
 - [ ] **Step 6: Run the local Go suite once more**
 
@@ -1518,13 +1671,14 @@ After Task 9, scan back through the plan against the spec sections:
 
 | Spec section | Plan coverage |
 |---|---|
-| Two-role split (Role A runner / Role B plugin) | Tasks 1-2 (signature change), Tasks 5-7 (Promptfoo as Role A runner). Plugin role is a future task — explicitly out of this plan. |
-| File-parse vs OTLP receiver | Task 7 implements the file-parse path; OTLP receiver assumed-existing per Prerequisites. |
+| Two-role split (Role A runner / Role B plugin) | Tasks 1-3 (signature change + plumbing), Tasks 5-7 (Promptfoo as Role A runner). Plugin role is a future task — explicitly out of this plan. |
+| File-parse vs OTLP receiver | Task 7 implements the file-parse path; OTLP receiver path is unchanged on the merged-from-main branch. |
 | Auto-injection of output flag | Task 6 (`buildArgs`, `userOutputPath`); Task 7 (`Run` calls them). |
-| Standards mapping (gen_ai.evaluation.* + defrost.eval.*) | Task 5 (`mapComponentResult`) attaches all required attributes. |
-| Promptfoo's "verified `--output` / `-o` flag" | Task 6 tests cover both forms plus `--output=value`. |
+| Standards mapping (gen_ai.evaluation.* + defrost.eval.*) | Task 5 (`mapComponentResult`) attaches all required attributes via `models.StringAttr` / `models.DoubleAttr`. |
+| Adapter-emitted metrics use `*metricspb.Metric` proto, single data point per metric | Task 5 builds gauges with one `NumberDataPoint` each. Task 1 makes the signature carry them. |
+| Promptfoo's verified `--output` / `-o` flag | Task 6 tests cover both forms plus `--output=value`. |
 | Recognises npx / pnpm / yarn forms | Task 6 `TestMatches` covers them. |
-| Pass/fail dual write (TestResult + MetricEntry) | Task 5 `Parse` returns both slices; Task 7 `Run` returns both. |
+| Pass/fail dual write (TestResult + Metric) | Task 5 `Parse` returns both slices; Task 7 `Run` returns both. |
 | Persist failure preserves exit code | Inherited from existing exec.go logic — Task 3 plumbs metrics without disturbing it. |
 
-Verify nothing in the plan references `EvalRecord`, `FindAll`, `PluginAdapter`, `eval.PluginAdapter` — those are spec concepts for the DeepEval/RAGAS plan (step 2), not this one. (✓ confirmed by ctrl-F.)
+Verify nothing in the plan references `MetricEntry` (the original-spec Go domain type that was replaced by `*metricspb.Metric` proto), `EvalRecord`, `FindAll`, `PluginAdapter`, `eval.PluginAdapter` — those are spec concepts for the DeepEval/RAGAS plan (step 2), not this one.

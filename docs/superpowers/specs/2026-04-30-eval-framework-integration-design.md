@@ -63,10 +63,10 @@ When the user invokes `defrost exec <eval-cmd>`:
    env vars to the child, and the runner adapter runs the (mutated)
    eval command to completion. The runner returns its `[]TestResult`
    (pass/fail per case) and, for runners that own framework-specific
-   tools, also a `[]MetricEntry` parsed from the framework's output file.
+   tools, also a `[]*metricspb.Metric` parsed from the framework's output file.
 4. After the child exits, each plugin's `Teardown` reads whatever output
    file the plugin asked the framework to write and emits per-(case ×
-   criterion) `[]MetricEntry`.
+   criterion) `[]*metricspb.Metric`.
 5. The OTLP receiver drains; user-emitted custom metrics (anything *not*
    produced by the eval framework, e.g. a hand-written `meter.create_gauge`
    for "PR review human comments") are translated as today.
@@ -88,6 +88,15 @@ Every metric data point an eval adapter emits to
 *name* itself is `eval.<criterion>` where `<criterion>` is the framework's
 own name for the metric, lowercased and dotted (`faithfulness`,
 `answer_relevancy`, `factuality`, `llm-rubric`, etc.).
+
+In wire terms: each metric is a `*metricspb.Metric` (gauge) containing one
+`*metricspb.NumberDataPoint`; the table's "Attribute" rows live on
+`NumberDataPoint.Attributes` as `[]*commonpb.KeyValue`. The score itself
+goes in `NumberDataPoint.Value` as `*metricspb.NumberDataPoint_AsDouble`.
+The `models.StringAttr` / `IntAttr` / `BoolAttr` helpers in
+`internal/models/runcontext.go` cover string/int/bool attribute
+construction; doubles need a new `models.DoubleAttr` helper (added
+alongside the existing ones).
 
 | Attribute key | Value | Required |
 |---|---|---|
@@ -312,7 +321,7 @@ is extended to also return metric data points:
 ```go
 type Adapter interface {
     Matches(cmd []string) bool
-    Run(cmd []string) ([]models.TestResult, []models.MetricEntry, int)
+    Run(cmd []string) ([]models.TestResult, []*metricspb.Metric, int)
 }
 ```
 
@@ -346,7 +355,7 @@ type PluginAdapter interface {
     // adapter has produced its TestResults. It reads whatever output
     // file the plugin asked the framework to write and returns the
     // per-(case × criterion) metric data points.
-    Teardown(p Prepared) ([]models.MetricEntry, error)
+    Teardown(p Prepared) ([]*metricspb.Metric, error)
 }
 
 type Prepared struct {
@@ -384,19 +393,52 @@ The exec loop:
    same flag) are an error returned to the user.
 4. Call `runnerAdapter.Run(mutatedCmd)` with the merged env applied to
    the child. The runner returns `(testResults, runnerMetrics, exitCode)`.
-5. For each plugin, call `Teardown` and accumulate `[]MetricEntry`s.
+5. For each plugin, call `Teardown` and accumulate `[]*metricspb.Metric`s.
 6. Drain the OTLP receiver as today and accumulate user-emitted metrics.
-7. Concatenate `runnerMetrics ++ pluginMetrics ++ otlpMetrics` and pass
-   `(testResults, allMetrics)` through the existing persistence path.
+7. Concatenate `runnerMetrics ++ pluginMetrics ++ otlpMetrics` into the
+   existing `metrics []*metricspb.Metric` slice that `persistRun` already
+   takes. Each `*metricspb.Metric` in the concatenated slice contains
+   exactly one data point (matching the `splitMetricByDataPoint`
+   convention on the OTLP-receiver path).
 
-The OTel storage spec's `Backend.InsertNewRun(root, testSpans, metrics)`
-is unchanged — only the *sources* of the inputs grow.
+`persistRun` then calls `persist.WrapMetricsInResource(persist.MetricResource(run), metrics)`
+to wrap into `[]*metricspb.ResourceMetrics`, and `Backend.InsertNewRun(traces, wrappedMetrics)`
+as it does today. The persistence interface is unchanged — only the
+*sources* of the metrics slice grow.
+
+### Architectural note: adapter-emitted metrics bypass the OTLP wire path
+
+Today, all metrics reach `persistRun` via the OTLP receiver path: child
+SDK → HTTP POST to `localhost:<port>/v1/metrics` → receiver buffer →
+`MetricsToEntries` → `[]*metricspb.Metric`. Adapter-emitted metrics from
+this spec take a *different* path: parse framework output file →
+adapter's `Run` returns `[]*metricspb.Metric` directly → exec loop merges
+with receiver-emitted metrics.
+
+This is a deliberate deviation from the OTel storage spec's pure
+"all metrics through OTLP" stance. Reasons:
+
+- Framework output files are the source of truth for framework-emitted
+  scores. Routing them through localhost HTTP would require the adapter
+  to act as both producer and OTLP client — added complexity for no
+  semantic gain.
+- `*metricspb.Metric` is the canonical proto type the persistence layer
+  consumes. The adapter just produces it directly. No wire round-trip.
+- The OTLP receiver path remains the canonical entry point for
+  user-emitted metrics (custom gauges in test code, the "PR review human
+  comments" example). Both paths converge at `persistRun`'s metrics
+  slice, so storage doesn't see a difference.
+
+This split is what makes Option A (the design choice taken in this spec)
+distinct from a hypothetical Option B where adapters POST to the local
+OTLP receiver. Option A trades architectural purity for adapter
+simplicity.
 
 ## Build order
 
 1. **Promptfoo** (smallest end-to-end demo of the file-parse pattern; own
    CLI, no pytest composition). This step also lands the `Run` signature
-   change from `([]TestResult, int)` to `([]TestResult, []MetricEntry,
+   change from `([]TestResult, int)` to `([]TestResult, []*metricspb.Metric,
    int)`. Existing pytest / jest / go-test adapters return a `nil` slice
    for metrics — no behaviour change.
 2. **DeepEval** (validates the runner+plugin composition; lands the new
@@ -436,18 +478,18 @@ interface changes; steps 3 and 4 only add new adapter implementations.
 ## Testing
 
 - **Unit (runner adapters):** per-adapter parse logic — fixture file
-  for each framework → expected `([]TestResult, []MetricEntry)`.
+  for each framework → expected `([]TestResult, []*metricspb.Metric)`.
   Fixtures committed under `internal/eval/<framework>/testdata/`
   (Promptfoo, Inspect AI) or `internal/python/pytest/testdata/` for
   the existing pytest adapter (unchanged).
 - **Unit (plugin adapters):** for DeepEval and RAGAS, `Teardown` against
-  fixture output files → expected `[]MetricEntry`. Fixtures committed
+  fixture output files → expected `[]*metricspb.Metric`. Fixtures committed
   under `internal/eval/<framework>/testdata/`.
 - **Unit (registry):** `Registry.Find(cmd)` continues to return the
   single matching runner. New `Registry.FindPlugins(cmd)` test matrix
   covers single-plugin, multi-plugin, and no-plugin cases.
-- **Unit (exec merge):** stub runner returning `(TestResult, MetricEntry)`
-  + stub plugin returning `MetricEntry`; verify the persisted union and
+- **Unit (exec merge):** stub runner returning `(TestResult, *metricspb.Metric)`
+  + stub plugin returning `*metricspb.Metric`; verify the persisted union and
   the order of `Teardown` calls.
 - **Integration (Promptfoo):** real `promptfoo eval` against a tiny YAML
   config (one prompt, two assertions) → verify
