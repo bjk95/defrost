@@ -84,8 +84,8 @@ func TestParseSingleAssertion(t *testing.T) {
 	if !tests[0].Passed {
 		t.Fatalf("expected Passed=true, got false")
 	}
-	if tests[0].Id != "country=France" {
-		t.Fatalf("expected Id=country=France, got %q", tests[0].Id)
+	if tests[0].Id != `country="France"` {
+		t.Fatalf("expected Id=country=\"France\", got %q", tests[0].Id)
 	}
 	if len(metrics) != 1 {
 		t.Fatalf("expected 1 metric, got %d", len(metrics))
@@ -103,8 +103,8 @@ func TestParseSingleAssertion(t *testing.T) {
 	if got := attrString(m, "gen_ai.evaluation.score.label"); got != "pass" {
 		t.Fatalf("expected gen_ai.evaluation.score.label=pass, got %q", got)
 	}
-	if got := attrString(m, "test.case.name"); got != "country=France" {
-		t.Fatalf("expected test.case.name=country=France, got %q", got)
+	if got := attrString(m, "test.case.name"); got != `country="France"` {
+		t.Fatalf("expected test.case.name=country=\"France\", got %q", got)
 	}
 	if got := attrString(m, "gen_ai.request.model"); got != "openai:gpt-4o" {
 		t.Fatalf("expected gen_ai.request.model=openai:gpt-4o, got %q", got)
@@ -200,6 +200,35 @@ func TestParseEmpty(t *testing.T) {
 	}
 	if len(tests) != 0 || len(metrics) != 0 {
 		t.Fatalf("expected zero results, got %d tests / %d metrics", len(tests), len(metrics))
+	}
+}
+
+func TestParseNestedVarsDeterministic(t *testing.T) {
+	// Both result entries have identical vars (including a nested
+	// map). The case IDs must be byte-equal across the two — and
+	// across multiple Parse invocations — to keep history continuity
+	// working for promptfoo configs that pass structured vars.
+	raw := loadFixture(t, "nested_vars.json")
+	tests1, _, err := Parse(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	tests2, _, err := Parse(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(tests1) != 2 || len(tests2) != 2 {
+		t.Fatalf("expected 2 tests in each run, got %d / %d", len(tests1), len(tests2))
+	}
+	if tests1[0].Id != tests1[1].Id {
+		t.Fatalf("identical vars produced different ids in same run: %q vs %q", tests1[0].Id, tests1[1].Id)
+	}
+	if tests1[0].Id != tests2[0].Id {
+		t.Fatalf("identical vars produced different ids across runs: %q vs %q", tests1[0].Id, tests2[0].Id)
+	}
+	// Sanity check: id contains both var keys (config and name).
+	if !strings.Contains(tests1[0].Id, "config=") || !strings.Contains(tests1[0].Id, "name=") {
+		t.Fatalf("id missing expected keys: %q", tests1[0].Id)
 	}
 }
 

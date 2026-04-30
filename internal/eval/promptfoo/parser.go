@@ -96,7 +96,14 @@ func caseName(vars map[string]any, idx int) string {
 	sort.Strings(keys)
 	parts := make([]string, 0, len(keys))
 	for _, k := range keys {
-		parts = append(parts, fmt.Sprintf("%s=%v", k, vars[k]))
+		b, err := json.Marshal(vars[k])
+		if err != nil {
+			// Defensive: a vars value that can't marshal is exotic
+			// (channels, funcs); fall back to %v rather than fail the run.
+			parts = append(parts, fmt.Sprintf("%s=%v", k, vars[k]))
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%s=%s", k, b))
 	}
 	return strings.Join(parts, ",")
 }
