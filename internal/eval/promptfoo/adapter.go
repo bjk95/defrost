@@ -39,7 +39,11 @@ func (a *Adapter) Matches(cmd []string) bool {
 	switch cmd[0] {
 	case "npx", "bunx":
 		// npx flags that take a value as the next token.
-		npxValueFlags := map[string]bool{"-p": true, "--package": true, "-c": true, "--call": true}
+		npxValueFlags := map[string]bool{
+			"-p": true, "--package": true,
+			"-c": true, "--call": true,
+			"-w": true, "--workspace": true,
+		}
 		i := skipFlagsBeforeExec(cmd, 1, npxValueFlags)
 		if i >= len(cmd) {
 			return false

@@ -35,6 +35,8 @@ func TestMatches(t *testing.T) {
 		{"pnpm dlx with @ver", []string{"pnpm", "dlx", "promptfoo@latest", "eval"}, true},
 		{"npx flag in middle", []string{"npx", "promptfoo", "eval", "--", "--debug"}, true},
 		{"npx wrong package", []string{"npx", "jest", "eval"}, false},
+		{"npx -w workspace", []string{"npx", "-w", "api", "promptfoo", "eval"}, true},
+		{"npx --workspace value", []string{"npx", "--workspace", "api", "promptfoo", "eval"}, true},
 		{"yarn wrong tool", []string{"yarn", "echo", "eval"}, false},
 		{"yarn run with -T flag", []string{"yarn", "run", "-T", "promptfoo", "eval"}, true},
 		{"yarn run with --inspect-brk flag", []string{"yarn", "run", "--inspect-brk", "promptfoo", "eval"}, true},
