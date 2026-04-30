@@ -3,6 +3,7 @@ package serve
 import (
 	"sort"
 
+	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
 	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
 
 	"github.com/bjk95/defrost/internal/persist"
@@ -16,10 +17,13 @@ const MaxRuns = 50
 // UI. Roots are root run ResourceSpans (column axis, newest first).
 // TestSpans are the per-test span time series, keyed by encoded span name
 // (file basename in traces/), filtered to only those whose run_id still
-// appears in Roots after capping.
+// appears in Roots after capping. Metrics are every persisted metric
+// ResourceMetrics record; the /api/metrics handler resolves each data
+// point to a kept run by exemplar trace_id or by time-window fallback.
 type Dataset struct {
 	Roots     []*tracepb.ResourceSpans
 	TestSpans map[string][]*tracepb.ResourceSpans
+	Metrics   []*metricspb.ResourceMetrics
 }
 
 // persistLoadAll is a package-level seam so tests can stub the data
@@ -27,6 +31,11 @@ type Dataset struct {
 // Backend selected by the persist.Options.
 var persistLoadAll = func(opts persist.Options) ([]*tracepb.ResourceSpans, map[string][]*tracepb.ResourceSpans, error) {
 	return persist.New(opts).LoadAll()
+}
+
+// persistLoadAllMetrics is the metrics seam, parallel to persistLoadAll.
+var persistLoadAllMetrics = func(opts persist.Options) ([]*metricspb.ResourceMetrics, error) {
+	return persist.New(opts).LoadAllMetrics()
 }
 
 // Load reads the data branch and returns a sorted, capped Dataset suitable
@@ -71,5 +80,11 @@ func Load(opts persist.Options) (Dataset, error) {
 		}
 	}
 
-	return Dataset{Roots: roots, TestSpans: filtered}, nil
+	metrics, err := persistLoadAllMetrics(opts)
+	if err != nil {
+		return Dataset{}, err
+	}
+
+	return Dataset{Roots: roots, TestSpans: filtered, Metrics: metrics}, nil
 }
+

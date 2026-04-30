@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
+	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
 	resourcepb "go.opentelemetry.io/proto/otlp/resource/v1"
 	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
 
@@ -59,6 +60,67 @@ func TestLoad_SortsRunsNewestFirstAndCapsAtFifty(t *testing.T) {
 	}
 	if rid := models.AttrString(survivor.Attributes, "defrost.run_id"); rid != idFor(59) {
 		t.Errorf("want surviving span to reference run %q, got %q", idFor(59), rid)
+	}
+}
+
+func TestLoad_PassesMetricsThroughUnfiltered(t *testing.T) {
+	roots := []*tracepb.ResourceSpans{
+		{
+			Resource: &resourcepb.Resource{Attributes: []*commonpb.KeyValue{
+				models.StringAttr("defrost.run_id", "run-1"),
+			}},
+			ScopeSpans: []*tracepb.ScopeSpans{{
+				Spans: []*tracepb.Span{{Name: "defrost.run", StartTimeUnixNano: 10}},
+			}},
+		},
+	}
+	// Two metrics: one with a matching exemplar, one without. Both must
+	// survive Load — run-association now happens at the handler so the
+	// exemplar-less metric still reaches the resolver.
+	withExemplar := &metricspb.ResourceMetrics{
+		ScopeMetrics: []*metricspb.ScopeMetrics{{
+			Metrics: []*metricspb.Metric{{
+				Name: "g.with_exemplar",
+				Data: &metricspb.Metric_Gauge{Gauge: &metricspb.Gauge{
+					DataPoints: []*metricspb.NumberDataPoint{{
+						Value:     &metricspb.NumberDataPoint_AsDouble{AsDouble: 1},
+						Exemplars: []*metricspb.Exemplar{{TraceId: models.DeriveTraceID("run-1")}},
+					}},
+				}},
+			}},
+		}},
+	}
+	noExemplar := &metricspb.ResourceMetrics{
+		ScopeMetrics: []*metricspb.ScopeMetrics{{
+			Metrics: []*metricspb.Metric{{
+				Name: "g.no_exemplar",
+				Data: &metricspb.Metric_Gauge{Gauge: &metricspb.Gauge{
+					DataPoints: []*metricspb.NumberDataPoint{{
+						Value: &metricspb.NumberDataPoint_AsDouble{AsDouble: 2},
+					}},
+				}},
+			}},
+		}},
+	}
+
+	prevSpans := persistLoadAll
+	persistLoadAll = func(_ persist.Options) ([]*tracepb.ResourceSpans, map[string][]*tracepb.ResourceSpans, error) {
+		return roots, nil, nil
+	}
+	defer func() { persistLoadAll = prevSpans }()
+
+	prevMetrics := persistLoadAllMetrics
+	persistLoadAllMetrics = func(_ persist.Options) ([]*metricspb.ResourceMetrics, error) {
+		return []*metricspb.ResourceMetrics{withExemplar, noExemplar}, nil
+	}
+	defer func() { persistLoadAllMetrics = prevMetrics }()
+
+	ds, err := Load(persist.Options{})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(ds.Metrics) != 2 {
+		t.Fatalf("want both metrics retained, got %d", len(ds.Metrics))
 	}
 }
 

@@ -37,6 +37,19 @@ func New(opts persist.Options, assets fs.FS) http.Handler {
 		_ = json.NewEncoder(w).Encode(buildGridResponse(ds))
 	})
 
+	mux.HandleFunc("/api/metrics", func(w http.ResponseWriter, r *http.Request) {
+		ds, err := loaderFn(opts)
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		w.Header().Set("Cache-Control", "public, max-age=60")
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(struct {
+			Metrics []metricSeriesDTO `json:"metrics"`
+		}{Metrics: buildMetricsResponse(ds.Metrics, ds.Roots)})
+	})
+
 	mux.HandleFunc("/api/test/", func(w http.ResponseWriter, r *http.Request) {
 		tidEsc, ridEsc, ok := parseTestRunPath(r.URL.EscapedPath())
 		if !ok {
