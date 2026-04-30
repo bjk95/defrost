@@ -31,7 +31,7 @@ import (
 )
 
 const (
-	DefaultDataBranch = "_defrost-v2"
+	DefaultDataBranch = "_defrost"
 
 	botName  = "defrost[bot]"
 	botEmail = "defrost[bot]@users.noreply.github.com"

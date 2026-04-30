@@ -11,7 +11,7 @@
 
 Every team wants a record of how their evals, benchmarks, and tests have changed
 over time. Almost nobody wants to host a database for it. **defrost** records
-each run as commits on a `_defrost-v2` branch in the same repo, so the history
+each run as commits on a `_defrost` branch in the same repo, so the history
 travels with the code — no database, no SaaS, no API keys.
 
 ## What you get
@@ -78,7 +78,7 @@ and records everything. Exit code:
 
 - Normally the child's exit code.
 - If every failing test is on the suppression list, the exit is rewritten to `0`.
-- If persisting to the `_defrost-v2` branch fails (e.g. push rejected,
+- If persisting to the `_defrost` branch fails (e.g. push rejected,
   no `origin`), the exit is forced to `1` even when the test command itself
   succeeded — so CI never silently loses data.
 
@@ -98,7 +98,7 @@ Serves the dashboard at `127.0.0.1:6969` (override with `--port`).
 
 ## Storage
 
-Every run is committed to a `_defrost-v2` branch (configurable with
+Every run is committed to a `_defrost` branch (configurable with
 `--data-branch`) in your repo. Clone the repo to get the history. Push the
 repo to share it. Concurrent runs from different machines never conflict
 because each writer owns a unique filename (one file per run, named by its
@@ -117,7 +117,7 @@ and metrics emitted during the run are persisted as OTel metric data
 points. Each file is the canonical OTLP/Protobuf payload, zstd-compressed.
 
 ```
-_defrost-v2 branch
+_defrost branch
 ├── traces/<YYYY>/<MM>/<DD>/<trace_id>.otlp.pb.zst    # one ExportTraceServiceRequest per run
 ├── metrics/<YYYY>/<MM>/<DD>/<trace_id>.otlp.pb.zst   # one ExportMetricsServiceRequest per run
 └── suppressions.json
@@ -128,7 +128,3 @@ Run-scoped attributes (commit, branch, author, command, OS/arch, run id,
 the canonical fully qualified test name — no lossy projections are stored
 alongside it. Compaction (collapsing many per-run files into one daily
 file) is on the roadmap.
-
-> **Migration note**: this is a hard cut from the original line-oriented
-> `_defrost` layout. Old `_defrost` branches are not migrated; users
-> repopulate by running CI under the new version.
