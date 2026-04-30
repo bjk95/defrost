@@ -4,17 +4,13 @@
 
 Every team wants a record of how their evals, benchmarks, and tests have changed
 over time. Almost nobody wants to host a database for it. **defrost** records
-each run as a commit on a `_defrost` branch in the same repo, so the history
+each run as commits on a `_defrost` branch in the same repo, so the history
 travels with the code — no database, no SaaS, no API keys.
-
-The on-disk shape is OpenTelemetry: a run is one trace, each test is a span,
-and any metrics emitted during the run are persisted alongside. Anything that
-already speaks OTLP can push data to defrost, in any language.
 
 ## What you get
 
-- **Persisted history** — every run lands as commits on a `_defrost` branch in your repo and pushes alongside your code.
-- **OTLP metrics ingest** — `defrost exec` runs a localhost OTLP/HTTP listener; instrument with any standard OTel SDK and the data is captured automatically. No defrost client library.
+- **Persisted history** — every test run, eval, and metric is recorded automatically. Clone the repo, get the history.
+- **Universal instrumentation** — push metrics from any language using a standard OpenTelemetry SDK. No defrost client library to install.
 - **Suppression** — mark known-failing tests as suppressed so red CI goes green without skipping them in source.
 - **Local dashboard** — `defrost serve` opens your testing, evals, and metrics dashboard at `http://localhost:6969`.
 
@@ -29,11 +25,10 @@ go install github.com/bjk95/defrost@latest
 From inside any Git repo with an `origin`:
 
 ```sh
-# Run your tests through defrost. The run is persisted on the _defrost branch
-# as an OTel trace; any OTLP metrics pushed during the run are persisted too.
+# Run your tests through defrost. Results are saved automatically.
 defrost exec go test ./...
 
-# Inspect a single test's recorded spans.
+# Inspect a single test's history.
 defrost history github.com/you/pkg.TestThing
 
 # Open the dashboard.
@@ -48,54 +43,31 @@ defrost serve
 | Python | pytest (JUnit XML) | `defrost exec pytest path/` |
 | JavaScript / TypeScript | jest | `defrost exec npm test` |
 
-Metrics arrive via OTLP, so any language with an OpenTelemetry SDK can push
-data to the receiver running inside `defrost exec`.
+## Pushing metrics from your tests
 
-## How storage works
+Use your normal OpenTelemetry SDK. `defrost exec` exports the standard OTLP
+environment variables to the child process, so a default-configured SDK
+exports to defrost with no extra wiring:
 
-defrost stores its data on a side branch named `_defrost` (configurable with
-`--data-branch`). The branch contains:
+```python
+# Python example — works the same in Go, Node, Rust, Java, ...
+counter = meter.create_counter("eval.score")
+counter.add(score, {"model": "claude-opus-4-7", "suite": "summarization"})
+```
 
-- `traces/<span_name>.ndjson` — one OTel span per line. Each `defrost exec`
-  invocation writes one root span (`defrost.run`) plus one child span per
-  test. `<span_name>` is the test's full name, URL-path-escaped.
-- `metrics/<metric_name>.ndjson` — one OTel metric data point per line.
-  Populated by anything that pushes OTLP at the receiver `defrost exec` runs
-  on `127.0.0.1`.
-- `suppressions.json` — the current suppression list.
-
-`traces/` and `metrics/` files are configured with Git's `merge=union`
-attribute so concurrent runs append without conflicts. Two writers committing
-simultaneously rebase against each other automatically.
-
-Cloning the repo gives you the full history. Pushing the repo shares it.
-
-To experiment without touching git, pass `--no-persist` (don't store anything)
-or `--dev` (write to `.defrost-dev/` instead of the data branch).
-
-### Pushing metrics from your tests
-
-`defrost exec` sets `OTEL_EXPORTER_OTLP_ENDPOINT` and
-`OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf` in the child's environment, so a
-standard OTel SDK configured from env will export to defrost with no extra
-wiring. Counters, gauges, sums, and histograms are all supported. Exponential
-histograms are converted to explicit-bucket form on ingest.
+Counters, gauges, sums, and histograms are all captured.
 
 ## Commands
 
 ### `defrost exec <cmd...>`
 
-Runs the test command, parses results, captures any OTLP metrics pushed during
-the run, and commits everything as one trace + metrics bundle. Exits with the
-child's exit code — unless every failing test is on the suppression list, in
-which case the exit is rewritten to 0.
+Runs the test command, captures any metrics emitted during the run, and
+records everything. Exits with the child's exit code — unless every failing
+test is on the suppression list, in which case the exit is rewritten to 0.
 
 ### `defrost history <test_id>`
 
-Prints the recorded spans for a single test as NDJSON, oldest first. The test
-ID is the same string the runner emits (e.g. `github.com/x/p/TestFoo`,
-`tests/test_x.py::TestY::test_z`,
-`src/foo.test.ts > Foo > does the thing`).
+Prints the recorded history for a single test as NDJSON, oldest first.
 
 ### `defrost suppress add | remove | list`
 
@@ -105,5 +77,31 @@ failure, a build error, a panic) still exits non-zero.
 
 ### `defrost serve`
 
-Serves the dashboard at `127.0.0.1:6969` (override with `--port`). View test
-history, evals, and metrics for the runs persisted on the data branch.
+Serves the dashboard at `127.0.0.1:6969` (override with `--port`).
+
+## Storage
+
+Every run is committed to a `_defrost` branch (configurable with
+`--data-branch`) in your repo. Clone the repo to get the history. Push the
+repo to share it. Concurrent runs from different machines append cleanly.
+
+To experiment without touching git, pass `--no-persist` (don't store
+anything) or `--dev` (write to `.defrost-dev/` instead of the data branch).
+
+### Under the hood
+
+For the curious — you do not need to know any of this to use defrost.
+
+The data branch is shaped like OpenTelemetry. One `defrost exec` invocation
+is one trace; the run is the root span; each test is a child span. Metrics
+emitted during the run are persisted as OTel metric data points alongside.
+
+```
+_defrost branch
+├── traces/<span_name>.ndjson    # one OTel span per line
+├── metrics/<metric_name>.ndjson # one OTel metric data point per line
+└── suppressions.json
+```
+
+`traces/` and `metrics/` files use Git's `merge=union` attribute so
+concurrent writers append without conflicts.
