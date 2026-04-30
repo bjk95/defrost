@@ -4,39 +4,46 @@
 Retrieval-Augmented Generation pipelines. Unlike Promptfoo, it has no CLI
 and no auto-dump — `ragas.evaluate(...)` returns scores in memory and
 nothing is written to disk by default. Defrost can't observe RAGAS results
-without a small user opt-in.
+without a small one-time user opt-in.
 
-## Usage
+## Setup (once per project)
 
-Add three lines after `ragas.evaluate(...)` in your test:
+Drop the contents of [`conftest.py`](./conftest.py) into your test
+directory's `conftest.py`. It exposes a `ragas_rows` fixture and registers
+a `pytest_sessionfinish` hook that writes the aggregated rows to
+`$DEFROST_RAGAS_OUT` at the end of the run. Defrost ships zero Python
+code; the snippet uses only the stdlib + pytest.
+
+When `DEFROST_RAGAS_OUT` is unset (i.e. tests run as plain `pytest`,
+without the `defrost exec` wrapper) the hook is a no-op, so the same
+conftest is safe to keep checked in.
+
+## Usage (per test)
 
 ```python
-import os
 from ragas import evaluate
 from ragas.metrics import faithfulness, answer_relevancy
 
-def test_rag_scores():
+def test_rag_scores(ragas_rows):
     result = evaluate(dataset, metrics=[faithfulness, answer_relevancy])
-    if path := os.environ.get("DEFROST_RAGAS_OUT"):
-        result.to_pandas().to_json(path, orient="records")
+    ragas_rows.extend(result.to_pandas().to_dict(orient="records"))
     assert result["faithfulness"] > 0.7
 ```
 
-`DEFROST_RAGAS_OUT` is only set when defrost wraps the test run, so the
-`to_json` call is a no-op under plain `pytest`. The same test file runs
-cleanly inside and outside defrost — no defrost-specific imports, no
-helper module to install or vendor.
+The single `ragas_rows.extend(...)` line is the only test-level glue.
+Multiple tests call `evaluate(...)` independently and contribute to the
+same aggregated dump — the session-finish hook writes once at the end, so
+nothing overwrites anything else.
 
 ## Why this shape
 
-`EvaluationResult.to_pandas().to_json(path, orient="records")` is built
-into RAGAS — defrost ships zero Python code. The output is a JSON array
-where each element is a dataset row with all DataFrame columns flattened
-(input columns plus one float column per scorer). Defrost's parser
-identifies score columns by excluding known input/reference column names
-(`question`, `answer`, `contexts`, `ground_truth`, `user_input`,
-`response`, `reference`, etc.) and emits one OTLP gauge per remaining
-numeric column.
+`EvaluationResult.to_pandas().to_dict(orient="records")` is built into
+RAGAS — defrost ships zero Python helper modules. Each row is a dict with
+all DataFrame columns flattened (input columns plus one float column per
+scorer). Defrost's parser identifies score columns by excluding known
+input/reference column names (`question`, `answer`, `contexts`,
+`ground_truth`, `user_input`, `response`, `reference`, etc.) and emits one
+OTLP gauge per remaining numeric column.
 
 ## Metrics emitted
 
@@ -46,7 +53,7 @@ Per (row × scorer), one OTLP gauge with these attributes:
 |---|---|
 | `gen_ai.evaluation.name` | scorer name (e.g. `faithfulness`) |
 | `gen_ai.evaluation.score.value` | float in `[0.0, 1.0]` |
-| `test.case.name` | `ragas_row_<i>` |
+| `test.case.name` | `ragas_row_<i>` (across the aggregated dump) |
 
 RAGAS's result object carries no per-metric threshold or judge-model
 reference, so `defrost.eval.threshold` and `defrost.eval.judge_model` are
