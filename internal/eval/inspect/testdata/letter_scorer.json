@@ -1,0 +1,30 @@
+{
+  "eval": {
+    "task": "letter_eval",
+    "model": "openai/gpt-4o"
+  },
+  "samples": [
+    {
+      "id": 1,
+      "output": { "completion": "Paris" },
+      "scores": {
+        "exact_match": {
+          "value": "C",
+          "answer": "Paris",
+          "explanation": "Correct"
+        }
+      }
+    },
+    {
+      "id": 2,
+      "output": { "completion": "Rome" },
+      "scores": {
+        "exact_match": {
+          "value": "I",
+          "answer": "Rome",
+          "explanation": "Incorrect"
+        }
+      }
+    }
+  ]
+}

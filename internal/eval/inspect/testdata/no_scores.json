@@ -1,0 +1,13 @@
+{
+  "eval": {
+    "task": "empty_eval",
+    "model": "openai/gpt-4o"
+  },
+  "samples": [
+    {
+      "id": 1,
+      "output": { "completion": "anything" },
+      "scores": {}
+    }
+  ]
+}

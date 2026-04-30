@@ -1,0 +1,35 @@
+{
+  "eval": {
+    "task": "capital_cities",
+    "model": "openai/gpt-4o",
+    "dataset": { "name": "capitals" }
+  },
+  "samples": [
+    {
+      "id": 1,
+      "input": "Capital of France?",
+      "target": "Paris",
+      "output": { "completion": "Paris" },
+      "scores": {
+        "match": {
+          "value": 1.0,
+          "answer": "Paris",
+          "explanation": "Exact match"
+        }
+      }
+    },
+    {
+      "id": 2,
+      "input": "Capital of Germany?",
+      "target": "Berlin",
+      "output": { "completion": "London" },
+      "scores": {
+        "match": {
+          "value": 0.0,
+          "answer": "London",
+          "explanation": "Mismatch"
+        }
+      }
+    }
+  ]
+}

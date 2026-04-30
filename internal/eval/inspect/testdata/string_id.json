@@ -1,0 +1,19 @@
+{
+  "eval": {
+    "task": "string_id_eval",
+    "model": "openai/gpt-4o"
+  },
+  "samples": [
+    {
+      "id": "case-paris",
+      "output": { "completion": "Paris" },
+      "scores": {
+        "match": {
+          "value": 1.0,
+          "answer": "Paris",
+          "explanation": "Match"
+        }
+      }
+    }
+  ]
+}
