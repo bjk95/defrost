@@ -257,9 +257,19 @@ jobs:
         run: |
           set +e
           cd examples/promptfoo
-          ../../defrost exec --no-persist promptfoo eval -c promptfooconfig.yaml --no-cache > out.txt 2>&1
+          ../../defrost exec promptfoo eval -c promptfooconfig.yaml --no-cache > out.txt 2>&1
           echo "exit=$?" >> "$GITHUB_OUTPUT"
           exit 0
+
+      - name: Assert exit code is non-zero (intentional failures)
+        run: |
+          code="${{ steps.run.outputs.exit }}"
+          echo "defrost exit code: $code"
+          if [ "$code" -eq 0 ]; then
+            echo "FAIL: expected non-zero exit (intentional failures present)"
+            cat examples/promptfoo/out.txt
+            exit 1
+          fi
 
       - name: Assert result count matches expected
         run: |
@@ -273,18 +283,11 @@ jobs:
           counts=$(echo "$line" | sed -E 's/^defrost: results: ([0-9]+) pass, ([0-9]+) fail, ([0-9]+) skip$/\1 \2 \3/')
           set -- $counts
           total=$(( $1 + $2 + $3 ))
-          if [ "$total" -ne 4 ]; then
-            echo "FAIL: expected 4 results total, got $total ($1 pass, $2 fail, $3 skip)"
+          if [ "$total" -ne 12 ]; then
+            echo "FAIL: expected 12 results total, got $total ($1 pass, $2 fail, $3 skip)"
             cat examples/promptfoo/out.txt
             exit 1
           fi
-
-      - name: Assert defrost exited 0
-        if: ${{ steps.run.outputs.exit != '0' }}
-        run: |
-          echo "defrost exec exited with code ${{ steps.run.outputs.exit }} (expected 0)"
-          cat examples/promptfoo/out.txt || true
-          exit 1
 
       - name: Upload defrost output for debugging
         if: failure()

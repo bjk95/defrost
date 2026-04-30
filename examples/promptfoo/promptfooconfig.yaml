@@ -1,24 +1,120 @@
-description: Defrost smoke test for the promptfoo adapter
+description: |
+  Defrost dogfood for the promptfoo adapter. Uses a deterministic local
+  provider (provider.js) that returns whatever the test case's vars.answer
+  says, so each case can exercise a different promptfoo assertion type
+  with predictable pass/fail outcomes — no LLM API calls.
 
 prompts:
-  - 'What is the capital of {{country}}? Answer in one word.'
+  - 'Mock prompt: {{question}}'
 
 providers:
   - id: file://provider.js
     label: defrost-smoke-mock
 
 tests:
-  - vars:
-      country: France
+  # contains — pass
+  - description: contains-pass
+    vars:
+      question: capital-france
+      answer: Paris
     assert:
       - type: contains
         value: Paris
-      - type: llm-rubric
-        value: A single-word answer
-  - vars:
-      country: Germany
+
+  # contains — fail (intentional)
+  - description: contains-fail
+    vars:
+      question: capital-germany-wrong
+      answer: I have no idea
     assert:
       - type: contains
         value: Berlin
-      - type: llm-rubric
-        value: A single-word answer
+
+  # not-contains — pass
+  - description: not-contains-pass
+    vars:
+      question: clean-output
+      answer: Paris
+    assert:
+      - type: not-contains
+        value: London
+
+  # not-contains — fail (intentional)
+  - description: not-contains-fail
+    vars:
+      question: contaminated-output
+      answer: London is the answer
+    assert:
+      - type: not-contains
+        value: London
+
+  # equals — pass
+  - description: equals-pass
+    vars:
+      question: exact-match
+      answer: Paris
+    assert:
+      - type: equals
+        value: Paris
+
+  # equals — fail (intentional, case mismatch)
+  - description: equals-fail
+    vars:
+      question: case-sensitive
+      answer: paris
+    assert:
+      - type: equals
+        value: Paris
+
+  # regex — pass
+  - description: regex-pass
+    vars:
+      question: regex-capital-word
+      answer: Paris
+    assert:
+      - type: regex
+        value: '^[A-Z][a-z]+$'
+
+  # regex — fail (intentional, digits)
+  - description: regex-fail
+    vars:
+      question: regex-capital-digits
+      answer: 123 invalid
+    assert:
+      - type: regex
+        value: '^[A-Z][a-z]+$'
+
+  # is-json — pass
+  - description: is-json-pass
+    vars:
+      question: structured
+      answer: '{"capital": "Paris"}'
+    assert:
+      - type: is-json
+
+  # is-json — fail (intentional, not json)
+  - description: is-json-fail
+    vars:
+      question: unstructured
+      answer: just plain text
+    assert:
+      - type: is-json
+
+  # levenshtein — pass (edit distance 1, threshold 2)
+  - description: levenshtein-pass
+    vars:
+      question: typo-tolerance
+      answer: Pariss
+    assert:
+      - type: levenshtein
+        value: Paris
+        threshold: 2
+
+  # javascript — pass (custom assertion)
+  - description: javascript-pass
+    vars:
+      question: custom-js
+      answer: ok
+    assert:
+      - type: javascript
+        value: output.length > 0

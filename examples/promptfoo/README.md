@@ -1,9 +1,14 @@
 # promptfoo example
 
-Tiny defrost-instrumented promptfoo eval used by the integration suite.
-Uses a deterministic local JavaScript provider (`provider.js`) instead
-of an LLM, so CI can dogfood the full adapter pipeline without API
-credits.
+Defrost-instrumented promptfoo eval that dogfoods the adapter against a
+broad sample of assertion types: `contains`, `not-contains`, `equals`,
+`regex`, `is-json`, `levenshtein`, and `javascript`. Each test case
+exercises one assertion; the mix is intentionally 7 pass + 5 fail + 0
+skip = 12 total results.
+
+The mock provider in `provider.js` returns whatever each test case's
+`vars.answer` says, so the eval is fully deterministic and runs in CI
+without any LLM API calls.
 
 ```sh
 # from this directory
