@@ -41,6 +41,7 @@ func TestMatches(t *testing.T) {
 		{"yarn run with -T flag", []string{"yarn", "run", "-T", "promptfoo", "eval"}, true},
 		{"yarn run with --inspect-brk flag", []string{"yarn", "run", "--inspect-brk", "promptfoo", "eval"}, true},
 		{"yarn run with --cwd value flag", []string{"yarn", "run", "--cwd", "/some/path", "promptfoo", "eval"}, true},
+		{"yarn run with --require value flag", []string{"yarn", "run", "--require", "ts-node/register", "promptfoo", "eval"}, true},
 		{"yarn run with multiple boolean flags", []string{"yarn", "run", "-T", "-B", "promptfoo", "eval"}, true},
 		{"pnpm dlx with -p value flag", []string{"pnpm", "dlx", "-p", "promptfoo@latest", "promptfoo", "eval"}, true},
 		{"pnpm dlx with --package value flag", []string{"pnpm", "dlx", "--package", "promptfoo@latest", "promptfoo", "eval"}, true},

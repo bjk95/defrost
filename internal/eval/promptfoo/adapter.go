@@ -73,8 +73,11 @@ func (a *Adapter) Matches(cmd []string) bool {
 			i++
 		}
 		// yarn run accepts flags before the script name. Most yarn flags
-		// are boolean; --cwd takes a value.
-		yarnValueFlags := map[string]bool{"--cwd": true}
+		// are boolean; these take a value as the next token.
+		yarnValueFlags := map[string]bool{
+			"--cwd":     true,
+			"--require": true,
+		}
 		i = skipFlagsBeforeExec(cmd, i, yarnValueFlags)
 		if i >= len(cmd) {
 			return false
