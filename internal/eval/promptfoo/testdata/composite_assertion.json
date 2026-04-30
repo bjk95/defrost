@@ -1,0 +1,19 @@
+{
+  "results": {
+    "results": [
+      {
+        "success": true,
+        "response": { "output": "Paris" },
+        "provider": { "label": "test" },
+        "vars": { "country": "France" },
+        "gradingResult": {
+          "pass": true, "score": 1.0, "reason": "ok",
+          "componentResults": [
+            { "pass": true, "score": 1.0, "reason": "wrapper", "assertion": {} },
+            { "pass": true, "score": 1.0, "reason": "leaf", "assertion": { "type": "contains" } }
+          ]
+        }
+      }
+    ]
+  }
+}

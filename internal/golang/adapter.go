@@ -1,6 +1,10 @@
 package golang
 
-import "github.com/bjk95/defrost/internal/models"
+import (
+	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
+
+	"github.com/bjk95/defrost/internal/models"
+)
 
 // Adapter implements runner.Adapter for `go test ...` invocations.
 //
@@ -12,6 +16,7 @@ func (Adapter) Matches(cmd []string) bool {
 	return len(cmd) >= 2 && cmd[0] == "go" && cmd[1] == "test"
 }
 
-func (Adapter) Run(cmd []string) ([]models.TestResult, int) {
-	return ExecuteGoTest(cmd)
+func (Adapter) Run(cmd []string) ([]models.TestResult, []*metricspb.Metric, int) {
+	results, exitCode := ExecuteGoTest(cmd)
+	return results, nil, exitCode
 }

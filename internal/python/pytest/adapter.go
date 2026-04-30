@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"strings"
 
+	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
+
 	"github.com/bjk95/defrost/internal/models"
 	"github.com/bjk95/defrost/internal/runner"
 )
@@ -40,7 +42,7 @@ func (Adapter) Matches(cmd []string) bool {
 	return false
 }
 
-func (Adapter) Run(cmd []string) ([]models.TestResult, int) {
+func (Adapter) Run(cmd []string) ([]models.TestResult, []*metricspb.Metric, int) {
 	if hasUserJunitxml(cmd) {
 		// User-controlled --junitxml means we can't inject our own without
 		// silently overriding their config. Run their command unchanged
@@ -51,15 +53,15 @@ func (Adapter) Run(cmd []string) ([]models.TestResult, int) {
 		code, err := runner.RunChild(c)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "defrost:", err)
-			return nil, 1
+			return nil, nil, 1
 		}
-		return nil, code
+		return nil, nil, code
 	}
 
 	f, err := os.CreateTemp("", "defrost-pytest-*.xml")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "defrost:", err)
-		return nil, 1
+		return nil, nil, 1
 	}
 	path := f.Name()
 	f.Close()
@@ -76,7 +78,7 @@ func (Adapter) Run(cmd []string) ([]models.TestResult, int) {
 	exitCode, err := runner.RunChild(child)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "defrost:", err)
-		return nil, 1
+		return nil, nil, 1
 	}
 
 	return parseOrPreserve(path, exitCode)
@@ -88,22 +90,22 @@ func (Adapter) Run(cmd []string) ([]models.TestResult, int) {
 // error, plugin crash); in both cases the XML may be missing or empty.
 // Preserve pytest's exit code rather than overwriting with a synthetic
 // 1 — that's the only signal the user has and we mustn't overwrite it.
-func parseOrPreserve(path string, exitCode int) ([]models.TestResult, int) {
+func parseOrPreserve(path string, exitCode int) ([]models.TestResult, []*metricspb.Metric, int) {
 	if !fileNonEmpty(path) {
 		fmt.Fprintf(os.Stderr,
 			"defrost: pytest exited %d without writing JUnit XML; recording run with no per-test results\n",
 			exitCode)
-		return nil, exitCode
+		return nil, nil, exitCode
 	}
 	results, err := ParseFile(path)
 	if err != nil {
 		fmt.Fprintf(os.Stderr,
 			"defrost: parse pytest output: %v; recording run with no per-test results\n",
 			err)
-		return nil, exitCode
+		return nil, nil, exitCode
 	}
 	runner.ApplyRepoPrefix(results)
-	return results, exitCode
+	return results, nil, exitCode
 }
 
 func fileNonEmpty(path string) bool {

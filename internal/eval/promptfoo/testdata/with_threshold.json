@@ -1,0 +1,23 @@
+{
+  "results": {
+    "results": [
+      {
+        "success": true,
+        "response": { "output": "Paris" },
+        "provider": { "label": "openai:gpt-4o" },
+        "vars": { "country": "France" },
+        "gradingResult": {
+          "pass": true, "score": 0.92, "reason": "ok",
+          "componentResults": [
+            {
+              "pass": true,
+              "score": 0.92,
+              "reason": "Above threshold",
+              "assertion": { "type": "similar", "value": "Paris", "threshold": 0.85 }
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

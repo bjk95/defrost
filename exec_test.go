@@ -5,6 +5,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
+
+	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
+	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
 
 	"github.com/bjk95/defrost/internal/models"
 	"github.com/bjk95/defrost/internal/persist"
@@ -14,12 +18,13 @@ import (
 // and a known exit code without invoking go test / pytest / jest.
 type stubAdapter struct {
 	results []models.TestResult
+	metrics []*metricspb.Metric
 	code    int
 }
 
 func (s stubAdapter) Matches(cmd []string) bool { return cmd[0] == "stub" }
-func (s stubAdapter) Run(cmd []string) ([]models.TestResult, int) {
-	return s.results, s.code
+func (s stubAdapter) Run(cmd []string) ([]models.TestResult, []*metricspb.Metric, int) {
+	return s.results, s.metrics, s.code
 }
 
 func makeRepo(t *testing.T) string {
@@ -248,5 +253,46 @@ func TestExec_BuildOnlyFailure_NotSuppressed(t *testing.T) {
 	got := runExecWithAdapter(t, stub, repoDir)
 	if got != 1 {
 		t.Errorf("build failure should not be suppressible: want exit 1, got %d", got)
+	}
+}
+
+func TestExecPlumbsAdapterMetricsToPersistence(t *testing.T) {
+	repo := makeRepo(t)
+
+	results := []models.TestResult{{Id: "x.y.Z", Ran: true, Passed: true, Duration: time.Millisecond}}
+	score := 0.87
+	now := uint64(time.Now().UnixNano())
+	metrics := []*metricspb.Metric{{
+		Name: "eval.faithfulness",
+		Data: &metricspb.Metric_Gauge{Gauge: &metricspb.Gauge{
+			DataPoints: []*metricspb.NumberDataPoint{{
+				TimeUnixNano: now,
+				Value:        &metricspb.NumberDataPoint_AsDouble{AsDouble: score},
+				Attributes: []*commonpb.KeyValue{
+					models.StringAttr("test.case.name", "x.y.Z"),
+					models.StringAttr("gen_ai.evaluation.name", "faithfulness"),
+				},
+			}},
+		}},
+	}}
+	a := stubAdapter{results: results, metrics: metrics, code: 0}
+
+	code := execWith(a, []string{"stub"}, ExecOpts{
+		RepoDir:  repo,
+		Persist:  true,
+		NoRemote: true,
+		Dev:      true,
+	})
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d", code)
+	}
+
+	// The persist package has no GetMetricHistory API; assert the round-trip
+	// by verifying the metric was written to the dev scratch directory.
+	// fileBackend writes one NDJSON file per metric name under metrics/.
+	metricFile := filepath.Join(repo, persist.DevDir, "metrics",
+		persist.EncodeName("eval.faithfulness")+".ndjson")
+	if _, err := os.Stat(metricFile); err != nil {
+		t.Fatalf("expected persisted metric file %s, got: %v", metricFile, err)
 	}
 }

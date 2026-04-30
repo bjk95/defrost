@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"strings"
 
+	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
+
 	"github.com/bjk95/defrost/internal/models"
 	"github.com/bjk95/defrost/internal/runner"
 )
@@ -183,7 +185,7 @@ func looksLikeJestScript(value string) bool {
 	return true
 }
 
-func (a *Adapter) Run(cmd []string) ([]models.TestResult, int) {
+func (a *Adapter) Run(cmd []string) ([]models.TestResult, []*metricspb.Metric, int) {
 	// Conditions where we can't safely inject --json/--outputFile or
 	// can't capture results at all (watch mode). Surface a warning and
 	// fall through to passthrough rather than refusing to run — defrost
@@ -208,7 +210,7 @@ func (a *Adapter) Run(cmd []string) ([]models.TestResult, int) {
 	f, err := os.CreateTemp("", "defrost-jest-*.json")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "defrost:", err)
-		return nil, 1
+		return nil, nil, 1
 	}
 	path := f.Name()
 	f.Close()
@@ -220,13 +222,13 @@ func (a *Adapter) Run(cmd []string) ([]models.TestResult, int) {
 	exitCode, err := runner.RunChild(child)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "defrost:", err)
-		return nil, 1
+		return nil, nil, 1
 	}
 
 	cwd, err := os.Getwd()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "defrost:", err)
-		return nil, exitCode
+		return nil, nil, exitCode
 	}
 	return parseOrPreserve(path, cwd, exitCode)
 }
@@ -237,22 +239,22 @@ func (a *Adapter) Run(cmd []string) ([]models.TestResult, int) {
 // parsed, the exit code is preserved and a warning is logged — the
 // adapter never overwrites a meaningful child exit with a synthetic
 // parse-error 1, since that would mask the real failure signal.
-func parseOrPreserve(path, cwd string, exitCode int) ([]models.TestResult, int) {
+func parseOrPreserve(path, cwd string, exitCode int) ([]models.TestResult, []*metricspb.Metric, int) {
 	if !fileNonEmpty(path) {
 		fmt.Fprintf(os.Stderr,
 			"defrost: jest exited %d without writing JSON output; recording run with no per-test results\n",
 			exitCode)
-		return nil, exitCode
+		return nil, nil, exitCode
 	}
 	results, err := ParseFile(path, cwd)
 	if err != nil {
 		fmt.Fprintf(os.Stderr,
 			"defrost: parse jest output: %v; recording run with no per-test results\n",
 			err)
-		return nil, exitCode
+		return nil, nil, exitCode
 	}
 	runner.ApplyRepoPrefix(results)
-	return results, exitCode
+	return results, nil, exitCode
 }
 
 func fileNonEmpty(path string) bool {
@@ -267,14 +269,14 @@ func fileNonEmpty(path string) bool {
 // returning the child exit code and no test results. Used when the jest
 // adapter recognises the invocation form but can't safely capture
 // results (user-supplied --json, --watch, or non-direct script shape).
-func passthroughRun(cmd []string) ([]models.TestResult, int) {
+func passthroughRun(cmd []string) ([]models.TestResult, []*metricspb.Metric, int) {
 	c := exec.Command(cmd[0], cmd[1:]...)
 	code, err := runner.RunChild(c)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "defrost:", err)
-		return nil, 1
+		return nil, nil, 1
 	}
-	return nil, code
+	return nil, nil, code
 }
 
 // buildArgs returns the args to pass to cmd[0], with --json and

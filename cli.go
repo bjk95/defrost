@@ -19,12 +19,12 @@ var CLI struct {
 
 	Suppress struct {
 		Add struct {
-			Test       string `arg:"" name:"test" help:"Full test ID to suppress (same form as 'defrost history')."`
-			RepoDir    string `name:"repo-dir" default:"." help:"Path to the git repo."`
-			DataBranch string `name:"data-branch" default:"_defrost" help:"Branch name where suppressions are stored."`
-			NoRemote   bool   `name:"no-remote" help:"Write to the local repo only — do not push."`
-			Dev        bool   `name:"dev" short:"d" help:"Dev mode: read/write the local scratch dir instead of the data branch."`
-		} `cmd:"" help:"Add a test to the suppression list."`
+			Tests      []string `arg:"" name:"tests" help:"One or more test IDs to suppress (same form as 'defrost history'). All IDs land in a single commit on the data branch."`
+			RepoDir    string   `name:"repo-dir" default:"." help:"Path to the git repo."`
+			DataBranch string   `name:"data-branch" default:"_defrost" help:"Branch name where suppressions are stored."`
+			NoRemote   bool     `name:"no-remote" help:"Write to the local repo only — do not push."`
+			Dev        bool     `name:"dev" short:"d" help:"Dev mode: read/write the local scratch dir instead of the data branch."`
+		} `cmd:"" help:"Add one or more test IDs to the suppression list."`
 
 		Remove struct {
 			Test       string `arg:"" name:"test" help:"Full test ID to remove from the suppression list."`

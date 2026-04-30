@@ -1,0 +1,48 @@
+{
+  "results": {
+    "results": [
+      {
+        "success": true,
+        "response": {
+          "output": { "answer": "Paris", "confidence": 0.92 }
+        },
+        "provider": { "label": "test" },
+        "vars": { "country": "France" },
+        "gradingResult": {
+          "pass": true, "score": 1.0, "reason": "ok",
+          "componentResults": [
+            { "pass": true, "score": 1.0, "reason": "ok", "assertion": { "type": "is-json" } }
+          ]
+        }
+      },
+      {
+        "success": true,
+        "response": {
+          "output": [1, 2, 3]
+        },
+        "provider": { "label": "test" },
+        "vars": { "case": "array" },
+        "gradingResult": {
+          "pass": true, "score": 1.0, "reason": "ok",
+          "componentResults": [
+            { "pass": true, "score": 1.0, "reason": "ok", "assertion": { "type": "contains" } }
+          ]
+        }
+      },
+      {
+        "success": true,
+        "response": {
+          "output": null
+        },
+        "provider": { "label": "test" },
+        "vars": { "case": "null-output" },
+        "gradingResult": {
+          "pass": true, "score": 1.0, "reason": "ok",
+          "componentResults": [
+            { "pass": true, "score": 1.0, "reason": "ok", "assertion": { "type": "contains" } }
+          ]
+        }
+      }
+    ]
+  }
+}

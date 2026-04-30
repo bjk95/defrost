@@ -1,0 +1,42 @@
+{
+  "results": {
+    "results": [
+      {
+        "success": true,
+        "response": { "output": "Paris" },
+        "provider": { "label": "openai:gpt-4o" },
+        "vars": { "country": "France" },
+        "gradingResult": {
+          "pass": true, "score": 1.0, "reason": "ok",
+          "componentResults": [
+            { "pass": true, "score": 1.0, "reason": "contains Paris", "assertion": { "type": "contains" } }
+          ]
+        }
+      },
+      {
+        "success": false,
+        "response": { "output": "I don't know" },
+        "provider": { "label": "openai:gpt-4o" },
+        "vars": { "country": "Spain" },
+        "gradingResult": {
+          "pass": false, "score": 0.0, "reason": "fail",
+          "componentResults": [
+            { "pass": false, "score": 0.0, "reason": "missing Madrid", "assertion": { "type": "contains" } }
+          ]
+        }
+      },
+      {
+        "success": true,
+        "response": { "output": "Berlin" },
+        "provider": { "label": "openai:gpt-4o" },
+        "vars": { "country": "Germany" },
+        "gradingResult": {
+          "pass": true, "score": 1.0, "reason": "ok",
+          "componentResults": [
+            { "pass": true, "score": 1.0, "reason": "contains Berlin", "assertion": { "type": "contains" } }
+          ]
+        }
+      }
+    ]
+  }
+}

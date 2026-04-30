@@ -1,0 +1,37 @@
+{
+  "results": {
+    "results": [
+      {
+        "success": false,
+        "response": { "output": "The answer is 42, citing Hitchhiker's Guide." },
+        "provider": { "label": "anthropic:claude-sonnet-4-6" },
+        "vars": { "question": "meaning of life" },
+        "gradingResult": {
+          "pass": false,
+          "score": 0.66,
+          "reason": "2/3 assertions passed",
+          "componentResults": [
+            {
+              "pass": true,
+              "score": 1.0,
+              "reason": "Contains '42'",
+              "assertion": { "type": "contains", "value": "42" }
+            },
+            {
+              "pass": true,
+              "score": 1.0,
+              "reason": "Output is concise",
+              "assertion": { "type": "llm-rubric", "value": "Concise (<200 chars)" }
+            },
+            {
+              "pass": false,
+              "score": 0.0,
+              "reason": "Missing source citation",
+              "assertion": { "type": "factuality", "value": "Cites a source" }
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

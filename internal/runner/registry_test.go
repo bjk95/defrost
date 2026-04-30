@@ -3,6 +3,8 @@ package runner
 import (
 	"testing"
 
+	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
+
 	"github.com/bjk95/defrost/internal/models"
 )
 
@@ -16,7 +18,9 @@ func (a fakeAdapter) Matches(cmd []string) bool {
 	return len(cmd) > 0 && cmd[0] == a.matchOn
 }
 
-func (a fakeAdapter) Run(cmd []string) ([]models.TestResult, int) { return nil, a.exit }
+func (a fakeAdapter) Run(cmd []string) ([]models.TestResult, []*metricspb.Metric, int) {
+	return nil, nil, a.exit
+}
 
 func TestFindReturnsNilWhenEmpty(t *testing.T) {
 	r := NewRegistry()
@@ -44,7 +48,7 @@ func TestFindReturnsFirstMatch(t *testing.T) {
 	if got == nil {
 		t.Fatal("expected match, got nil")
 	}
-	if _, code := got.Run(nil); code != 1 {
+	if _, _, code := got.Run(nil); code != 1 {
 		t.Fatalf("expected first adapter (exit=1), got exit=%d", code)
 	}
 }

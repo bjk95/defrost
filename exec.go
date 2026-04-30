@@ -10,6 +10,7 @@ import (
 	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
 	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
 
+	"github.com/bjk95/defrost/internal/eval/promptfoo"
 	"github.com/bjk95/defrost/internal/golang"
 	"github.com/bjk95/defrost/internal/javascript/jest"
 	"github.com/bjk95/defrost/internal/models"
@@ -46,6 +47,10 @@ func HandleExecution(cmd []string, opts ExecOpts) int {
 	reg := runner.NewRegistry()
 	reg.Register(golang.Adapter{})
 	reg.Register(pytest.Adapter{})
+	// promptfoo registers before jest because jest's yarn-script matcher reads
+	// ./package.json and would claim `yarn promptfoo eval` when scripts.promptfoo
+	// happens to be jest-shaped. Strict matchers go first.
+	reg.Register(&promptfoo.Adapter{})
 	reg.Register(&jest.Adapter{})
 	// Passthrough must be registered last: it matches everything, so
 	// anything ahead of it gets first crack at recognising the cmd.
@@ -106,7 +111,7 @@ func execWith(a runner.Adapter, cmd []string, opts ExecOpts) int {
 	// to the user (pytest and jest do; the Go adapter consumes stdout
 	// because go test -json is for the parser). Defrost does not layer
 	// its own per-test print on top — we only emit a summary line below.
-	results, code := a.Run(cmd)
+	results, adapterMetrics, code := a.Run(cmd)
 
 	if len(results) > 0 {
 		pass, fail, skip := tallyResults(results)
@@ -114,6 +119,7 @@ func execWith(a runner.Adapter, cmd []string, opts ExecOpts) int {
 	}
 
 	var metrics []*metricspb.Metric
+	metrics = append(metrics, adapterMetrics...)
 	if receiver != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), drainGrace)
 		buffered, err := receiver.Shutdown(ctx)

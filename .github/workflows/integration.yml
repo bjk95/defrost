@@ -230,3 +230,81 @@ jobs:
         with:
           name: typescript-out
           path: examples/typescript/out.txt
+
+  promptfoo:
+    name: promptfoo example
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install promptfoo
+        run: npm install -g promptfoo@latest
+
+      - name: Build defrost
+        run: go build -o defrost .
+
+      - name: Configure git auth for defrost persist
+        run: |
+          git config --global url."https://x-access-token:${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Suppress known-intentional failures (dogfood the suppression flow)
+        run: |
+          set -e
+          ./defrost suppress add \
+            'examples/promptfoo¬answer="I have no idea",question="capital-germany-wrong",prompt="f7a68f6f0557",provider="defrost-smoke-mock"' \
+            'examples/promptfoo¬answer="London is the answer",question="contaminated-output",prompt="f7a68f6f0557",provider="defrost-smoke-mock"' \
+            'examples/promptfoo¬answer="paris",question="case-sensitive",prompt="f7a68f6f0557",provider="defrost-smoke-mock"' \
+            'examples/promptfoo¬answer="123 invalid",question="regex-capital-digits",prompt="f7a68f6f0557",provider="defrost-smoke-mock"' \
+            'examples/promptfoo¬answer="just plain text",question="unstructured",prompt="f7a68f6f0557",provider="defrost-smoke-mock"' \
+            'examples/promptfoo¬answer="Berlin",question="case-insensitive-fail",prompt="f7a68f6f0557",provider="defrost-smoke-mock"' \
+            'examples/promptfoo¬answer="Only Paris is here",question="contains-all-fail-vars",prompt="f7a68f6f0557",provider="defrost-smoke-mock"' \
+            'examples/promptfoo¬answer="The capital is Paris",question="starts-with-fail-vars",prompt="f7a68f6f0557",provider="defrost-smoke-mock"' \
+            'examples/promptfoo¬answer="not xml at all",question="xml-invalid",prompt="f7a68f6f0557",provider="defrost-smoke-mock"' \
+            'examples/promptfoo¬answer="ROME",question="icontains-any-fail-vars",prompt="f7a68f6f0557",provider="defrost-smoke-mock"'
+          ./defrost suppress list
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run defrost against examples/promptfoo
+        run: |
+          set -o pipefail
+          cd examples/promptfoo
+          ../../defrost exec promptfoo eval -c promptfooconfig.yaml --no-cache 2>&1 | tee out.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Assert result count matches expected
+        run: |
+          line=$(grep -E '^defrost: results:' examples/promptfoo/out.txt | tail -1)
+          if [ -z "$line" ]; then
+            echo "FAIL: no 'defrost: results:' line found"
+            cat examples/promptfoo/out.txt
+            exit 1
+          fi
+          echo "summary: $line"
+          counts=$(echo "$line" | sed -E 's/^defrost: results: ([0-9]+) pass, ([0-9]+) fail, ([0-9]+) skip$/\1 \2 \3/')
+          set -- $counts
+          total=$(( $1 + $2 + $3 ))
+          if [ "$total" -ne 30 ]; then
+            echo "FAIL: expected 30 results total, got $total ($1 pass, $2 fail, $3 skip)"
+            cat examples/promptfoo/out.txt
+            exit 1
+          fi
+
+      - name: Upload defrost output for debugging
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: promptfoo-out
+          path: examples/promptfoo/out.txt

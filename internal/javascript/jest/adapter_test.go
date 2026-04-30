@@ -361,7 +361,7 @@ func TestParseOrPreserve_MissingFile_PreservesExitCode(t *testing.T) {
 	dir := t.TempDir()
 	missing := filepath.Join(dir, "nope.json")
 
-	results, code := parseOrPreserve(missing, dir, 7)
+	results, _, code := parseOrPreserve(missing, dir, 7)
 	if results != nil {
 		t.Errorf("expected nil results, got %v", results)
 	}
@@ -377,7 +377,7 @@ func TestParseOrPreserve_EmptyFile_PreservesExitCode(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	results, code := parseOrPreserve(path, dir, 2)
+	results, _, code := parseOrPreserve(path, dir, 2)
 	if results != nil {
 		t.Errorf("expected nil results, got %v", results)
 	}
@@ -393,7 +393,7 @@ func TestParseOrPreserve_MalformedJSON_PreservesExitCode(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	results, code := parseOrPreserve(path, dir, 4)
+	results, _, code := parseOrPreserve(path, dir, 4)
 	if results != nil {
 		t.Errorf("expected nil results, got %v", results)
 	}

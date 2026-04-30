@@ -27,7 +27,7 @@ func TestRun_PropagatesExitCode(t *testing.T) {
 	if _, err := exec.LookPath("sh"); err != nil {
 		t.Skip("sh not available")
 	}
-	results, code := (Adapter{}).Run([]string{"sh", "-c", "exit 3"})
+	results, _, code := (Adapter{}).Run([]string{"sh", "-c", "exit 3"})
 	if results != nil {
 		t.Errorf("expected no results, got %v", results)
 	}
@@ -37,7 +37,7 @@ func TestRun_PropagatesExitCode(t *testing.T) {
 }
 
 func TestRun_BinaryNotFoundReturnsOne(t *testing.T) {
-	results, code := (Adapter{}).Run([]string{"/nonexistent/defrost-test-binary"})
+	results, _, code := (Adapter{}).Run([]string{"/nonexistent/defrost-test-binary"})
 	if results != nil {
 		t.Errorf("expected no results, got %v", results)
 	}

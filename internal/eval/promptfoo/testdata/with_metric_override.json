@@ -1,0 +1,23 @@
+{
+  "results": {
+    "results": [
+      {
+        "success": true,
+        "response": { "output": "Paris is the capital of France." },
+        "provider": { "label": "openai:gpt-4o" },
+        "vars": { "country": "France" },
+        "gradingResult": {
+          "pass": true, "score": 1.0, "reason": "ok",
+          "componentResults": [
+            {
+              "pass": true,
+              "score": 1.0,
+              "reason": "Highly relevant to user's query",
+              "assertion": { "type": "llm-rubric", "value": "Relevant", "metric": "relevance" }
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

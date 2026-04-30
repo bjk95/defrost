@@ -67,6 +67,14 @@ func IntAttr(key string, value int64) *commonpb.KeyValue {
 	}
 }
 
+// DoubleAttr returns a *commonpb.KeyValue carrying a float64.
+func DoubleAttr(key string, value float64) *commonpb.KeyValue {
+	return &commonpb.KeyValue{
+		Key:   key,
+		Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_DoubleValue{DoubleValue: value}},
+	}
+}
+
 // StringArrayAttr builds a KeyValue with a string-array value (used for
 // `defrost.cmd` which is the wrapped argv).
 func StringArrayAttr(key string, values []string) *commonpb.KeyValue {

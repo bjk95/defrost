@@ -44,7 +44,7 @@ func TestAdapterMatches(t *testing.T) {
 func TestParseOrPreserve_MissingFile_PreservesExitCode(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "nope.xml")
 
-	results, code := parseOrPreserve(missing, 5)
+	results, _, code := parseOrPreserve(missing, 5)
 	if results != nil {
 		t.Errorf("expected nil results, got %v", results)
 	}
@@ -59,7 +59,7 @@ func TestParseOrPreserve_EmptyFile_PreservesExitCode(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	results, code := parseOrPreserve(path, 2)
+	results, _, code := parseOrPreserve(path, 2)
 	if results != nil {
 		t.Errorf("expected nil results, got %v", results)
 	}
@@ -74,7 +74,7 @@ func TestParseOrPreserve_MalformedXML_PreservesExitCode(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	results, code := parseOrPreserve(path, 3)
+	results, _, code := parseOrPreserve(path, 3)
 	if results != nil {
 		t.Errorf("expected nil results, got %v", results)
 	}
