@@ -290,4 +290,48 @@ func TestMetricsToEntries_Histogram(t *testing.T) {
 	}
 }
 
+func TestMetricsToEntries_ExponentialHistogram(t *testing.T) {
+	m := &metricspb.Metric{
+		Name: "rpc.client.duration",
+		Unit: "ms",
+		Data: &metricspb.Metric_ExponentialHistogram{ExponentialHistogram: &metricspb.ExponentialHistogram{
+			AggregationTemporality: metricspb.AggregationTemporality_AGGREGATION_TEMPORALITY_DELTA,
+			DataPoints: []*metricspb.ExponentialHistogramDataPoint{{
+				TimeUnixNano: 1714_500_000_000_000_000,
+				Count:        4,
+				Sum:          ptr(10.0),
+				Scale:        0, // base = 2
+				ZeroCount:    1,
+				Positive: &metricspb.ExponentialHistogramDataPoint_Buckets{
+					Offset:       0,
+					BucketCounts: []uint64{2, 1}, // bucket [1, 2): 2, bucket [2, 4): 1
+				},
+			}},
+		}},
+	}
+	got := MetricsToEntries(makeRequest(m), newRunContext())[0]
+	if got.InstrumentType != "histogram" {
+		t.Errorf("instrument_type: %q", got.InstrumentType)
+	}
+	if got.Count == nil || *got.Count != 4 {
+		t.Errorf("count: %v", got.Count)
+	}
+	// Expect 4 buckets: zero (UB=0, count=1), positive[0] (UB=2, count=2), positive[1] (UB=4, count=1), +Inf (UB=nil, count=0).
+	if len(got.Buckets) != 4 {
+		t.Fatalf("buckets: want 4, got %d (%v)", len(got.Buckets), got.Buckets)
+	}
+	if got.Buckets[0].UpperBound == nil || *got.Buckets[0].UpperBound != 0 || got.Buckets[0].Count != 1 {
+		t.Errorf("zero bucket: %+v", got.Buckets[0])
+	}
+	if got.Buckets[1].UpperBound == nil || *got.Buckets[1].UpperBound != 2 || got.Buckets[1].Count != 2 {
+		t.Errorf("positive bucket 0 (UB=2): %+v", got.Buckets[1])
+	}
+	if got.Buckets[2].UpperBound == nil || *got.Buckets[2].UpperBound != 4 || got.Buckets[2].Count != 1 {
+		t.Errorf("positive bucket 1 (UB=4): %+v", got.Buckets[2])
+	}
+	if got.Buckets[3].UpperBound != nil {
+		t.Errorf("last bucket (+Inf) should have nil UpperBound, got %v", got.Buckets[3].UpperBound)
+	}
+}
+
 func ptr[T any](v T) *T { return &v }

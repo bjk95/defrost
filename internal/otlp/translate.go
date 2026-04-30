@@ -277,9 +277,12 @@ func histogramBuckets(counts []uint64, bounds []float64) []models.HistogramBucke
 
 func exponentialHistogramBuckets(dp *metricspb.ExponentialHistogramDataPoint) []models.HistogramBucket {
 	// Convert to explicit-bucket form. base = 2^(2^-scale); each positive
-	// bucket i has upper bound base^(offset+i+1). Negative bucket counts
-	// are folded into a single boundary at 0. Always close with a +Inf
-	// bucket so the shape mirrors histogramBuckets above.
+	// bucket i has upper bound base^(offset+i+1). Negative buckets are
+	// not represented — only ZeroCount and Positive buckets are emitted.
+	// Defrost's expected metric shapes (durations, sizes, counts) are
+	// non-negative; revisit if a real use case demands signed values.
+	// Always close with a +Inf bucket so the shape mirrors
+	// histogramBuckets above.
 	scale := dp.Scale
 	base := math.Pow(2, math.Pow(2, float64(-scale)))
 	var buckets []models.HistogramBucket
@@ -329,6 +332,8 @@ func anyValueToInterface(v *commonpb.AnyValue) any {
 			arr = append(arr, anyValueToInterface(v))
 		}
 		return arr
+	case *commonpb.AnyValue_KvlistValue:
+		return kvToMap(x.KvlistValue.Values)
 	}
 	return nil
 }
