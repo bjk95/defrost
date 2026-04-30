@@ -78,8 +78,8 @@ func TestParseSmoke(t *testing.T) {
 	if len(metrics) != 2 {
 		t.Fatalf("expected 2 metrics, got %d", len(metrics))
 	}
-	if metrics[0].Name != "eval.capital_cities.match" {
-		t.Fatalf("expected metric eval.capital_cities.match, got %q", metrics[0].Name)
+	if metrics[0].Name != "eval.tasks/capitals.py.capital_cities.match" {
+		t.Fatalf("expected metric eval.tasks/capitals.py.capital_cities.match, got %q", metrics[0].Name)
 	}
 	if got := gaugeValue(t, metrics[0]); got != 1.0 {
 		t.Fatalf("expected score 1.0, got %v", got)
@@ -124,7 +124,10 @@ func TestParseMultiScorer(t *testing.T) {
 	if len(metrics) != 2 {
 		t.Fatalf("expected 2 metrics (one per scorer), got %d", len(metrics))
 	}
-	wantNames := map[string]bool{"eval.qa_eval.accuracy": false, "eval.qa_eval.f1_score": false}
+	wantNames := map[string]bool{
+		"eval.tasks/qa.py.qa_eval.accuracy": false,
+		"eval.tasks/qa.py.qa_eval.f1_score": false,
+	}
 	for _, m := range metrics {
 		wantNames[m.Name] = true
 	}
@@ -198,8 +201,8 @@ func TestParseCompoundValueSkipped(t *testing.T) {
 	if len(metrics) != 1 {
 		t.Fatalf("expected 1 metric (compound skipped), got %d", len(metrics))
 	}
-	if metrics[0].Name != "eval.compound_eval.accuracy" {
-		t.Fatalf("expected eval.compound_eval.accuracy, got %q", metrics[0].Name)
+	if metrics[0].Name != "eval.tasks/compound.py.compound_eval.accuracy" {
+		t.Fatalf("expected eval.tasks/compound.py.compound_eval.accuracy, got %q", metrics[0].Name)
 	}
 }
 
@@ -249,10 +252,13 @@ func TestParseDeterministicCaseNames(t *testing.T) {
 	}
 }
 
-func TestParseQualifiesMetricNameWithScope(t *testing.T) {
+func TestParseQualifiesMetricNameWithRepoRelCwd(t *testing.T) {
+	// smoke.json carries `eval.task_file = "tasks/capitals.py"`; the
+	// `repoRelCwd` argument is prepended to that and to `eval.task` to
+	// form the fully-qualified metric name.
 	_, metrics, err := ParseFile(
 		bytes.NewReader(loadFixture(t, "smoke.json")),
-		"examples/inspect.task.py",
+		"examples/inspect",
 	)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
@@ -260,7 +266,7 @@ func TestParseQualifiesMetricNameWithScope(t *testing.T) {
 	if len(metrics) != 2 {
 		t.Fatalf("expected 2 metrics, got %d", len(metrics))
 	}
-	want := "eval.examples/inspect.task.py.capital_cities.match"
+	want := "eval.examples/inspect.tasks/capitals.py.capital_cities.match"
 	if metrics[0].Name != want {
 		t.Fatalf("metric name = %q, want %q", metrics[0].Name, want)
 	}

@@ -130,22 +130,23 @@ func TestUserJSONOutput(t *testing.T) {
 	}
 }
 
-func TestUserConfigPath(t *testing.T) {
+func TestUserConfigPaths(t *testing.T) {
 	cases := []struct {
 		args []string
-		want string
+		want []string
 	}{
-		{[]string{"eval", "-c", "promptfooconfig.yaml"}, "promptfooconfig.yaml"},
-		{[]string{"eval", "--config", "configs/run.yaml"}, "configs/run.yaml"},
-		{[]string{"eval", "--config=configs/run.yaml"}, "configs/run.yaml"},
-		{[]string{"eval", "-o", "out.json"}, ""},
-		{[]string{"eval", "-c"}, ""}, // dangling -c with no value
-		{[]string{"eval", "-c", "first.yaml", "-c", "second.yaml"}, "first.yaml"},
+		{[]string{"eval", "-c", "promptfooconfig.yaml"}, []string{"promptfooconfig.yaml"}},
+		{[]string{"eval", "--config", "configs/run.yaml"}, []string{"configs/run.yaml"}},
+		{[]string{"eval", "--config=configs/run.yaml"}, []string{"configs/run.yaml"}},
+		{[]string{"eval", "-o", "out.json"}, nil},
+		{[]string{"eval", "-c"}, nil}, // dangling -c with no value
+		{[]string{"eval", "-c", "first.yaml", "-c", "second.yaml"}, []string{"first.yaml", "second.yaml"}},
+		{[]string{"eval", "-c", "a.yaml", "--config=b.yaml", "--config", "c.yaml"}, []string{"a.yaml", "b.yaml", "c.yaml"}},
 	}
 	for _, tc := range cases {
-		got := userConfigPath(tc.args)
-		if got != tc.want {
-			t.Fatalf("userConfigPath(%v) = %q, want %q", tc.args, got, tc.want)
+		got := userConfigPaths(tc.args)
+		if !equalSlices(got, tc.want) && !(len(got) == 0 && len(tc.want) == 0) {
+			t.Fatalf("userConfigPaths(%v) = %v, want %v", tc.args, got, tc.want)
 		}
 	}
 }
@@ -243,6 +244,28 @@ func TestRunHappyPath(t *testing.T) {
 	}
 	if len(metrics) != 1 || metrics[0].Name != "eval.x.yaml.contains" {
 		t.Fatalf("expected eval.x.yaml.contains metric, got %v", metrics)
+	}
+}
+
+func TestRunMultipleConfigsAppearInScope(t *testing.T) {
+	// Promptfoo accepts multiple -c flags to merge configs into one run.
+	// Defrost must reflect every config in the metric scope so two such
+	// runs (-c A B vs -c B A vs -c A only) don't all collide on one
+	// series.
+	bin := fakeChildScript(t, "single_assertion.json")
+
+	dir := t.TempDir()
+	t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(dir))
+	t.Chdir(dir)
+
+	a := &Adapter{}
+	_, metrics, code := a.Run([]string{bin, "eval", "-c", "a.yaml", "-c", "b.yaml"})
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d", code)
+	}
+	want := "eval.a.yaml.b.yaml.contains"
+	if len(metrics) != 1 || metrics[0].Name != want {
+		t.Fatalf("expected %s, got %v", want, metrics)
 	}
 }
 

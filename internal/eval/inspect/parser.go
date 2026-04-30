@@ -29,8 +29,9 @@ type inspectDoc struct {
 }
 
 type inspectEval struct {
-	Task  string `json:"task"`
-	Model string `json:"model"`
+	Task     string `json:"task"`
+	TaskFile string `json:"task_file"`
+	Model    string `json:"model"`
 }
 
 type inspectSample struct {
@@ -54,13 +55,15 @@ type inspectScore struct {
 // whose value is non-numeric (Letter "C"/"I", compound objects) are skipped
 // with a stderr warning. Returns nil/nil/error only on JSON decode failure.
 //
-// scope qualifies emitted metric names so two task files in the same repo
-// can't collapse into one series. The adapter passes
-// `<repo-rel-cwd>.<task-file>` (with `.` separator); the JSON's `eval.task`
-// field is appended after `scope` and before the scorer leaf inside this
-// function. An empty scope produces names of the form `eval.<task>.<scorer>`
-// and is intended for direct unit tests of ParseFile.
-func ParseFile(r io.Reader, scope string) ([]models.TestResult, []*metricspb.Metric, error) {
+// repoRelCwd qualifies emitted metric names so the same task running from
+// two different directories in the same repo can't collapse into one
+// series. The full metric name is
+// `eval.<repoRelCwd>.<eval.task_file>.<eval.task>.<scorer>` with empty
+// segments dropped — `<task_file>` is read from the JSON itself rather than
+// the command line so multi-task runs (`inspect eval a.py b.py`) attribute
+// per-file. An empty repoRelCwd is the natural input from the parser-level
+// unit tests.
+func ParseFile(r io.Reader, repoRelCwd string) ([]models.TestResult, []*metricspb.Metric, error) {
 	var doc inspectDoc
 	if err := json.NewDecoder(r).Decode(&doc); err != nil {
 		return nil, nil, fmt.Errorf("parse inspect json: %w", err)
@@ -71,7 +74,7 @@ func ParseFile(r io.Reader, scope string) ([]models.TestResult, []*metricspb.Met
 		metrics []*metricspb.Metric
 	)
 	for _, s := range doc.Samples {
-		tr, m := mapSample(s, doc.Eval.Task, doc.Eval.Model, scope, now)
+		tr, m := mapSample(s, doc.Eval.Task, doc.Eval.TaskFile, doc.Eval.Model, repoRelCwd, now)
 		tests = append(tests, tr)
 		metrics = append(metrics, m...)
 	}
@@ -82,7 +85,7 @@ func ParseFile(r io.Reader, scope string) ([]models.TestResult, []*metricspb.Met
 // sample. Pass/fail is the conjunction of all numeric scorers clearing
 // passThreshold; a sample with no numeric scorers is treated as passed (it
 // ran without scoring failures).
-func mapSample(s inspectSample, task, model, scope string, now uint64) (models.TestResult, []*metricspb.Metric) {
+func mapSample(s inspectSample, task, taskFile, model, repoRelCwd string, now uint64) (models.TestResult, []*metricspb.Metric) {
 	caseName := sampleCaseName(s.ID, task)
 
 	scorerNames := make([]string, 0, len(s.Scores))
@@ -107,7 +110,7 @@ func mapSample(s inspectSample, task, model, scope string, now uint64) (models.T
 		if v < passThreshold {
 			pass = false
 		}
-		metrics = append(metrics, buildMetric(name, score, caseName, task, model, scope, v, now))
+		metrics = append(metrics, buildMetric(name, score, caseName, task, taskFile, model, repoRelCwd, v, now))
 	}
 	if !hasNumeric && len(scorerNames) == 0 {
 		fmt.Fprintf(os.Stderr,
@@ -124,7 +127,7 @@ func mapSample(s inspectSample, task, model, scope string, now uint64) (models.T
 	return tr, metrics
 }
 
-func buildMetric(name string, s inspectScore, caseName, task, model, scope string, score float64, now uint64) *metricspb.Metric {
+func buildMetric(name string, s inspectScore, caseName, task, taskFile, model, repoRelCwd string, score float64, now uint64) *metricspb.Metric {
 	attrs := []*commonpb.KeyValue{
 		models.StringAttr("gen_ai.evaluation.name", name),
 		models.DoubleAttr("gen_ai.evaluation.score.value", score),
@@ -139,15 +142,14 @@ func buildMetric(name string, s inspectScore, caseName, task, model, scope strin
 		attrs = append(attrs, models.StringAttr("gen_ai.request.model", model))
 	}
 
-	// Fully-qualified metric name: eval.<scope>.<task>.<scorer>, with empty
-	// segments dropped. See the spec at
-	// docs/specs/2026-04-30-inspect-ai-adapter.md §6.
-	segs := make([]string, 0, 3)
-	if scope != "" {
-		segs = append(segs, scope)
-	}
-	if task != "" {
-		segs = append(segs, task)
+	// Fully-qualified metric name:
+	// eval.<repoRelCwd>.<taskFile>.<task>.<scorer>, with empty segments
+	// dropped. See docs/specs/2026-04-30-inspect-ai-adapter.md §6.
+	segs := make([]string, 0, 4)
+	for _, p := range []string{repoRelCwd, taskFile, task} {
+		if p != "" {
+			segs = append(segs, p)
+		}
 	}
 	segs = append(segs, name)
 	metricName := "eval." + strings.Join(segs, ".")

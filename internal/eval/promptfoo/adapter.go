@@ -135,22 +135,26 @@ func joinScope(parts ...string) string {
 	return strings.Join(out, ".")
 }
 
-// userConfigPath returns the first `-c` / `--config` / `--config=<v>`
-// value in args, or "" if none is supplied. Promptfoo's default when
-// the flag is omitted is `promptfooconfig.yaml` in the cwd; callers
-// substitute that themselves.
-func userConfigPath(args []string) string {
+// userConfigPaths returns every `-c` / `--config` / `--config=<v>` value
+// in args, in the order they appear. Promptfoo accepts multiple `-c`
+// flags to merge several configs into one run, so the metric scope must
+// include all of them — taking only the first would label results from
+// the other configs as if they came from the first. Returns nil when no
+// `-c` flag is present; callers substitute promptfoo's default
+// (`promptfooconfig.yaml`).
+func userConfigPaths(args []string) []string {
+	var paths []string
 	for i, a := range args {
 		switch {
 		case a == "--config" || a == "-c":
 			if i+1 < len(args) {
-				return args[i+1]
+				paths = append(paths, args[i+1])
 			}
 		case strings.HasPrefix(a, "--config="):
-			return strings.TrimPrefix(a, "--config=")
+			paths = append(paths, strings.TrimPrefix(a, "--config="))
 		}
 	}
-	return ""
+	return paths
 }
 
 // userOutputPaths returns every `--output` / `-o` / `--output=<v>` value
@@ -264,11 +268,11 @@ func (a *Adapter) Run(cmd []string) ([]models.TestResult, []*metricspb.Metric, i
 	}
 	defer f.Close()
 
-	configPath := userConfigPath(cmd[1:])
-	if configPath == "" {
-		configPath = "promptfooconfig.yaml"
+	configPaths := userConfigPaths(cmd[1:])
+	if len(configPaths) == 0 {
+		configPaths = []string{"promptfooconfig.yaml"}
 	}
-	scope := joinScope(runner.RepoRelCwd(), configPath)
+	scope := joinScope(append([]string{runner.RepoRelCwd()}, configPaths...)...)
 
 	tests, metrics, parseErr := Parse(f, scope)
 	if parseErr != nil {
