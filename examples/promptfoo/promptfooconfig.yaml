@@ -4,8 +4,8 @@ prompts:
   - 'What is the capital of {{country}}? Answer in one word.'
 
 providers:
-  - id: openai:gpt-4o-mini
-    label: openai:gpt-4o-mini
+  - id: file://provider.js
+    label: defrost-smoke-mock
 
 tests:
   - vars:
