@@ -384,3 +384,135 @@ jobs:
         with:
           name: inspect-out
           path: examples/inspect/out.txt
+
+  vitest-js:
+    name: vitest example (js)
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install vitest
+        run: npm ci
+        working-directory: examples/vitest-js
+
+      - name: Build defrost
+        run: go build -o defrost .
+
+      - name: Run defrost against examples/vitest-js
+        id: run
+        run: |
+          set +e
+          cd examples/vitest-js
+          ../../defrost exec --no-persist npm test > out.txt 2>&1
+          echo "exit=$?" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Assert exit code is non-zero (intentional failures)
+        run: |
+          code="${{ steps.run.outputs.exit }}"
+          echo "defrost exit code: $code"
+          if [ "$code" -eq 0 ]; then
+            echo "FAIL: expected non-zero exit (intentional failures present)"
+            cat examples/vitest-js/out.txt
+            exit 1
+          fi
+
+      - name: Assert result count matches expected
+        run: |
+          line=$(grep -E '^defrost: results:' examples/vitest-js/out.txt | tail -1)
+          if [ -z "$line" ]; then
+            echo "FAIL: no 'defrost: results:' line found"
+            cat examples/vitest-js/out.txt
+            exit 1
+          fi
+          echo "summary: $line"
+          counts=$(echo "$line" | sed -E 's/^defrost: results: ([0-9]+) pass, ([0-9]+) fail, ([0-9]+) skip$/\1 \2 \3/')
+          set -- $counts
+          total=$(( $1 + $2 + $3 ))
+          if [ "$total" -ne 12 ]; then
+            echo "FAIL: expected 12 results total, got $total ($1 pass, $2 fail, $3 skip)"
+            cat examples/vitest-js/out.txt
+            exit 1
+          fi
+
+      - name: Upload defrost output for debugging
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vitest-js-out
+          path: examples/vitest-js/out.txt
+
+  vitest-ts:
+    name: vitest example (ts)
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install vitest + typescript
+        run: npm ci
+        working-directory: examples/vitest-ts
+
+      - name: Build defrost
+        run: go build -o defrost .
+
+      - name: Run defrost against examples/vitest-ts
+        id: run
+        run: |
+          set +e
+          cd examples/vitest-ts
+          ../../defrost exec --no-persist npm test > out.txt 2>&1
+          echo "exit=$?" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Assert exit code is non-zero (intentional failures)
+        run: |
+          code="${{ steps.run.outputs.exit }}"
+          echo "defrost exit code: $code"
+          if [ "$code" -eq 0 ]; then
+            echo "FAIL: expected non-zero exit (intentional failures present)"
+            cat examples/vitest-ts/out.txt
+            exit 1
+          fi
+
+      - name: Assert result count matches expected
+        run: |
+          line=$(grep -E '^defrost: results:' examples/vitest-ts/out.txt | tail -1)
+          if [ -z "$line" ]; then
+            echo "FAIL: no 'defrost: results:' line found"
+            cat examples/vitest-ts/out.txt
+            exit 1
+          fi
+          echo "summary: $line"
+          counts=$(echo "$line" | sed -E 's/^defrost: results: ([0-9]+) pass, ([0-9]+) fail, ([0-9]+) skip$/\1 \2 \3/')
+          set -- $counts
+          total=$(( $1 + $2 + $3 ))
+          if [ "$total" -ne 12 ]; then
+            echo "FAIL: expected 12 results total, got $total ($1 pass, $2 fail, $3 skip)"
+            cat examples/vitest-ts/out.txt
+            exit 1
+          fi
+
+      - name: Upload defrost output for debugging
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vitest-ts-out
+          path: examples/vitest-ts/out.txt
