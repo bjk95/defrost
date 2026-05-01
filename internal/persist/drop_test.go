@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
 	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
@@ -239,6 +240,63 @@ func TestDropHistory_DevMode_RemovesSignalDirs(t *testing.T) {
 	}
 	if len(got) != 1 || got[0] != "S" {
 		t.Errorf("suppressions not preserved: %v", got)
+	}
+}
+
+func TestInventorySignalDir_BeforeCutoff_OnlyCountsMatchingFiles(t *testing.T) {
+	dir := t.TempDir()
+	mustWriteFile(t, filepath.Join(dir, "2026", "03", "15", "old.otlp.pb.zst"), 100)
+	mustWriteFile(t, filepath.Join(dir, "2026", "04", "01", "edge.otlp.pb.zst"), 200)
+	mustWriteFile(t, filepath.Join(dir, "2026", "04", "10", "new.otlp.pb.zst"), 300)
+
+	cutoff := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+	files, bytes := inventorySignalDir(dir, cutoff)
+	if files != 1 || bytes != 100 {
+		t.Errorf("before-cutoff inventory: want (1, 100), got (%d, %d)", files, bytes)
+	}
+
+	allFiles, allBytes := inventorySignalDir(dir, time.Time{})
+	if allFiles != 3 || allBytes != 600 {
+		t.Errorf("zero-cutoff inventory: want (3, 600), got (%d, %d)", allFiles, allBytes)
+	}
+}
+
+func TestRemoveSignalFilesBefore_KeepsCutoffDateFilesAndPrunesEmptyDirs(t *testing.T) {
+	dir := t.TempDir()
+	old := filepath.Join(dir, "2026", "03", "15", "old.otlp.pb.zst")
+	edge := filepath.Join(dir, "2026", "04", "01", "edge.otlp.pb.zst")
+	newFile := filepath.Join(dir, "2026", "04", "10", "new.otlp.pb.zst")
+	mustWriteFile(t, old, 1)
+	mustWriteFile(t, edge, 1)
+	mustWriteFile(t, newFile, 1)
+
+	cutoff := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+	if err := removeSignalFilesBefore(dir, cutoff); err != nil {
+		t.Fatalf("removeSignalFilesBefore: %v", err)
+	}
+
+	if _, err := os.Stat(old); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("expected old file gone, got err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "2026", "03")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("expected empty 2026/03 dir to be pruned, got err=%v", err)
+	}
+	if _, err := os.Stat(edge); err != nil {
+		t.Errorf("edge-of-cutoff file must be kept: %v", err)
+	}
+	if _, err := os.Stat(newFile); err != nil {
+		t.Errorf("post-cutoff file must be kept: %v", err)
+	}
+}
+
+func mustWriteFile(t *testing.T, path string, size int) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdirall: %v", err)
+	}
+	buf := make([]byte, size)
+	if err := os.WriteFile(path, buf, 0o644); err != nil {
+		t.Fatalf("writefile %s: %v", path, err)
 	}
 }
 

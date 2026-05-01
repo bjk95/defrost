@@ -21,12 +21,14 @@ type fakeDropBackend struct {
 	plan      persist.DropPlan
 	executed  bool
 	calls     int
+	seenSel   persist.DropSelector
 	returnErr error
 }
 
 func (f *fakeDropBackend) DropHistory(sel persist.DropSelector, confirm func(persist.DropPlan) bool) error {
 	f.mu.Lock()
 	f.calls++
+	f.seenSel = sel
 	f.mu.Unlock()
 	if f.returnErr != nil {
 		return f.returnErr
@@ -39,6 +41,12 @@ func (f *fakeDropBackend) DropHistory(sel persist.DropSelector, confirm func(per
 		f.mu.Unlock()
 	}
 	return nil
+}
+
+func (f *fakeDropBackend) lastSel() persist.DropSelector {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.seenSel
 }
 
 func newDropServer(t *testing.T, plan persist.DropPlan) (*httptest.Server, *fakeDropBackend) {
@@ -160,6 +168,61 @@ func TestDrop_PostRejectsEmptySelector(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("status: want 400, got %d", resp.StatusCode)
+	}
+}
+
+func TestDropPlan_PassesBeforeUTCToBackend(t *testing.T) {
+	srv, fake := newDropServer(t, persist.DropPlan{Branch: "_defrost", TraceFiles: 5})
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/drop/plan?drop_traces=true&drop_metrics=true&before_utc=2026-04-01")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("status: want 200, got %d", resp.StatusCode)
+	}
+	var got dropPlanResponse
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	want := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+	if !fake.lastSel().BeforeUTC.Equal(want) {
+		t.Errorf("backend selector BeforeUTC: want %v, got %v", want, fake.lastSel().BeforeUTC)
+	}
+	if got.BeforeUTC == "" {
+		t.Errorf("response should echo before_utc, got empty")
+	}
+}
+
+func TestDropPlan_RejectsInvalidBeforeUTC(t *testing.T) {
+	srv, _ := newDropServer(t, persist.DropPlan{})
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/drop/plan?drop_traces=true&drop_metrics=true&before_utc=not-a-date")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status: want 400, got %d", resp.StatusCode)
+	}
+}
+
+func TestDrop_PostHonorsBeforeUTC(t *testing.T) {
+	srv, fake := newDropServer(t, persist.DropPlan{Branch: "_defrost", TraceFiles: 5})
+	defer srv.Close()
+
+	body := bytes.NewBufferString(`{"drop_traces":true,"drop_metrics":true,"before_utc":"2026-04-01"}`)
+	resp, err := http.Post(srv.URL+"/api/drop", "application/json", body)
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	want := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+	if !fake.lastSel().BeforeUTC.Equal(want) {
+		t.Errorf("backend selector BeforeUTC: want %v, got %v", want, fake.lastSel().BeforeUTC)
 	}
 }
 

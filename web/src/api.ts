@@ -61,12 +61,16 @@ export interface DropPlan {
   branch_missing: boolean;
   drop_traces: boolean;
   drop_metrics: boolean;
+  before_utc?: string;
   nothing: boolean;
 }
 
 export interface DropSelector {
   drop_traces: boolean;
   drop_metrics: boolean;
+  // Date-only string (YYYY-MM-DD) interpreted as UTC midnight, or
+  // omitted to drop everything matching the signal selector.
+  before_utc?: string;
 }
 
 export function getDropPlan(sel: DropSelector): Promise<DropPlan> {
@@ -74,6 +78,7 @@ export function getDropPlan(sel: DropSelector): Promise<DropPlan> {
     drop_traces: String(sel.drop_traces),
     drop_metrics: String(sel.drop_metrics),
   });
+  if (sel.before_utc) params.set("before_utc", sel.before_utc);
   return fetchJSON<DropPlan>(`/api/drop/plan?${params.toString()}`);
 }
 

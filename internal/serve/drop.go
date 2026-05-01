@@ -26,12 +26,14 @@ type dropPlanResponse struct {
 	BranchMissing bool   `json:"branch_missing"`
 	DropTraces    bool   `json:"drop_traces"`
 	DropMetrics   bool   `json:"drop_metrics"`
+	BeforeUTC     string `json:"before_utc,omitempty"`
 	Nothing       bool   `json:"nothing"`
 }
 
 type dropRequest struct {
-	DropTraces  bool `json:"drop_traces"`
-	DropMetrics bool `json:"drop_metrics"`
+	DropTraces  bool   `json:"drop_traces"`
+	DropMetrics bool   `json:"drop_metrics"`
+	BeforeUTC   string `json:"before_utc,omitempty"`
 }
 
 func parseDropSelector(q url.Values) (persist.DropSelector, error) {
@@ -40,7 +42,29 @@ func parseDropSelector(q url.Values) (persist.DropSelector, error) {
 	if !traces && !metrics {
 		return persist.DropSelector{}, errSelectorEmpty
 	}
-	return persist.DropSelector{DropTraces: traces, DropMetrics: metrics}, nil
+	sel := persist.DropSelector{DropTraces: traces, DropMetrics: metrics}
+	if raw := q.Get("before_utc"); raw != "" {
+		t, err := parseBeforeUTC(raw)
+		if err != nil {
+			return persist.DropSelector{}, err
+		}
+		sel.BeforeUTC = t
+	}
+	return sel, nil
+}
+
+// parseBeforeUTC accepts either a date-only string (YYYY-MM-DD,
+// interpreted as UTC midnight) or a full RFC 3339 timestamp. Date-only
+// is what the UI's <input type="date"> sends.
+func parseBeforeUTC(raw string) (time.Time, error) {
+	if t, err := time.Parse("2006-01-02", raw); err == nil {
+		return t.UTC(), nil
+	}
+	t, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return time.Time{}, httpErr{status: http.StatusBadRequest, msg: "before_utc: must be YYYY-MM-DD or RFC 3339"}
+	}
+	return t.UTC(), nil
 }
 
 var errSelectorEmpty = httpErr{status: http.StatusBadRequest, msg: "select at least one of drop_traces or drop_metrics"}
@@ -72,6 +96,9 @@ func toDropPlanResponse(plan persist.DropPlan) dropPlanResponse {
 	}
 	if !plan.NewestRunUTC.IsZero() {
 		out.NewestRunUTC = plan.NewestRunUTC.UTC().Format(time.RFC3339)
+	}
+	if !plan.Sel.BeforeUTC.IsZero() {
+		out.BeforeUTC = plan.Sel.BeforeUTC.UTC().Format(time.RFC3339)
 	}
 	return out
 }
@@ -128,6 +155,18 @@ func handleDrop(w http.ResponseWriter, r *http.Request, opts persist.Options) {
 		return
 	}
 	sel := persist.DropSelector{DropTraces: req.DropTraces, DropMetrics: req.DropMetrics}
+	if req.BeforeUTC != "" {
+		t, err := parseBeforeUTC(req.BeforeUTC)
+		if err != nil {
+			if e, ok := err.(httpErr); ok {
+				writeJSONError(w, e.status, e.msg)
+				return
+			}
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		sel.BeforeUTC = t
+	}
 	be := dropBackendFn(opts)
 	var executed persist.DropPlan
 	executed.Sel = sel

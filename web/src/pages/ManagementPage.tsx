@@ -11,11 +11,13 @@ import { Icon } from "@/components/Icons";
 
 type Scope = "all" | "traces" | "metrics";
 
-function selectorFor(scope: Scope): DropSelector {
-  return {
+function selectorFor(scope: Scope, beforeUTC: string): DropSelector {
+  const sel: DropSelector = {
     drop_traces: scope === "all" || scope === "traces",
     drop_metrics: scope === "all" || scope === "metrics",
   };
+  if (beforeUTC) sel.before_utc = beforeUTC;
+  return sel;
 }
 
 function scopeLabel(scope: Scope): string {
@@ -26,12 +28,13 @@ function scopeLabel(scope: Scope): string {
 
 export function ManagementPage() {
   const [scope, setScope] = useState<Scope>("all");
+  const [beforeUTC, setBeforeUTC] = useState("");
   const [confirmText, setConfirmText] = useState("");
   const qc = useQueryClient();
 
-  const sel = selectorFor(scope);
+  const sel = selectorFor(scope, beforeUTC);
   const planQuery = useQuery({
-    queryKey: ["drop-plan", scope],
+    queryKey: ["drop-plan", scope, beforeUTC],
     queryFn: () => getDropPlan(sel),
     staleTime: 5_000,
   });
@@ -120,6 +123,50 @@ export function ManagementPage() {
         </div>
       </Section>
 
+      <Section title="Date filter">
+        <p style={{ margin: "0 0 12px", fontSize: 13, color: "var(--fg-muted)", maxWidth: 640 }}>
+          Optional. Drop only runs whose UTC date is strictly{" "}
+          <strong style={{ color: "var(--fg)" }}>before</strong> this date. Files dated on or
+          after the cutoff are kept. Leave blank to drop everything in scope.
+        </p>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <input
+            type="date"
+            value={beforeUTC}
+            onChange={(e) => setBeforeUTC(e.target.value)}
+            disabled={dropMut.isPending}
+            max={today()}
+            style={{
+              padding: "6px 10px",
+              fontSize: 13,
+              fontFamily: "var(--font-mono)",
+              background: "var(--bg)",
+              color: "var(--fg)",
+              border: "1px solid var(--border)",
+              borderRadius: 6,
+              colorScheme: "dark light",
+            }}
+          />
+          {beforeUTC && (
+            <button
+              onClick={() => setBeforeUTC("")}
+              disabled={dropMut.isPending}
+              style={{
+                padding: "6px 10px",
+                fontSize: 12,
+                background: "transparent",
+                color: "var(--fg-muted)",
+                border: "1px solid var(--border)",
+                borderRadius: 6,
+                cursor: "pointer",
+              }}
+            >
+              Clear
+            </button>
+          )}
+        </div>
+      </Section>
+
       <Section title="Plan">
         {planQuery.isLoading ? (
           <PlanState>
@@ -188,7 +235,10 @@ export function ManagementPage() {
                 <Spinner /> Rewriting branch…
               </>
             ) : (
-              <>Drop {scopeLabel(scope)}</>
+              <>
+                Drop {scopeLabel(scope)}
+                {beforeUTC && <> before {fmt.absDate(beforeUTC)}</>}
+              </>
             )}
           </button>
           {dropMut.isError && (
@@ -258,6 +308,18 @@ function PlanTable({ plan }: { plan: DropPlan }) {
             : "—"
         }
       />
+      {plan.before_utc && (
+        <Row
+          label="Cutoff"
+          value={
+            <span>
+              before{" "}
+              <strong style={{ color: "var(--fg)" }}>{fmt.absDate(plan.before_utc)}</strong>{" "}
+              <span style={{ color: "var(--fg-muted)" }}>(UTC)</span>
+            </span>
+          }
+        />
+      )}
       <Row
         label="Preserved"
         value={
@@ -442,3 +504,11 @@ const inlineCodeStyle: React.CSSProperties = {
   fontSize: 12,
   fontFamily: "var(--font-mono)",
 };
+
+function today(): string {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
