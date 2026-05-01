@@ -1,8 +1,11 @@
 package vitest
 
 import (
+	"bytes"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -261,5 +264,99 @@ func TestAdapterMatchesFormDInvalidJSON(t *testing.T) {
 	}
 	if (&Adapter{}).Matches([]string{"npm", "test"}) {
 		t.Fatal("expected no match with invalid package.json")
+	}
+}
+
+// captureStderr swaps os.Stderr for a pipe, runs fn, and returns whatever
+// was written to stderr.
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	old := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	os.Stderr = w
+	done := make(chan string)
+	go func() {
+		var buf bytes.Buffer
+		io.Copy(&buf, r)
+		done <- buf.String()
+	}()
+	fn()
+	w.Close()
+	os.Stderr = old
+	return <-done
+}
+
+func TestRunRejectsWatchArgvForms(t *testing.T) {
+	cases := []struct {
+		name string
+		cmd  []string
+	}{
+		{"bare vitest (no run)", []string{"vitest"}},
+		{"vitest --watch", []string{"vitest", "--watch"}},
+		{"vitest --watchAll", []string{"vitest", "--watchAll"}},
+		{"vitest --ui", []string{"vitest", "--ui"}},
+		{"vitest watch", []string{"vitest", "watch"}},
+		{"npx vitest (no run)", []string{"npx", "vitest"}},
+		{"npx vitest --watch", []string{"npx", "vitest", "--watch"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a := &Adapter{}
+			a.Matches(tc.cmd) // populate state
+			var code int
+			stderr := captureStderr(t, func() {
+				_, _, code = a.Run(tc.cmd)
+			})
+			if code != 2 {
+				t.Errorf("exit code = %d, want 2", code)
+			}
+			if !strings.Contains(stderr, "watch") {
+				t.Errorf("stderr should mention watch; got %q", stderr)
+			}
+			if !strings.Contains(stderr, "vitest run") {
+				t.Errorf("stderr should suggest 'vitest run'; got %q", stderr)
+			}
+		})
+	}
+}
+
+func TestRunRejectsWatchInScriptFormD(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	writePackageJSON(t, map[string]string{"test": "vitest --watch"})
+
+	a := &Adapter{}
+	if !a.Matches([]string{"npm", "test"}) {
+		t.Fatal("expected matcher to recognize form D")
+	}
+	var code int
+	stderr := captureStderr(t, func() {
+		_, _, code = a.Run([]string{"npm", "test"})
+	})
+	if code != 2 {
+		t.Errorf("exit code = %d, want 2", code)
+	}
+	if !strings.Contains(stderr, "scripts.test") {
+		t.Errorf("stderr should reference scripts.test; got %q", stderr)
+	}
+	if !strings.Contains(stderr, "watch") {
+		t.Errorf("stderr should mention watch; got %q", stderr)
+	}
+}
+
+func TestRunAcceptsExplicitRun(t *testing.T) {
+	// Sanity check: vitest run is NOT a watch trigger. Run will fall
+	// through to the rest of the pipeline (which we stub later); for now
+	// it must NOT exit 2 with a watch message.
+	a := &Adapter{}
+	a.Matches([]string{"vitest", "run"})
+	stderr := captureStderr(t, func() {
+		_, _, _ = a.Run([]string{"vitest", "run"})
+	})
+	if strings.Contains(stderr, "watch") && strings.Contains(stderr, "use 'vitest run") {
+		t.Errorf("'vitest run' should not trigger watch rejection; got %q", stderr)
 	}
 }

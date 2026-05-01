@@ -2,6 +2,7 @@ package vitest
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"regexp"
 	"strings"
@@ -185,9 +186,110 @@ func readPackageScript(name string) (string, bool) {
 	return v, ok
 }
 
-// Run is a placeholder returning passthrough behavior; the real implementation
-// arrives in later tasks. This stub exists so the adapter satisfies
-// runner.Adapter at the package boundary.
 func (a *Adapter) Run(cmd []string) ([]models.TestResult, []*metricspb.Metric, int) {
+	if a.watchInScript {
+		fmt.Fprintf(os.Stderr,
+			"defrost: scripts.%s in package.json runs vitest in watch/UI mode; rewrite the script to use 'vitest run …'\n",
+			a.scriptName)
+		return nil, nil, 2
+	}
+	if detectWatchTriggerArgv(cmd) {
+		fmt.Fprintln(os.Stderr,
+			"defrost: vitest in watch/UI mode can't be wrapped; use 'vitest run [args]' instead")
+		return nil, nil, 2
+	}
+	// Subsequent tasks add: form-D shape failure passthrough,
+	// piggyback/inject decision, child spawn, parse.
 	return nil, nil, 0
+}
+
+// detectWatchTriggerArgv inspects the *resolved* argv (i.e. excluding
+// wrapper tokens like npm/yarn/pnpm/run/script-runner-binary). For form
+// D the script value is checked separately during Matches.
+//
+// Returns true if any of:
+//   - the user invoked `vitest` (or via npx/bunx/yarn/pnpm/binary path)
+//     with no `run` token in the resolved arguments
+//   - the user passed `vitest watch` (subcommand)
+//   - the user passed `--watch`, `--watchAll`, or `--ui` (with or without `=value`)
+func detectWatchTriggerArgv(cmd []string) bool {
+	resolved := stripWrapperTokens(cmd)
+	if len(resolved) == 0 {
+		// Nothing after wrapper stripping (e.g. cmd was a form-D script);
+		// form D is handled via watchInScript on the receiver.
+		return false
+	}
+	// resolved[0] is the binary that runs vitest (vitest itself, or
+	// node_modules/.bin/vitest, etc.). resolved[1:] are the args.
+	args := resolved[1:]
+
+	hasRun := false
+	for _, t := range args {
+		if t == "watch" {
+			return true
+		}
+		if t == "--watch" || t == "--watchAll" || t == "--ui" {
+			return true
+		}
+		if strings.HasPrefix(t, "--watch=") || strings.HasPrefix(t, "--watchAll=") || strings.HasPrefix(t, "--ui=") {
+			return true
+		}
+		if t == "run" {
+			hasRun = true
+		}
+	}
+	return !hasRun
+}
+
+// stripWrapperTokens returns argv as it would look if the user had
+// invoked vitest directly. Removes leading wrapper tokens like
+// npm/yarn/pnpm/run/<script-name>, npx flags, etc.
+func stripWrapperTokens(cmd []string) []string {
+	if len(cmd) == 0 {
+		return nil
+	}
+	first := cmd[0]
+	if first == "vitest" || strings.HasSuffix(first, "node_modules/.bin/vitest") {
+		return cmd
+	}
+	if first == "npx" || first == "bunx" {
+		// Skip npx flags and their values; find the "vitest" token,
+		// then return ["vitest", ...rest].
+		skipNext := false
+		for i := 1; i < len(cmd); i++ {
+			if skipNext {
+				skipNext = false
+				continue
+			}
+			tok := cmd[i]
+			if tok == "vitest" {
+				return cmd[i:]
+			}
+			if !strings.HasPrefix(tok, "-") {
+				return nil
+			}
+			if tok == "-p" || tok == "--package" || tok == "-c" || tok == "--call" {
+				skipNext = true
+			}
+		}
+		return nil
+	}
+	switch first {
+	case "yarn":
+		if len(cmd) >= 2 && cmd[1] == "vitest" {
+			return cmd[1:]
+		}
+		// yarn <script> / yarn run <script> are form-D — return nil to
+		// signal "no argv-side check; rely on watchInScript".
+		return nil
+	case "pnpm":
+		if len(cmd) >= 2 && cmd[1] == "vitest" {
+			return cmd[1:]
+		}
+		return nil
+	case "npm":
+		// npm always enters via script form (form D).
+		return nil
+	}
+	return nil
 }
