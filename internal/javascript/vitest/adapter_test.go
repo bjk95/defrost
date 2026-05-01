@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -457,5 +459,133 @@ func TestRunPassthroughForFormDShapeFailure(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "scripts.test") || !strings.Contains(stderr, "passthrough") {
 		t.Errorf("stderr should explain passthrough; got %q", stderr)
+	}
+}
+
+func TestBuildArgs(t *testing.T) {
+	cases := []struct {
+		name      string
+		cmd       []string
+		path      string
+		piggyback bool
+		want      []string
+	}{
+		{
+			name: "direct vitest run",
+			cmd:  []string{"vitest", "run"},
+			path: "/tmp/x.json",
+			want: []string{"run", "--reporter=json", "--outputFile.json=/tmp/x.json"},
+		},
+		{
+			name: "npx vitest run",
+			cmd:  []string{"npx", "vitest", "run"},
+			path: "/tmp/x.json",
+			want: []string{"vitest", "run", "--reporter=json", "--outputFile.json=/tmp/x.json"},
+		},
+		{
+			name: "yarn vitest run (no separator)",
+			cmd:  []string{"yarn", "vitest", "run"},
+			path: "/tmp/x.json",
+			want: []string{"vitest", "run", "--reporter=json", "--outputFile.json=/tmp/x.json"},
+		},
+		{
+			name: "pnpm vitest run (no separator)",
+			cmd:  []string{"pnpm", "vitest", "run"},
+			path: "/tmp/x.json",
+			want: []string{"vitest", "run", "--reporter=json", "--outputFile.json=/tmp/x.json"},
+		},
+		{
+			name: "npm test (needs separator)",
+			cmd:  []string{"npm", "test"},
+			path: "/tmp/x.json",
+			want: []string{"test", "--", "--reporter=json", "--outputFile.json=/tmp/x.json"},
+		},
+		{
+			name: "npm test with existing -- (no double separator)",
+			cmd:  []string{"npm", "test", "--", "tests/foo"},
+			path: "/tmp/x.json",
+			want: []string{"test", "--", "tests/foo", "--reporter=json", "--outputFile.json=/tmp/x.json"},
+		},
+		{
+			name: "pnpm test (needs separator)",
+			cmd:  []string{"pnpm", "test"},
+			path: "/tmp/x.json",
+			want: []string{"test", "--", "--reporter=json", "--outputFile.json=/tmp/x.json"},
+		},
+		{
+			name: "pnpm run x (needs separator)",
+			cmd:  []string{"pnpm", "run", "x"},
+			path: "/tmp/x.json",
+			want: []string{"run", "x", "--", "--reporter=json", "--outputFile.json=/tmp/x.json"},
+		},
+		{
+			name:      "piggyback skips injection (direct)",
+			cmd:       []string{"vitest", "run", "--reporter=json", "--outputFile=mine.json"},
+			path:      "mine.json",
+			piggyback: true,
+			want:      []string{"run", "--reporter=json", "--outputFile=mine.json"},
+		},
+		{
+			name:      "piggyback skips injection (npm)",
+			cmd:       []string{"npm", "test", "--", "--reporter=json", "--outputFile=mine.json"},
+			path:      "mine.json",
+			piggyback: true,
+			want:      []string{"test", "--", "--reporter=json", "--outputFile=mine.json"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := buildArgs(tc.cmd, tc.path, tc.piggyback)
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("\ngot:  %v\nwant: %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRunPiggybackParsesUserOutputFile(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	outputPath := filepath.Join(dir, "results.json")
+
+	// Pre-write the json fixture as if vitest had produced it.
+	fixture := `{
+		"testResults": [{
+			"name": "` + dir + `/basics.test.js",
+			"status": "passed",
+			"assertionResults": [{
+				"title": "adds correctly",
+				"status": "passed",
+				"ancestorTitles": [],
+				"failureMessages": [],
+				"duration": 1
+			}]
+		}]
+	}`
+	if err := os.WriteFile(outputPath, []byte(fixture), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	// Use a no-op binary so Run's child returns exit 0 quickly without
+	// actually running vitest. detectUserOutputPath returns the pre-written
+	// fixture path; Run skips injection and parses straight from there.
+	trueBin, err := exec.LookPath("true")
+	if err != nil {
+		t.Fatalf("LookPath true: %v", err)
+	}
+	a := &Adapter{}
+	cmd := []string{trueBin, "--reporter=json", "--outputFile=" + outputPath}
+	results, _, code := a.Run(cmd)
+	if code != 0 {
+		t.Errorf("exit code = %d, want 0", code)
+	}
+	if len(results) != 1 {
+		t.Fatalf("len(results) = %d, want 1; got %+v", len(results), results)
+	}
+	if results[0].Id != "basics.test.js::adds correctly" {
+		t.Errorf("Id = %q, want %q", results[0].Id, "basics.test.js::adds correctly")
+	}
+	if !results[0].Passed {
+		t.Errorf("Passed = false, want true")
 	}
 }

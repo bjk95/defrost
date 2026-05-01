@@ -10,6 +10,7 @@ import (
 
 	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
 
+	"github.com/bjk95/defrost/internal/javascript/parser"
 	"github.com/bjk95/defrost/internal/models"
 	"github.com/bjk95/defrost/internal/runner"
 )
@@ -206,8 +207,65 @@ func (a *Adapter) Run(cmd []string) ([]models.TestResult, []*metricspb.Metric, i
 			a.scriptName)
 		return passthroughRun(cmd)
 	}
-	// Subsequent tasks add: piggyback/inject decision, child spawn, parse.
-	return nil, nil, 0
+	path, piggyback := detectUserOutputPath(cmd)
+	if !piggyback {
+		f, err := os.CreateTemp("", "defrost-vitest-*.json")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "defrost:", err)
+			return nil, nil, 1
+		}
+		path = f.Name()
+		f.Close()
+		defer os.Remove(path)
+	}
+
+	args := buildArgs(cmd, path, piggyback)
+
+	child := exec.Command(cmd[0], args...)
+	exitCode, err := runner.RunChild(child)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "defrost:", err)
+		return nil, nil, 1
+	}
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "defrost:", err)
+		return nil, nil, exitCode
+	}
+	return parseOrPreserve(path, cwd, exitCode)
+}
+
+// parseOrPreserve reads vitest's JSON output and returns the parsed
+// test results paired with the child's exit code. When the output file
+// is missing/empty (child crashed before writing) or the JSON can't be
+// parsed, the exit code is preserved and a warning is logged — the
+// adapter never overwrites a meaningful child exit with a synthetic
+// parse-error 1, since that would mask the real failure signal.
+func parseOrPreserve(path, cwd string, exitCode int) ([]models.TestResult, []*metricspb.Metric, int) {
+	if !fileNonEmpty(path) {
+		fmt.Fprintf(os.Stderr,
+			"defrost: vitest exited %d without writing JSON output; recording run with no per-test results\n",
+			exitCode)
+		return nil, nil, exitCode
+	}
+	results, err := parser.ParseFile(path, cwd)
+	if err != nil {
+		fmt.Fprintf(os.Stderr,
+			"defrost: parse vitest output: %v; recording run with no per-test results\n",
+			err)
+		return nil, nil, exitCode
+	}
+	runner.ApplyRepoPrefix(results)
+	return results, nil, exitCode
+}
+
+func fileNonEmpty(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	return info.Size() > 0
 }
 
 // passthroughRun executes cmd verbatim with stdio + signals wired,
@@ -339,6 +397,47 @@ func detectUserOutputPath(cmd []string) (string, bool) {
 		return outputFile, true
 	}
 	return "", false
+}
+
+// buildArgs returns the args to pass to cmd[0]. When piggyback is true,
+// no flags are appended (the user already feeds vitest a json reporter
+// + outputFile). Otherwise it appends --reporter=json
+// --outputFile.json=<path>, with a "--" separator inserted before those
+// flags for npm/pnpm script forms (npm always; pnpm only when not
+// invoking the vitest binary directly).
+func buildArgs(cmd []string, jsonPath string, piggyback bool) []string {
+	rest := append([]string{}, cmd[1:]...)
+	if piggyback {
+		return rest
+	}
+	jsonFlags := []string{"--reporter=json", "--outputFile.json=" + jsonPath}
+
+	if !needsSeparator(cmd) {
+		return append(rest, jsonFlags...)
+	}
+	for _, t := range rest {
+		if t == "--" {
+			return append(rest, jsonFlags...)
+		}
+	}
+	return append(rest, append([]string{"--"}, jsonFlags...)...)
+}
+
+// needsSeparator returns true when cmd is a package-runner script
+// invocation that requires a `--` token before user-injected flags so
+// the runner forwards them to the underlying script. npm only enters
+// this adapter via script forms (npm test / npm run X) so it always
+// needs the separator. pnpm enters either via direct binary exec
+// (`pnpm vitest …`, no separator) or via script forms (`pnpm test` /
+// `pnpm run X`, separator). yarn forwards args directly in all forms.
+func needsSeparator(cmd []string) bool {
+	switch cmd[0] {
+	case "npm":
+		return true
+	case "pnpm":
+		return len(cmd) < 2 || cmd[1] != "vitest"
+	}
+	return false
 }
 
 // stripWrapperTokens returns argv as it would look if the user had
