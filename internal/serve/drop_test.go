@@ -125,7 +125,10 @@ func TestDropPlan_SanitizesOriginURL(t *testing.T) {
 	})
 	defer srv.Close()
 
-	resp, _ := http.Get(srv.URL + "/api/drop/plan?drop_traces=true&drop_metrics=true")
+	resp, err := http.Get(srv.URL + "/api/drop/plan?drop_traces=true&drop_metrics=true")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
 	defer resp.Body.Close()
 	var body dropPlanResponse
 	_ = json.NewDecoder(resp.Body).Decode(&body)
@@ -234,7 +237,10 @@ func TestDrop_NoOpPlanReturnsNothingTrue(t *testing.T) {
 	defer srv.Close()
 
 	body := bytes.NewBufferString(`{"drop_traces":true,"drop_metrics":true}`)
-	resp, _ := http.Post(srv.URL+"/api/drop", "application/json", body)
+	resp, err := http.Post(srv.URL+"/api/drop", "application/json", body)
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
 	defer resp.Body.Close()
 	var got dropPlanResponse
 	_ = json.NewDecoder(resp.Body).Decode(&got)
