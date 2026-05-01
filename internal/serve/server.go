@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
@@ -53,9 +54,20 @@ func New(opts persist.Options, assets fs.FS) http.Handler {
 	mux := http.NewServeMux()
 	bus := newProgressBus()
 
+	// loadMu serializes /api/tests so concurrent callers (multiple
+	// tabs, parallel CI hits) don't interleave events on the shared
+	// progress bus. The bus's history would otherwise be cleared
+	// mid-stream when a second loader called Reset, leaving the first
+	// SSE subscriber with an inconsistent log feed. Loads already
+	// dominate wall time with a cold git clone, so queueing has
+	// negligible additional cost.
+	var loadMu sync.Mutex
+
 	mux.HandleFunc("/api/tests", func(w http.ResponseWriter, r *http.Request) {
+		loadMu.Lock()
 		bus.Reset()
 		ds, err := loaderFn(opts, bus.Emit)
+		loadMu.Unlock()
 		if err != nil {
 			bus.Emit(ProgressEvent{Phase: "error", Detail: err.Error()})
 			writeJSONError(w, http.StatusInternalServerError, err.Error())

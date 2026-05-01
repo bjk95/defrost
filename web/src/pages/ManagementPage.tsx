@@ -237,7 +237,7 @@ export function ManagementPage() {
             ) : (
               <>
                 Drop {scopeLabel(scope)}
-                {beforeUTC && <> before {fmt.absDate(beforeUTC)}</>}
+                {beforeUTC && <> before {fmt.absDateUTC(beforeUTC)}</>}
               </>
             )}
           </button>
@@ -304,7 +304,7 @@ function PlanTable({ plan }: { plan: DropPlan }) {
         label="Date range"
         value={
           plan.oldest_run_utc && plan.newest_run_utc
-            ? `${fmt.absDate(plan.oldest_run_utc)} → ${fmt.absDate(plan.newest_run_utc)}`
+            ? `${fmt.absDateUTC(plan.oldest_run_utc)} → ${fmt.absDateUTC(plan.newest_run_utc)}`
             : "—"
         }
       />
@@ -314,7 +314,7 @@ function PlanTable({ plan }: { plan: DropPlan }) {
           value={
             <span>
               before{" "}
-              <strong style={{ color: "var(--fg)" }}>{fmt.absDate(plan.before_utc)}</strong>{" "}
+              <strong style={{ color: "var(--fg)" }}>{fmt.absDateUTC(plan.before_utc)}</strong>{" "}
               <span style={{ color: "var(--fg-muted)" }}>(UTC)</span>
             </span>
           }

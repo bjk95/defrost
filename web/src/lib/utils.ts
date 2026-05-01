@@ -41,6 +41,18 @@ export const fmt = {
       year: "numeric", month: "short", day: "numeric",
     });
   },
+  // absDateUTC formats a UTC-anchored timestamp without shifting it
+  // into the browser's local timezone. Used for drop cutoffs and run
+  // partition dates, where the date the user picks is the date the
+  // server applies — losing a day to TZ rollover can change the scope
+  // of a destructive operation.
+  absDateUTC(iso: string): string {
+    if (!iso) return "—";
+    const d = new Date(iso);
+    return d.toLocaleDateString(undefined, {
+      year: "numeric", month: "short", day: "numeric", timeZone: "UTC",
+    });
+  },
   initials(name?: string): string {
     if (!name) return "??";
     const parts = name.trim().split(/\s+/).filter(Boolean);
@@ -248,10 +260,6 @@ export function useSuppressions(): SuppressionsView {
   const ids = query.data?.test_ids ?? [];
   const set = useMemo(() => new Set(ids), [ids]);
 
-  const onMutationSuccess = (next: SuppressionsResponse) => {
-    qc.setQueryData(SUPPRESSIONS_QUERY_KEY, next);
-  };
-
   const optimisticAdd = async (id: string) => {
     await qc.cancelQueries({ queryKey: SUPPRESSIONS_QUERY_KEY });
     const prev = qc.getQueryData<SuppressionsResponse>(SUPPRESSIONS_QUERY_KEY);
@@ -270,21 +278,41 @@ export function useSuppressions(): SuppressionsView {
     return prev;
   };
 
+  // Rollback: if we captured a prior cache value, restore it. If there
+  // was no prior value (mutation fired before any successful fetch), the
+  // optimistic write is the only entry — drop it entirely so the next
+  // read fetches fresh from the server instead of trusting the
+  // never-confirmed optimistic value.
   const rollback = (prev: SuppressionsResponse | undefined) => {
-    if (prev !== undefined) qc.setQueryData(SUPPRESSIONS_QUERY_KEY, prev);
+    if (prev !== undefined) {
+      qc.setQueryData(SUPPRESSIONS_QUERY_KEY, prev);
+    } else {
+      qc.removeQueries({ queryKey: SUPPRESSIONS_QUERY_KEY });
+    }
+  };
+
+  // Always reconcile against the server on settle. We don't write the
+  // mutation's response into the cache directly: with a slow git
+  // backend and overlapping mutations, an earlier-started request can
+  // resolve last and overwrite newer optimistic state. Invalidating
+  // schedules one authoritative refetch — react-query dedupes
+  // concurrent fetches by key, so multiple in-flight mutations still
+  // converge to a single fresh read after the last one settles.
+  const onMutationSettled = () => {
+    qc.invalidateQueries({ queryKey: SUPPRESSIONS_QUERY_KEY });
   };
 
   const addMut = useMutation({
     mutationFn: (id: string) => apiAdd(id),
     onMutate: optimisticAdd,
     onError: (_err, _id, ctx) => rollback(ctx),
-    onSuccess: onMutationSuccess,
+    onSettled: onMutationSettled,
   });
   const removeMut = useMutation({
     mutationFn: (id: string) => apiRemove(id),
     onMutate: optimisticRemove,
     onError: (_err, _id, ctx) => rollback(ctx),
-    onSuccess: onMutationSuccess,
+    onSettled: onMutationSettled,
   });
 
   return {

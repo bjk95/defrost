@@ -44,16 +44,16 @@ func (p *progressBus) Reset() {
 }
 
 func (p *progressBus) Emit(ev ProgressEvent) {
+	// Hold the lock for the duration of the send loop. The sends are
+	// non-blocking (default branch drops to a slow subscriber) so this
+	// doesn't pessimize the loader. Holding the lock prevents a
+	// concurrent cancel from closing one of these channels between us
+	// snapshotting subs and sending — that race was a "send on closed
+	// channel" panic that aborted the in-flight /api/tests request.
 	p.mu.Lock()
+	defer p.mu.Unlock()
 	p.history = append(p.history, ev)
-	subs := make([]chan ProgressEvent, 0, len(p.subs))
 	for ch := range p.subs {
-		subs = append(subs, ch)
-	}
-	p.mu.Unlock()
-	for _, ch := range subs {
-		// Non-blocking: a slow subscriber drops events, never blocks
-		// the loader.
 		select {
 		case ch <- ev:
 		default:

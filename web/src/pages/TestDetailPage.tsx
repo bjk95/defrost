@@ -28,7 +28,7 @@ export function TestDetailPage() {
   if (!data) return null;
 
   const test = data.tests.find((t) => t.test_id === testId);
-  if (!test) return <div style={{ padding: 32 }}>Test not found.</div>;
+  if (!test) return <OrphanedTestState testId={testId} onBack={() => navigate("/")} />;
 
   return (
     <TestDetailInner
@@ -790,6 +790,82 @@ function SuppressionBanner({ onRemove }: { onRemove: () => void }) {
       >
         Remove
       </button>
+    </div>
+  );
+}
+
+// OrphanedTestState renders when a test_id resolves no rows in the
+// current /api/tests payload. The suppressions list is the most common
+// way to navigate here (a suppressed test that hasn't run in the recent
+// window, or whose name has changed). For suppressed orphans we offer
+// an inline "remove from suppressions" action so the user can clean up
+// without bouncing back to the suppressions page.
+function OrphanedTestState({ testId, onBack }: { testId: string; onBack: () => void }) {
+  const suppressions = useSuppressions();
+  const isSuppressed = suppressions.has(testId);
+  const isRemoving = suppressions.pendingRemoveId === testId;
+  const decoded = decodeTestId(testId);
+
+  return (
+    <div style={{ padding: "32px 0", maxWidth: 640 }}>
+      <div
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 6,
+          fontSize: 12,
+          color: "var(--fg-muted)",
+          padding: "6px 10px",
+          background: "var(--bg-subtle)",
+          border: "1px solid var(--border)",
+          borderRadius: 6,
+          marginBottom: 16,
+          cursor: "pointer",
+        }}
+        onClick={onBack}
+        role="button"
+      >
+        <Icon.ArrowLeft /> All tests
+      </div>
+      <h1
+        style={{
+          fontSize: 22,
+          fontWeight: 500,
+          letterSpacing: "-0.02em",
+          margin: "0 0 6px",
+          fontFamily: "var(--font-mono)",
+          wordBreak: "break-all",
+        }}
+      >
+        {decoded}
+      </h1>
+      <p style={{ color: "var(--fg-muted)", fontSize: 13, lineHeight: 1.55, margin: "0 0 20px" }}>
+        {isSuppressed
+          ? "This test is on the suppression list, but hasn't recorded a run in the recent window. It may have been renamed or removed from the suite."
+          : "No run history for this test in the recent window."}
+      </p>
+      {isSuppressed && (
+        <button
+          onClick={() => suppressions.remove(testId)}
+          disabled={isRemoving}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+            padding: "6px 12px",
+            fontSize: 12,
+            fontWeight: 500,
+            background: "var(--bg)",
+            color: "var(--fg)",
+            border: "1px solid var(--border)",
+            borderRadius: 6,
+            cursor: isRemoving ? "wait" : "pointer",
+            opacity: isRemoving ? 0.7 : 1,
+          }}
+        >
+          {isRemoving ? <>Removing…</> : <>Remove from suppression list</>}
+        </button>
+      )}
     </div>
   );
 }
