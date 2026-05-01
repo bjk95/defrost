@@ -87,11 +87,12 @@ func TestAdapterMatchesFormD(t *testing.T) {
 		wantWatchInScript bool
 	}{
 		{
-			name:         "npm test with scripts.test=vitest",
-			scripts:      map[string]string{"test": "vitest"},
-			cmd:          []string{"npm", "test"},
-			want:         true,
-			wantScriptOK: true,
+			name:              "npm test with scripts.test=vitest",
+			scripts:           map[string]string{"test": "vitest"},
+			cmd:               []string{"npm", "test"},
+			want:              true,
+			wantScriptOK:      false,
+			wantWatchInScript: true,
 		},
 		{
 			name:         "npm test with scripts.test=vitest run",
@@ -178,11 +179,12 @@ func TestAdapterMatchesFormD(t *testing.T) {
 			wantScriptOK: true,
 		},
 		{
-			name:         "yarn test with scripts.test=vitest",
-			scripts:      map[string]string{"test": "vitest"},
-			cmd:          []string{"yarn", "test"},
-			want:         true,
-			wantScriptOK: true,
+			name:              "yarn test with scripts.test=vitest",
+			scripts:           map[string]string{"test": "vitest"},
+			cmd:               []string{"yarn", "test"},
+			want:              true,
+			wantScriptOK:      false,
+			wantWatchInScript: true,
 		},
 		{
 			name:         "yarn run test",
@@ -538,6 +540,93 @@ func TestBuildArgs(t *testing.T) {
 			got := buildArgs(tc.cmd, tc.path, tc.piggyback)
 			if !reflect.DeepEqual(got, tc.want) {
 				t.Errorf("\ngot:  %v\nwant: %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// --- Bug fixes from PR #30 codex bot review ---
+
+func TestAdapterMatchesFormDBareVitestIsWatchTrigger(t *testing.T) {
+	// Bug P1: scripts.test = "vitest" (bare, no run) hangs in TTY because
+	// vitest defaults to watch mode. Treat as watchInScript so Run exits 2.
+	dir := t.TempDir()
+	t.Chdir(dir)
+	writePackageJSON(t, map[string]string{"test": "vitest"})
+
+	a := &Adapter{}
+	if !a.Matches([]string{"npm", "test"}) {
+		t.Fatal("expected matcher to recognize form D")
+	}
+	if a.scriptOK {
+		t.Errorf("scriptOK = true; bare 'vitest' should be treated as watch trigger")
+	}
+	if !a.watchInScript {
+		t.Errorf("watchInScript = false; want true for bare vitest")
+	}
+}
+
+func TestAdapterMatchesFormDExplicitDisableFlags(t *testing.T) {
+	// Bug P2: --watch=false / --no-watch should NOT trigger watch detection.
+	cases := []struct {
+		name    string
+		script  string
+		wantOK  bool
+		wantWIS bool
+	}{
+		{"vitest --watch=false", "vitest --watch=false", true, false},
+		{"vitest --watchAll=false", "vitest --watchAll=false", true, false},
+		{"vitest --ui=false", "vitest --ui=false", true, false},
+		{"vitest --no-watch", "vitest --no-watch", true, false},
+		{"vitest --no-watchAll", "vitest --no-watchAll", true, false},
+		{"vitest run --watch=false", "vitest run --watch=false", true, false},
+		// True is still a trigger.
+		{"vitest --watch=true (still a trigger)", "vitest --watch=true", false, true},
+		{"vitest --watch (still a trigger)", "vitest --watch", false, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Chdir(dir)
+			writePackageJSON(t, map[string]string{"test": tc.script})
+			a := &Adapter{}
+			if !a.Matches([]string{"npm", "test"}) {
+				t.Fatal("expected matcher to recognize form D")
+			}
+			if a.scriptOK != tc.wantOK {
+				t.Errorf("scriptOK = %v, want %v", a.scriptOK, tc.wantOK)
+			}
+			if a.watchInScript != tc.wantWIS {
+				t.Errorf("watchInScript = %v, want %v", a.watchInScript, tc.wantWIS)
+			}
+		})
+	}
+}
+
+func TestRunArgvWatchDisableFlags(t *testing.T) {
+	// Argv-side bug P2: --watch=false / --no-watch should NOT trigger watch
+	// rejection in Run.
+	cases := []struct {
+		name string
+		cmd  []string
+	}{
+		{"vitest --watch=false", []string{"vitest", "--watch=false"}},
+		{"vitest --watchAll=false", []string{"vitest", "--watchAll=false"}},
+		{"vitest --ui=false", []string{"vitest", "--ui=false"}},
+		{"vitest --no-watch", []string{"vitest", "--no-watch"}},
+		{"vitest run --watch=false", []string{"vitest", "run", "--watch=false"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a := &Adapter{}
+			a.Matches(tc.cmd)
+			stderr := captureStderr(t, func() {
+				_, _, _ = a.Run(tc.cmd)
+			})
+			// We don't care about exit code (the spawn will fail in test env)
+			// — just that we don't print the watch-rejection message.
+			if strings.Contains(stderr, "vitest in watch/UI mode can't be wrapped") {
+				t.Errorf("argv %v incorrectly rejected as watch mode; stderr: %q", tc.cmd, stderr)
 			}
 		})
 	}

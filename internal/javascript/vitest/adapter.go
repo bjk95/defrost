@@ -157,21 +157,67 @@ func (a *Adapter) matchScript(name string) bool {
 			return true
 		}
 	}
-	// Watch-trigger detection in script value.
+	// Watch detection: explicit watch flag/subcommand sets watchInScript.
+	// Bare `vitest` with no run/--no-watch token also enters watch mode in
+	// TTY, so we require an explicit single-run signal (`run` subcommand,
+	// `--no-watch`, or `--watch=false`-style disable) to call the script
+	// vitest-shaped. Without that signal, treat as watch trigger.
+	hasRun := false
 	for _, t := range tokens[i+1:] {
-		if t == "watch" || t == "--watch" || t == "--watchAll" || t == "--ui" {
-			a.scriptOK = false
-			a.watchInScript = true
-			return true
+		if t == "run" || isWatchDisableToken(t) {
+			hasRun = true
+			continue
 		}
-		if strings.HasPrefix(t, "--watch=") || strings.HasPrefix(t, "--watchAll=") || strings.HasPrefix(t, "--ui=") {
+		if t == "watch" || isWatchEnableFlag(t) {
 			a.scriptOK = false
 			a.watchInScript = true
 			return true
 		}
 	}
+	if !hasRun {
+		a.scriptOK = false
+		a.watchInScript = true
+		return true
+	}
 	a.scriptOK = true
 	return true
+}
+
+// isWatchDisableToken returns true if t is a flag form that explicitly
+// disables watch mode. Vitest accepts both --watch=false and --no-watch.
+// Treat --ui=false the same way: --ui implies watch in vitest, so its
+// negation is also a "definitely not watch" signal.
+func isWatchDisableToken(t string) bool {
+	switch t {
+	case "--no-watch", "--no-watchAll":
+		return true
+	}
+	if strings.HasPrefix(t, "--watch=") ||
+		strings.HasPrefix(t, "--watchAll=") ||
+		strings.HasPrefix(t, "--ui=") {
+		eq := strings.IndexByte(t, '=')
+		if eq < 0 {
+			return false
+		}
+		v := strings.ToLower(t[eq+1:])
+		return v == "false" || v == "0" || v == "no"
+	}
+	return false
+}
+
+// isWatchEnableFlag returns true if t is a flag form that enables watch
+// mode (or the UI, which implies watch). Used by argv and script
+// inspection.
+func isWatchEnableFlag(t string) bool {
+	if t == "--watch" || t == "--watchAll" || t == "--ui" {
+		return true
+	}
+	if strings.HasPrefix(t, "--watch=") ||
+		strings.HasPrefix(t, "--watchAll=") ||
+		strings.HasPrefix(t, "--ui=") {
+		return !isWatchDisableToken(t)
+	}
+	return false
 }
 
 func readPackageScript(name string) (string, bool) {
@@ -307,13 +353,10 @@ func detectWatchTriggerArgv(cmd []string) bool {
 		if t == "watch" {
 			return true
 		}
-		if t == "--watch" || t == "--watchAll" || t == "--ui" {
+		if isWatchEnableFlag(t) {
 			return true
 		}
-		if strings.HasPrefix(t, "--watch=") || strings.HasPrefix(t, "--watchAll=") || strings.HasPrefix(t, "--ui=") {
-			return true
-		}
-		if t == "run" {
+		if t == "run" || isWatchDisableToken(t) {
 			hasRun = true
 		}
 	}
