@@ -56,8 +56,16 @@ func HandleExecution(cmd []string, opts ExecOpts) int {
 	// ./package.json and would claim `yarn promptfoo eval` when scripts.promptfoo
 	// happens to be jest-shaped. Strict matchers go first.
 	reg.Register(&promptfoo.Adapter{})
-	reg.Register(&jest.Adapter{})
+	// vitest registers before jest because jest's matchScript returns true
+	// for *any* package-runner script form (then falls through to passthrough
+	// in Run when the script isn't jest-shaped). That permissive match would
+	// claim `npm test` even when scripts.test = "vitest run", preventing the
+	// vitest adapter from ever seeing the cmd. Vitest's matchScript is
+	// stricter — it returns false unless the script's head token is exactly
+	// `vitest` — so putting it first lets vitest scripts route correctly
+	// while non-vitest scripts fall through to jest's permissive path.
 	reg.Register(&vitest.Adapter{})
+	reg.Register(&jest.Adapter{})
 	// Passthrough must be registered last: it matches everything, so
 	// anything ahead of it gets first crack at recognising the cmd.
 	reg.Register(passthrough.Adapter{})
