@@ -1,37 +1,21 @@
-import { useCallback, useMemo, useState, useSyncExternalStore } from "react";
+import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { getTests } from "@/api";
 import {
   decodeTestId,
   fmt,
-  suppression,
   testStats,
-  type SuppressionEntry,
+  useSuppressions,
   type TestStats,
 } from "@/lib/utils";
 import type { Cell, TestRow } from "@/types";
-import { Avatar, StatusPill } from "@/components/Primitives";
+import { StatusPill } from "@/components/Primitives";
 import { Icon } from "@/components/Icons";
 import { SearchInput } from "@/components/Controls";
 
-function useSuppressionEntries(): SuppressionEntry[] {
-  const subscribe = useCallback((cb: () => void) => suppression.subscribe(cb), []);
-  // Stable snapshot: only return a new array when the entry set actually changes.
-  const snapshotRef = useMemo(() => ({ key: "", value: [] as SuppressionEntry[] }), []);
-  const get = useCallback(() => {
-    const next = suppression.entries();
-    const key = next.map((x) => x.test_id + "|" + x.added_at).join(",");
-    if (snapshotRef.key !== key) {
-      snapshotRef.key = key;
-      snapshotRef.value = next;
-    }
-    return snapshotRef.value;
-  }, [snapshotRef]);
-  return useSyncExternalStore(subscribe, get, get);
-}
-
-interface Row extends SuppressionEntry {
+interface Row {
+  test_id: string;
   test?: TestRow;
   stats?: TestStats;
   lastCell?: Cell;
@@ -39,7 +23,8 @@ interface Row extends SuppressionEntry {
 
 export function SuppressionsPage() {
   const navigate = useNavigate();
-  const items = useSuppressionEntries();
+  const suppressions = useSuppressions();
+  const items = suppressions.ids;
   const { data } = useQuery({ queryKey: ["tests"], queryFn: getTests });
   const [q, setQ] = useState("");
 
@@ -49,21 +34,31 @@ export function SuppressionsPage() {
     return m;
   }, [data]);
 
+  // While a remove is in flight the optimistic update has already
+  // filtered the row out of `items`. We re-add it for display so the
+  // row stays visible (with its spinner) until the mutation settles —
+  // otherwise the row vanishes on click and the loading state never
+  // gets a chance to render.
+  const displayedIds = useMemo(() => {
+    const out = [...items];
+    const pending = suppressions.pendingRemoveId;
+    if (pending && !out.includes(pending)) out.push(pending);
+    return out;
+  }, [items, suppressions.pendingRemoveId]);
+
   const rows = useMemo<Row[]>(() => {
     const needle = q.trim().toLowerCase();
-    return items
-      .map((entry) => {
-        const test = testById.get(entry.test_id);
+    return displayedIds
+      .map((id) => {
+        const test = testById.get(id);
         const stats = test ? testStats(test.cells) : undefined;
         const lastCell = test
           ? [...test.cells].reverse().find((c) => c.status !== "skip")
           : undefined;
-        return { ...entry, test, stats, lastCell };
+        return { test_id: id, test, stats, lastCell };
       })
-      .filter((r) =>
-        !needle || r.test_id.toLowerCase().includes(needle),
-      );
-  }, [items, q, testById]);
+      .filter((r) => !needle || r.test_id.toLowerCase().includes(needle));
+  }, [displayedIds, q, testById]);
 
   const onOpenTest = (testId: string) =>
     navigate(`/test?id=${encodeURIComponent(testId)}`);
@@ -107,7 +102,7 @@ export function SuppressionsPage() {
             color: "var(--fg-muted)",
           }}
         >
-          {items.length} {items.length === 1 ? "test" : "tests"}
+          {displayedIds.length} {displayedIds.length === 1 ? "test" : "tests"}
         </span>
       </div>
       <p
@@ -164,7 +159,7 @@ export function SuppressionsPage() {
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: "minmax(0,1fr) 90px 90px 80px 130px 150px 36px",
+            gridTemplateColumns: "minmax(0,1fr) 90px 90px 80px 36px",
             gap: 12,
             alignItems: "center",
             padding: "10px 16px",
@@ -181,12 +176,14 @@ export function SuppressionsPage() {
           <span style={{ textAlign: "right" }}>Last</span>
           <span style={{ textAlign: "right" }}>Fail rate</span>
           <span style={{ textAlign: "right" }}>p50</span>
-          <span>Suppressed</span>
-          <span>By</span>
           <span></span>
         </div>
 
-        {rows.length === 0 ? (
+        {suppressions.isLoading ? (
+          <LoadingState />
+        ) : suppressions.isError ? (
+          <ErrorState message={suppressions.error?.message ?? "Failed to load suppressions."} />
+        ) : rows.length === 0 ? (
           <EmptyState
             hasFilter={!!q.trim()}
             onGoTests={onGoTests}
@@ -197,8 +194,9 @@ export function SuppressionsPage() {
             <SuppressionRow
               key={r.test_id}
               row={r}
+              removing={suppressions.pendingRemoveId === r.test_id}
               onOpen={() => onOpenTest(r.test_id)}
-              onRemove={() => suppression.remove(r.test_id)}
+              onRemove={() => suppressions.remove(r.test_id)}
             />
           ))
         )}
@@ -228,10 +226,12 @@ export function SuppressionsPage() {
 
 function SuppressionRow({
   row,
+  removing,
   onOpen,
   onRemove,
 }: {
   row: Row;
+  removing: boolean;
   onOpen: () => void;
   onRemove: () => void;
 }) {
@@ -246,10 +246,6 @@ function SuppressionRow({
   const pkg = dot === -1 ? "" : decoded.slice(0, dot);
   const name = dot === -1 ? decoded : decoded.slice(dot + 1);
 
-  const relAdded = row.added_at ? fmt.relTime(row.added_at) : "—";
-  const absAdded = row.added_at ? fmt.absDate(row.added_at) : "";
-  const byLabel = row.by || "you";
-
   return (
     <div
       onMouseEnter={() => setHover(true)}
@@ -257,17 +253,18 @@ function SuppressionRow({
         setHover(false);
         setConfirming(false);
       }}
-      onClick={() => row.test && onOpen()}
+      onClick={removing ? undefined : onOpen}
       style={{
         display: "grid",
-        gridTemplateColumns: "minmax(0,1fr) 90px 90px 80px 130px 150px 36px",
+        gridTemplateColumns: "minmax(0,1fr) 90px 90px 80px 36px",
         gap: 12,
         alignItems: "center",
         padding: "10px 16px",
         borderBottom: "1px solid var(--border)",
-        background: hover ? "var(--bg-subtle)" : "transparent",
+        background: hover && !removing ? "var(--bg-subtle)" : "transparent",
         transition: "background var(--dur-fast) var(--ease-out)",
-        cursor: row.test ? "pointer" : "default",
+        cursor: removing ? "wait" : "pointer",
+        opacity: removing ? 0.55 : 1,
       }}
     >
       <div style={{ minWidth: 0, display: "flex", flexDirection: "column", gap: 2 }}>
@@ -325,46 +322,23 @@ function SuppressionRow({
         {stats ? fmt.duration(stats.p50) : "—"}
       </span>
 
-      <div style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
-        <span style={{ fontSize: 12, color: "var(--fg)" }}>{relAdded}</span>
-        <span
-          style={{
-            fontFamily: "var(--font-mono)",
-            fontSize: 10.5,
-            color: "var(--fg-subtle)",
-          }}
-        >
-          {absAdded}
-        </span>
-      </div>
-
-      <span
-        style={{
-          display: "inline-flex",
-          alignItems: "center",
-          gap: 6,
-          fontSize: 12,
-          color: "var(--fg-muted)",
-          minWidth: 0,
-        }}
-      >
-        <Avatar name={byLabel} size={18} />
-        <span
-          style={{
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-          }}
-        >
-          {byLabel}
-        </span>
-      </span>
-
       <div
         style={{ display: "flex", justifyContent: "flex-end" }}
         onClick={(e) => e.stopPropagation()}
       >
-        {confirming ? (
+        {removing ? (
+          <span
+            title="Removing…"
+            style={{
+              padding: 6,
+              display: "inline-flex",
+              alignItems: "center",
+              color: "var(--fg-muted)",
+            }}
+          >
+            <Spinner />
+          </span>
+        ) : confirming ? (
           <button
             onClick={onRemove}
             title="Confirm remove"
@@ -402,6 +376,66 @@ function SuppressionRow({
           </button>
         )}
       </div>
+    </div>
+  );
+}
+
+function Spinner() {
+  return (
+    <span
+      aria-hidden
+      style={{
+        display: "inline-block",
+        width: 12,
+        height: 12,
+        border: "1.5px solid currentColor",
+        borderTopColor: "transparent",
+        borderRadius: "50%",
+        animation: "defrostSuppressSpin 0.8s linear infinite",
+      }}
+    >
+      <style>{`@keyframes defrostSuppressSpin { to { transform: rotate(360deg); } }`}</style>
+    </span>
+  );
+}
+
+function LoadingState() {
+  return (
+    <div
+      style={{
+        padding: "48px 24px",
+        textAlign: "center",
+        color: "var(--fg-muted)",
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        gap: 12,
+      }}
+    >
+      <span style={{ color: "var(--fg-muted)" }}>
+        <Spinner />
+      </span>
+      <div style={{ fontSize: 13 }}>Loading suppressions…</div>
+      <div style={{ fontSize: 11, color: "var(--fg-subtle)" }}>
+        cloning data branch
+      </div>
+    </div>
+  );
+}
+
+function ErrorState({ message }: { message: string }) {
+  return (
+    <div
+      style={{
+        padding: "48px 24px",
+        textAlign: "center",
+        color: "var(--fg-muted)",
+      }}
+    >
+      <div style={{ fontSize: 13, color: "var(--danger)", marginBottom: 4 }}>
+        Failed to load suppressions
+      </div>
+      <div style={{ fontSize: 12, fontFamily: "var(--font-mono)" }}>{message}</div>
     </div>
   );
 }

@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
@@ -18,16 +19,61 @@ import (
 )
 
 // loaderFn is a package-level seam so tests stub the data load.
-var loaderFn = Load
+var loaderFn = LoadWithProgress
+
+// suppressionsBackendFn is the seam for the suppressions endpoints. Tests
+// override it to plug in an in-memory store; the default opens a fresh
+// persist.Backend per call so suppress writes always hit the data branch.
+var suppressionsBackendFn = func(opts persist.Options) suppressionsBackend {
+	return persist.New(opts)
+}
+
+// suppressionsBackend is the subset of persist.Backend the HTTP handlers
+// need. Narrowed so tests don't have to stub the full Backend interface.
+type suppressionsBackend interface {
+	GetSuppressions() ([]string, error)
+	UpdateSuppressions(mutate func([]string) []string, msg string) error
+}
+
+// dropBackendFn is the seam for the drop endpoints. Tests override it to
+// plug in an in-memory implementation; the default opens a fresh
+// persist.Backend per call.
+var dropBackendFn = func(opts persist.Options) dropBackend {
+	return persist.New(opts)
+}
+
+type dropBackend interface {
+	DropHistory(sel persist.DropSelector, confirm func(persist.DropPlan) bool) error
+}
 
 // New returns the http.Handler for `defrost serve`. It does not retain
 // any per-request state — each /api/* request loads the data branch via
-// loaderFn(opts).
+// loaderFn(opts). A single progress bus is shared across all requests
+// so the boot-screen SSE feed can stream events from the in-flight load.
 func New(opts persist.Options, assets fs.FS) http.Handler {
 	mux := http.NewServeMux()
+	bus := newProgressBus()
+
+	// loadMu serializes /api/tests so concurrent callers (multiple
+	// tabs, parallel CI hits) don't interleave events on the shared
+	// progress bus. The bus's history would otherwise be cleared
+	// mid-stream when a second loader called Reset, leaving the first
+	// SSE subscriber with an inconsistent log feed. Loads already
+	// dominate wall time with a cold git clone, so queueing has
+	// negligible additional cost.
+	var loadMu sync.Mutex
 
 	mux.HandleFunc("/api/tests", func(w http.ResponseWriter, r *http.Request) {
-		ds, err := loaderFn(opts)
+		loadMu.Lock()
+		bus.Reset()
+		ds, err := loaderFn(opts, bus.Emit)
+		// Publish the error event before releasing the lock so a queued
+		// loader can't call bus.Reset() between our Unlock and Emit and
+		// inherit our error in its history.
+		if err != nil {
+			bus.Emit(ProgressEvent{Phase: "error", Detail: err.Error()})
+		}
+		loadMu.Unlock()
 		if err != nil {
 			writeJSONError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -37,8 +83,48 @@ func New(opts persist.Options, assets fs.FS) http.Handler {
 		_ = json.NewEncoder(w).Encode(buildGridResponse(ds))
 	})
 
+	mux.HandleFunc("/api/loading/progress", loadingProgressHandler(bus))
+
+	mux.HandleFunc("/api/suppressions", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			handleGetSuppressions(w, opts)
+		case http.MethodPost:
+			handleAddSuppression(w, r, opts)
+		default:
+			w.Header().Set("Allow", "GET, POST")
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		}
+	})
+
+	mux.HandleFunc("/api/suppressions/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete {
+			w.Header().Set("Allow", "DELETE")
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		handleRemoveSuppression(w, r, opts)
+	})
+
+	mux.HandleFunc("/api/drop/plan", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", "GET")
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		handleDropPlan(w, r, opts)
+	})
+	mux.HandleFunc("/api/drop", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", "POST")
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		handleDrop(w, r, opts)
+	})
+
 	mux.HandleFunc("/api/metrics", func(w http.ResponseWriter, r *http.Request) {
-		ds, err := loaderFn(opts)
+		ds, err := loaderFn(opts, nil)
 		if err != nil {
 			writeJSONError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -66,7 +152,7 @@ func New(opts persist.Options, assets fs.FS) http.Handler {
 			http.NotFound(w, r)
 			return
 		}
-		ds, err := loaderFn(opts)
+		ds, err := loaderFn(opts, nil)
 		if err != nil {
 			writeJSONError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -86,6 +172,109 @@ func New(opts persist.Options, assets fs.FS) http.Handler {
 
 	mux.HandleFunc("/", spaHandler(assets))
 	return mux
+}
+
+type suppressionsResponse struct {
+	TestIDs []string `json:"test_ids"`
+}
+
+type addSuppressionRequest struct {
+	TestID string `json:"test_id"`
+}
+
+// On-disk and CLI use raw test names (e.g. `pkg/Path¬arg="x"`); the
+// HTTP wire format mirrors TestRow.test_id (persist.EncodeName-applied)
+// so the UI can use a single canonical id across /api/tests, routing,
+// and /api/suppressions. Translation lives at this HTTP boundary only.
+func encodeSuppressionIDs(raw []string) []string {
+	out := make([]string, 0, len(raw))
+	for _, id := range raw {
+		out = append(out, persist.EncodeName(id))
+	}
+	return out
+}
+
+func handleGetSuppressions(w http.ResponseWriter, opts persist.Options) {
+	be := suppressionsBackendFn(opts)
+	ids, err := be.GetSuppressions()
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(w).Encode(suppressionsResponse{TestIDs: encodeSuppressionIDs(ids)})
+}
+
+func handleAddSuppression(w http.ResponseWriter, r *http.Request, opts persist.Options) {
+	var req addSuppressionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	if req.TestID == "" {
+		writeJSONError(w, http.StatusBadRequest, "test_id is required")
+		return
+	}
+	rawID, err := persist.DecodeName(req.TestID)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid test_id encoding: "+err.Error())
+		return
+	}
+	be := suppressionsBackendFn(opts)
+	mutate := func(cur []string) []string { return append(cur, rawID) }
+	if err := be.UpdateSuppressions(mutate, "suppress: add "+rawID); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	ids, err := be.GetSuppressions()
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(suppressionsResponse{TestIDs: encodeSuppressionIDs(ids)})
+}
+
+func handleRemoveSuppression(w http.ResponseWriter, r *http.Request, opts persist.Options) {
+	const prefix = "/api/suppressions/"
+	rest := strings.TrimPrefix(r.URL.EscapedPath(), prefix)
+	if rest == "" || strings.Contains(rest, "/") {
+		http.NotFound(w, r)
+		return
+	}
+	encodedTID, err := url.PathUnescape(rest)
+	if err != nil || encodedTID == "" {
+		writeJSONError(w, http.StatusBadRequest, "invalid test id")
+		return
+	}
+	rawTID, err := persist.DecodeName(encodedTID)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid test_id encoding: "+err.Error())
+		return
+	}
+	be := suppressionsBackendFn(opts)
+	mutate := func(cur []string) []string {
+		out := make([]string, 0, len(cur))
+		for _, id := range cur {
+			if id != rawTID {
+				out = append(out, id)
+			}
+		}
+		return out
+	}
+	if err := be.UpdateSuppressions(mutate, "suppress: remove "+rawTID); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	ids, err := be.GetSuppressions()
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(suppressionsResponse{TestIDs: encodeSuppressionIDs(ids)})
 }
 
 type runDTO struct {

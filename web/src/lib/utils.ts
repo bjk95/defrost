@@ -41,12 +41,35 @@ export const fmt = {
       year: "numeric", month: "short", day: "numeric",
     });
   },
+  // absDateUTC formats a UTC-anchored timestamp without shifting it
+  // into the browser's local timezone. Used for drop cutoffs and run
+  // partition dates, where the date the user picks is the date the
+  // server applies — losing a day to TZ rollover can change the scope
+  // of a destructive operation.
+  absDateUTC(iso: string): string {
+    if (!iso) return "—";
+    const d = new Date(iso);
+    return d.toLocaleDateString(undefined, {
+      year: "numeric", month: "short", day: "numeric", timeZone: "UTC",
+    });
+  },
   initials(name?: string): string {
     if (!name) return "??";
     const parts = name.trim().split(/\s+/).filter(Boolean);
     if (parts.length === 0) return "??";
     if (parts.length === 1) return parts[0].slice(0, 2).toLowerCase();
     return (parts[0][0] + parts[parts.length - 1][0]).toLowerCase();
+  },
+  bytes(n: number): string {
+    if (n < 1024) return `${n} B`;
+    const units = ["KiB", "MiB", "GiB", "TiB"];
+    let u = -1;
+    let v = n;
+    do {
+      v /= 1024;
+      u++;
+    } while (v >= 1024 && u < units.length - 1);
+    return `${v.toFixed(1)} ${units[u]}`;
   },
 };
 
@@ -182,88 +205,136 @@ export function runCounts(tests: TestRow[], runId: string): RunCounts {
   return { pass, fail, skip, total, total_ms };
 }
 
-export interface SuppressionEntry {
-  test_id: string;
-  added_at: string;
-  by?: string;
+// Suppressions are persisted server-side in suppressions.json on the
+// _defrost branch. Source of truth is the server — the UI subscribes via
+// React Query and mutates through POST/DELETE.
+import { useMemo } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  addSuppression as apiAdd,
+  getSuppressions,
+  getTests,
+  removeSuppression as apiRemove,
+  type SuppressionsResponse,
+} from "@/api";
+
+export const SUPPRESSIONS_QUERY_KEY = ["suppressions"] as const;
+
+export interface SuppressionsView {
+  ids: string[];
+  set: Set<string>;
+  has: (id: string) => boolean;
+  count: number;
+  isLoading: boolean;
+  isError: boolean;
+  error: Error | null;
+  add: (id: string) => Promise<void>;
+  remove: (id: string) => Promise<void>;
+  pendingAddId: string | null;
+  pendingRemoveId: string | null;
 }
 
-const SUPPRESS_KEY = "defrost.suppressions.v2";
-const SUPPRESS_KEY_V1 = "defrost.suppressions.v1";
-type Listener = () => void;
+// useSuppressions exposes the server-backed suppression list along with
+// add/remove mutations. The list is cached, refetched on mount, and
+// optimistically updated on mutation start so the UI flips immediately
+// while the (slow) git push runs in the background. On mutation error
+// the optimistic change is rolled back.
+//
+// The fetch waits until /api/tests is no longer in flight so we don't
+// compete with the initial cold clone (git-backed suppression reads
+// also clone the data branch). Crucially we gate on isFetching, not
+// `data !== undefined` — if /api/tests fails we still want
+// suppressions to load so the Suppressions page and orphaned-test
+// cleanup remain reachable.
+export function useSuppressions(): SuppressionsView {
+  const qc = useQueryClient();
+  const testsCache = useQuery({
+    queryKey: ["tests"],
+    queryFn: getTests,
+    enabled: false,
+  });
+  const query = useQuery({
+    queryKey: SUPPRESSIONS_QUERY_KEY,
+    queryFn: getSuppressions,
+    staleTime: 60_000,
+    enabled: !testsCache.isFetching,
+  });
+  const ids = query.data?.test_ids ?? [];
+  const set = useMemo(() => new Set(ids), [ids]);
 
-function loadInitial(): Map<string, SuppressionEntry> {
-  const out = new Map<string, SuppressionEntry>();
-  if (typeof localStorage === "undefined") return out;
-  try {
-    const raw = JSON.parse(localStorage.getItem(SUPPRESS_KEY) || "[]");
-    if (Array.isArray(raw)) {
-      for (const item of raw) {
-        if (item && typeof item === "object" && typeof item.test_id === "string") {
-          out.set(item.test_id, {
-            test_id: item.test_id,
-            added_at: typeof item.added_at === "string" ? item.added_at : "",
-            by: typeof item.by === "string" ? item.by : undefined,
-          });
-        }
-      }
+  const optimisticAdd = async (id: string) => {
+    await qc.cancelQueries({ queryKey: SUPPRESSIONS_QUERY_KEY });
+    const prev = qc.getQueryData<SuppressionsResponse>(SUPPRESSIONS_QUERY_KEY);
+    qc.setQueryData<SuppressionsResponse>(SUPPRESSIONS_QUERY_KEY, (old) => ({
+      test_ids: [...(old?.test_ids ?? []).filter((x) => x !== id), id],
+    }));
+    return prev;
+  };
+
+  const optimisticRemove = async (id: string) => {
+    await qc.cancelQueries({ queryKey: SUPPRESSIONS_QUERY_KEY });
+    const prev = qc.getQueryData<SuppressionsResponse>(SUPPRESSIONS_QUERY_KEY);
+    qc.setQueryData<SuppressionsResponse>(SUPPRESSIONS_QUERY_KEY, (old) => ({
+      test_ids: (old?.test_ids ?? []).filter((x) => x !== id),
+    }));
+    return prev;
+  };
+
+  // Rollback: if we captured a prior cache value, restore it. If there
+  // was no prior value (mutation fired before any successful fetch), the
+  // optimistic write is the only entry — drop it entirely so the next
+  // read fetches fresh from the server instead of trusting the
+  // never-confirmed optimistic value.
+  const rollback = (prev: SuppressionsResponse | undefined) => {
+    if (prev !== undefined) {
+      qc.setQueryData(SUPPRESSIONS_QUERY_KEY, prev);
+    } else {
+      qc.removeQueries({ queryKey: SUPPRESSIONS_QUERY_KEY });
     }
-  } catch { /* ignored */ }
-  if (out.size === 0) {
-    try {
-      const v1 = JSON.parse(localStorage.getItem(SUPPRESS_KEY_V1) || "[]");
-      if (Array.isArray(v1)) {
-        for (const id of v1) {
-          if (typeof id === "string") {
-            out.set(id, { test_id: id, added_at: "", by: undefined });
-          }
-        }
-      }
-    } catch { /* ignored */ }
-  }
-  return out;
-}
+  };
 
-function makeSuppressionStore() {
-  const entries = loadInitial();
-  const listeners = new Set<Listener>();
-  function persist() {
-    if (typeof localStorage === "undefined") return;
-    try {
-      localStorage.setItem(SUPPRESS_KEY, JSON.stringify([...entries.values()]));
-    } catch { /* ignored */ }
-  }
-  function emit() { for (const l of listeners) l(); }
+  // Always reconcile against the server on settle. We don't write the
+  // mutation's response into the cache directly: with a slow git
+  // backend and overlapping mutations, an earlier-started request can
+  // resolve last and overwrite newer optimistic state. Invalidating
+  // schedules one authoritative refetch — react-query dedupes
+  // concurrent fetches by key, so multiple in-flight mutations still
+  // converge to a single fresh read after the last one settles.
+  const onMutationSettled = () => {
+    qc.invalidateQueries({ queryKey: SUPPRESSIONS_QUERY_KEY });
+  };
+
+  const addMut = useMutation({
+    mutationFn: (id: string) => apiAdd(id),
+    onMutate: optimisticAdd,
+    onError: (_err, _id, ctx) => rollback(ctx),
+    onSettled: onMutationSettled,
+  });
+  const removeMut = useMutation({
+    mutationFn: (id: string) => apiRemove(id),
+    onMutate: optimisticRemove,
+    onError: (_err, _id, ctx) => rollback(ctx),
+    onSettled: onMutationSettled,
+  });
+
   return {
-    has(id: string) { return entries.has(id); },
-    list(): string[] { return [...entries.keys()]; },
-    entries(): SuppressionEntry[] {
-      // newest first
-      return [...entries.values()].sort((a, b) => {
-        if (a.added_at === b.added_at) return 0;
-        if (!a.added_at) return 1;
-        if (!b.added_at) return -1;
-        return b.added_at.localeCompare(a.added_at);
-      });
+    ids,
+    set,
+    has: (id: string) => set.has(id),
+    count: ids.length,
+    isLoading: query.isLoading,
+    isError: query.isError,
+    error: (query.error as Error | null) ?? null,
+    add: async (id: string) => {
+      await addMut.mutateAsync(id);
     },
-    count(): number { return entries.size; },
-    add(id: string, by?: string) {
-      if (entries.has(id)) return;
-      entries.set(id, { test_id: id, added_at: new Date().toISOString(), by });
-      persist();
-      emit();
+    remove: async (id: string) => {
+      await removeMut.mutateAsync(id);
     },
-    remove(id: string) {
-      if (!entries.has(id)) return;
-      entries.delete(id);
-      persist();
-      emit();
-    },
-    subscribe(fn: Listener) { listeners.add(fn); return () => { listeners.delete(fn); }; },
+    pendingAddId: addMut.isPending ? (addMut.variables as string | undefined) ?? null : null,
+    pendingRemoveId: removeMut.isPending ? (removeMut.variables as string | undefined) ?? null : null,
   };
 }
-
-export const suppression = makeSuppressionStore();
 
 export const cn = (...xs: Array<string | false | null | undefined>) =>
   xs.filter(Boolean).join(" ");

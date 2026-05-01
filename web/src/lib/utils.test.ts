@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect } from "vitest";
 import {
   fmt,
   testStats,
@@ -8,7 +8,6 @@ import {
   cellsByRun,
   worstStatus,
   cn,
-  suppression,
 } from "./utils";
 import type { Cell, TestRow } from "@/types";
 
@@ -154,28 +153,7 @@ describe("cn", () => {
   it("empty -> empty", () => expect(cn()).toBe(""));
 });
 
-describe("suppression store", () => {
-  beforeEach(() => {
-    localStorage.clear();
-  });
-  afterEach(() => {
-    localStorage.clear();
-  });
-
-  it("add/has/remove flow", () => {
-    const id = "pkg.TestX";
-    expect(suppression.has(id)).toBe(false);
-    suppression.add(id, "alice");
-    expect(suppression.has(id)).toBe(true);
-    suppression.remove(id);
-    expect(suppression.has(id)).toBe(false);
-  });
-
-  it("subscribers are notified", () => {
-    const fn = vi.fn();
-    const unsub = suppression.subscribe(fn);
-    suppression.add("pkg.TestY");
-    expect(fn).toHaveBeenCalled();
-    unsub();
-  });
-});
+// The localStorage-backed `suppression` store was replaced with a
+// React Query hook (useSuppressions) backed by /api/suppressions. The
+// equivalent behavior is now exercised end-to-end in
+// internal/serve/suppressions_test.go.

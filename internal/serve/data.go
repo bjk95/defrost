@@ -28,20 +28,36 @@ type Dataset struct {
 
 // persistLoadAll is a package-level seam so tests can stub the data
 // source without going through git. Default impl calls through the
-// Backend selected by the persist.Options.
-var persistLoadAll = func(opts persist.Options) ([]*tracepb.ResourceSpans, map[string][]*tracepb.ResourceSpans, error) {
-	return persist.New(opts).LoadAll()
+// Backend selected by the persist.Options. The progress callback is
+// forwarded so the boot-screen SSE feed can stream real phase events.
+var persistLoadAll = func(opts persist.Options, progress persist.ProgressFn) ([]*tracepb.ResourceSpans, map[string][]*tracepb.ResourceSpans, error) {
+	return persist.New(opts).LoadAllWithProgress(progress)
 }
 
 // persistLoadAllMetrics is the metrics seam, parallel to persistLoadAll.
-var persistLoadAllMetrics = func(opts persist.Options) ([]*metricspb.ResourceMetrics, error) {
-	return persist.New(opts).LoadAllMetrics()
+var persistLoadAllMetrics = func(opts persist.Options, progress persist.ProgressFn) ([]*metricspb.ResourceMetrics, error) {
+	return persist.New(opts).LoadAllMetricsWithProgress(progress)
 }
 
 // Load reads the data branch and returns a sorted, capped Dataset suitable
 // for serving over HTTP.
 func Load(opts persist.Options) (Dataset, error) {
-	roots, byName, err := persistLoadAll(opts)
+	return LoadWithProgress(opts, nil)
+}
+
+// LoadWithProgress is Load with phase boundary events streamed to emit
+// (connect → clone → spans → parse → metrics → index → ready). Pass nil
+// for a silent load (equivalent to Load). Used by the boot-screen SSE
+// handler.
+func LoadWithProgress(opts persist.Options, emit ProgressEmitter) (Dataset, error) {
+	if emit == nil {
+		emit = func(ProgressEvent) {}
+	}
+	emit(ProgressEvent{Phase: "connect", Detail: "git ls-remote origin"})
+	progressFn := func(phase, detail, stream string) {
+		emit(ProgressEvent{Phase: phase, Detail: detail, Stream: stream})
+	}
+	roots, byName, err := persistLoadAll(opts, progressFn)
 	if err != nil {
 		return Dataset{}, err
 	}
@@ -80,11 +96,13 @@ func Load(opts persist.Options) (Dataset, error) {
 		}
 	}
 
-	metrics, err := persistLoadAllMetrics(opts)
+	metrics, err := persistLoadAllMetrics(opts, progressFn)
 	if err != nil {
 		return Dataset{}, err
 	}
 
-	return Dataset{Roots: roots, TestSpans: filtered, Metrics: metrics}, nil
+	emit(ProgressEvent{Phase: "index", Detail: "grouping by encoded test name"})
+	ds := Dataset{Roots: roots, TestSpans: filtered, Metrics: metrics}
+	emit(ProgressEvent{Phase: "ready", Detail: "dashboard online"})
+	return ds, nil
 }
-

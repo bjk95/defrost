@@ -1,18 +1,12 @@
-import { useCallback, useMemo, useState, useSyncExternalStore } from "react";
+import { useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { getTests, getTestRun } from "@/api";
-import { decodeTestId, fmt, suppression, testStats } from "@/lib/utils";
+import { decodeTestId, fmt, testStats, useSuppressions } from "@/lib/utils";
 import type { Cell, RunSummary } from "@/types";
 import { Avatar, SectionLabel, StatusPill } from "@/components/Primitives";
 import { Icon } from "@/components/Icons";
 import { DurationChart, type ChartPoint } from "@/components/DurationChart";
-
-function useSuppression(testId: string) {
-  const subscribe = useCallback((cb: () => void) => suppression.subscribe(cb), []);
-  const get = useCallback(() => suppression.has(testId), [testId]);
-  return useSyncExternalStore(subscribe, get, get);
-}
 
 export function TestDetailPage() {
   const [searchParams] = useSearchParams();
@@ -34,7 +28,7 @@ export function TestDetailPage() {
   if (!data) return null;
 
   const test = data.tests.find((t) => t.test_id === testId);
-  if (!test) return <div style={{ padding: 32 }}>Test not found.</div>;
+  if (!test) return <OrphanedTestState testId={testId} onBack={() => navigate("/")} />;
 
   return (
     <TestDetailInner
@@ -62,7 +56,10 @@ function TestDetailInner({
   onBack: () => void;
   onOpenRun: (rid: string) => void;
 }) {
-  const isSuppressed = useSuppression(testId);
+  const suppressions = useSuppressions();
+  const isSuppressed = suppressions.has(testId);
+  const isAddingThis = suppressions.pendingAddId === testId;
+  const isRemovingThis = suppressions.pendingRemoveId === testId;
 
   const points: ChartPoint[] = useMemo(() => {
     const byRun = new Map(cells.map((c) => [c.run_id, c] as const));
@@ -145,12 +142,14 @@ function TestDetailInner({
         <div style={{ flex: 1 }} />
         <SuppressionAction
           suppressed={isSuppressed}
-          onAdd={() => suppression.add(testId)}
-          onRemove={() => suppression.remove(testId)}
+          pendingAdd={isAddingThis}
+          pendingRemove={isRemovingThis}
+          onAdd={() => suppressions.add(testId)}
+          onRemove={() => suppressions.remove(testId)}
         />
       </div>
 
-      {isSuppressed && <SuppressionBanner onRemove={() => suppression.remove(testId)} />}
+      {isSuppressed && <SuppressionBanner onRemove={() => suppressions.remove(testId)} />}
 
       <div
         style={{
@@ -609,15 +608,46 @@ function RunHistoryTable({
 
 function SuppressionAction({
   suppressed,
+  pendingAdd,
+  pendingRemove,
   onAdd,
   onRemove,
 }: {
   suppressed: boolean;
+  pendingAdd: boolean;
+  pendingRemove: boolean;
   onAdd: () => void;
   onRemove: () => void;
 }) {
   const [hover, setHover] = useState(false);
   const [confirming, setConfirming] = useState(false);
+
+  // While a mutation is in flight render a unified pending button whose
+  // verb matches the action the user actually triggered. This avoids the
+  // optimistic-flip of `suppressed` from inverting the label.
+  if (pendingAdd || pendingRemove) {
+    return (
+      <button
+        disabled
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 6,
+          padding: "6px 12px",
+          fontSize: 12,
+          fontWeight: 500,
+          background: "var(--bg)",
+          color: "var(--fg-muted)",
+          border: "1px solid var(--border)",
+          borderRadius: 6,
+          cursor: "wait",
+          opacity: 0.7,
+        }}
+      >
+        <Spinner /> {pendingAdd ? "Adding…" : "Removing…"}
+      </button>
+    );
+  }
 
   if (suppressed) {
     return (
@@ -706,6 +736,25 @@ function SuppressionAction({
   );
 }
 
+function Spinner() {
+  return (
+    <span
+      aria-hidden
+      style={{
+        display: "inline-block",
+        width: 12,
+        height: 12,
+        border: "1.5px solid currentColor",
+        borderTopColor: "transparent",
+        borderRadius: "50%",
+        animation: "defrostSuppressSpin 0.8s linear infinite",
+      }}
+    >
+      <style>{`@keyframes defrostSuppressSpin { to { transform: rotate(360deg); } }`}</style>
+    </span>
+  );
+}
+
 function SuppressionBanner({ onRemove }: { onRemove: () => void }) {
   return (
     <div
@@ -741,6 +790,82 @@ function SuppressionBanner({ onRemove }: { onRemove: () => void }) {
       >
         Remove
       </button>
+    </div>
+  );
+}
+
+// OrphanedTestState renders when a test_id resolves no rows in the
+// current /api/tests payload. The suppressions list is the most common
+// way to navigate here (a suppressed test that hasn't run in the recent
+// window, or whose name has changed). For suppressed orphans we offer
+// an inline "remove from suppressions" action so the user can clean up
+// without bouncing back to the suppressions page.
+function OrphanedTestState({ testId, onBack }: { testId: string; onBack: () => void }) {
+  const suppressions = useSuppressions();
+  const isSuppressed = suppressions.has(testId);
+  const isRemoving = suppressions.pendingRemoveId === testId;
+  const decoded = decodeTestId(testId);
+
+  return (
+    <div style={{ padding: "32px 0", maxWidth: 640 }}>
+      <div
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 6,
+          fontSize: 12,
+          color: "var(--fg-muted)",
+          padding: "6px 10px",
+          background: "var(--bg-subtle)",
+          border: "1px solid var(--border)",
+          borderRadius: 6,
+          marginBottom: 16,
+          cursor: "pointer",
+        }}
+        onClick={onBack}
+        role="button"
+      >
+        <Icon.ArrowLeft /> All tests
+      </div>
+      <h1
+        style={{
+          fontSize: 22,
+          fontWeight: 500,
+          letterSpacing: "-0.02em",
+          margin: "0 0 6px",
+          fontFamily: "var(--font-mono)",
+          wordBreak: "break-all",
+        }}
+      >
+        {decoded}
+      </h1>
+      <p style={{ color: "var(--fg-muted)", fontSize: 13, lineHeight: 1.55, margin: "0 0 20px" }}>
+        {isSuppressed
+          ? "This test is on the suppression list, but hasn't recorded a run in the recent window. It may have been renamed or removed from the suite."
+          : "No run history for this test in the recent window."}
+      </p>
+      {isSuppressed && (
+        <button
+          onClick={() => suppressions.remove(testId)}
+          disabled={isRemoving}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+            padding: "6px 12px",
+            fontSize: 12,
+            fontWeight: 500,
+            background: "var(--bg)",
+            color: "var(--fg)",
+            border: "1px solid var(--border)",
+            borderRadius: 6,
+            cursor: isRemoving ? "wait" : "pointer",
+            opacity: isRemoving ? 0.7 : 1,
+          }}
+        >
+          {isRemoving ? <>Removing…</> : <>Remove from suppression list</>}
+        </button>
+      )}
     </div>
   );
 }

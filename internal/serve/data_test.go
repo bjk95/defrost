@@ -35,7 +35,7 @@ func TestLoad_SortsRunsNewestFirstAndCapsAtFifty(t *testing.T) {
 	}
 
 	prevLoadAll := persistLoadAll
-	persistLoadAll = func(_ persist.Options) ([]*tracepb.ResourceSpans, map[string][]*tracepb.ResourceSpans, error) {
+	persistLoadAll = func(_ persist.Options, _ persist.ProgressFn) ([]*tracepb.ResourceSpans, map[string][]*tracepb.ResourceSpans, error) {
 		return roots, byName, nil
 	}
 	defer func() { persistLoadAll = prevLoadAll }()
@@ -105,13 +105,13 @@ func TestLoad_PassesMetricsThroughUnfiltered(t *testing.T) {
 	}
 
 	prevSpans := persistLoadAll
-	persistLoadAll = func(_ persist.Options) ([]*tracepb.ResourceSpans, map[string][]*tracepb.ResourceSpans, error) {
+	persistLoadAll = func(_ persist.Options, _ persist.ProgressFn) ([]*tracepb.ResourceSpans, map[string][]*tracepb.ResourceSpans, error) {
 		return roots, nil, nil
 	}
 	defer func() { persistLoadAll = prevSpans }()
 
 	prevMetrics := persistLoadAllMetrics
-	persistLoadAllMetrics = func(_ persist.Options) ([]*metricspb.ResourceMetrics, error) {
+	persistLoadAllMetrics = func(_ persist.Options, _ persist.ProgressFn) ([]*metricspb.ResourceMetrics, error) {
 		return []*metricspb.ResourceMetrics{withExemplar, noExemplar}, nil
 	}
 	defer func() { persistLoadAllMetrics = prevMetrics }()

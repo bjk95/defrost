@@ -13,9 +13,14 @@ import (
 
 // DropSelector chooses which signal directories to drop. At least one
 // flag must be true; both true means "drop everything".
+//
+// BeforeUTC, when non-zero, scopes the drop to runs whose YYYY/MM/DD
+// partition is strictly before the cutoff. Files dated >= the cutoff
+// are kept. Zero value drops every file matching the selector.
 type DropSelector struct {
 	DropTraces  bool
 	DropMetrics bool
+	BeforeUTC   time.Time
 }
 
 // DropPlan is the inventory shown to the user before a drop is executed.
@@ -117,15 +122,8 @@ func (b *gitBackend) DropHistory(sel DropSelector, confirm func(DropPlan) bool) 
 	if err := configureBotIdentity(workDir); err != nil {
 		return err
 	}
-	if sel.DropTraces {
-		if err := os.RemoveAll(filepath.Join(workDir, "traces")); err != nil {
-			return fmt.Errorf("remove traces: %w", err)
-		}
-	}
-	if sel.DropMetrics {
-		if err := os.RemoveAll(filepath.Join(workDir, "metrics")); err != nil {
-			return fmt.Errorf("remove metrics: %w", err)
-		}
+	if err := dropSignalFiles(workDir, sel); err != nil {
+		return err
 	}
 
 	// Build a single orphan commit on a fresh branch, then force-push it
@@ -171,23 +169,25 @@ func (b *fileBackend) DropHistory(sel DropSelector, confirm func(DropPlan) bool)
 		return nil
 	}
 
-	if sel.DropTraces {
-		if err := os.RemoveAll(filepath.Join(b.dir, "traces")); err != nil {
-			return fmt.Errorf("remove traces: %w", err)
-		}
-	}
-	if sel.DropMetrics {
-		if err := os.RemoveAll(filepath.Join(b.dir, "metrics")); err != nil {
-			return fmt.Errorf("remove metrics: %w", err)
-		}
-	}
-	return nil
+	return dropSignalFiles(b.dir, sel)
 }
 
 func buildDropPlan(dir string, sel DropSelector) DropPlan {
 	plan := DropPlan{Sel: sel}
-	plan.TraceFiles, plan.TraceBytes = inventorySignalDir(filepath.Join(dir, "traces"))
-	plan.MetricFiles, plan.MetricBytes = inventorySignalDir(filepath.Join(dir, "metrics"))
+	// The cutoff only narrows files for signals we're actually dropping.
+	// A "preserved" signal in a mixed-scope drop reports its TOTAL file
+	// count regardless of cutoff — otherwise the UI's
+	// "preserved · N files, X KiB" line underreports because files
+	// on/after the cutoff would be excluded.
+	var traceCutoff, metricCutoff time.Time
+	if sel.DropTraces {
+		traceCutoff = sel.BeforeUTC
+	}
+	if sel.DropMetrics {
+		metricCutoff = sel.BeforeUTC
+	}
+	plan.TraceFiles, plan.TraceBytes = inventorySignalDir(filepath.Join(dir, "traces"), traceCutoff)
+	plan.MetricFiles, plan.MetricBytes = inventorySignalDir(filepath.Join(dir, "metrics"), metricCutoff)
 	plan.OldestRunUTC, plan.NewestRunUTC = dateRangeFromPartitions(dir)
 	if ids, err := readSuppressionsFile(dir); err == nil {
 		plan.SuppressionsN = len(ids)
@@ -195,7 +195,44 @@ func buildDropPlan(dir string, sel DropSelector) DropPlan {
 	return plan
 }
 
-func inventorySignalDir(dir string) (int, int64) {
+// dropSignalFiles applies sel against the working tree at root: when
+// sel.BeforeUTC is zero each chosen signal directory is removed
+// wholesale; when set only files dated strictly before the cutoff are
+// removed and any directories that became empty are pruned.
+func dropSignalFiles(root string, sel DropSelector) error {
+	tracesDir := filepath.Join(root, "traces")
+	metricsDir := filepath.Join(root, "metrics")
+	if sel.BeforeUTC.IsZero() {
+		if sel.DropTraces {
+			if err := os.RemoveAll(tracesDir); err != nil {
+				return fmt.Errorf("remove traces: %w", err)
+			}
+		}
+		if sel.DropMetrics {
+			if err := os.RemoveAll(metricsDir); err != nil {
+				return fmt.Errorf("remove metrics: %w", err)
+			}
+		}
+		return nil
+	}
+	if sel.DropTraces {
+		if err := removeSignalFilesBefore(tracesDir, sel.BeforeUTC); err != nil {
+			return fmt.Errorf("remove traces before %s: %w", sel.BeforeUTC.Format("2006-01-02"), err)
+		}
+	}
+	if sel.DropMetrics {
+		if err := removeSignalFilesBefore(metricsDir, sel.BeforeUTC); err != nil {
+			return fmt.Errorf("remove metrics before %s: %w", sel.BeforeUTC.Format("2006-01-02"), err)
+		}
+	}
+	return nil
+}
+
+// inventorySignalDir reports the file count and total bytes under dir
+// that *would be dropped*. If beforeUTC is zero every signal file
+// counts; otherwise only files whose YYYY/MM/DD path partition is
+// strictly before the cutoff count.
+func inventorySignalDir(dir string, beforeUTC time.Time) (int, int64) {
 	var n int
 	var bytes int64
 	_ = filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
@@ -211,6 +248,16 @@ func inventorySignalDir(dir string) (int, int64) {
 		if !strings.HasSuffix(d.Name(), fileSuffix) {
 			return nil
 		}
+		if !beforeUTC.IsZero() {
+			rel, rerr := filepath.Rel(dir, path)
+			if rerr != nil {
+				return nil
+			}
+			t, ok := partitionDateFromRel(rel)
+			if !ok || !t.Before(beforeUTC) {
+				return nil
+			}
+		}
 		n++
 		if info, ierr := d.Info(); ierr == nil {
 			bytes += info.Size()
@@ -218,6 +265,84 @@ func inventorySignalDir(dir string) (int, int64) {
 		return nil
 	})
 	return n, bytes
+}
+
+// partitionDateFromRel parses YYYY/MM/DD/<id>.otlp.pb.zst into a UTC
+// midnight timestamp. Returns ok=false for any path that doesn't match
+// the partitioning scheme — those files are conservatively kept by the
+// before-cutoff filter.
+func partitionDateFromRel(rel string) (time.Time, bool) {
+	parts := strings.Split(rel, string(filepath.Separator))
+	if len(parts) < 4 {
+		return time.Time{}, false
+	}
+	y, e1 := strconv.Atoi(parts[0])
+	m, e2 := strconv.Atoi(parts[1])
+	day, e3 := strconv.Atoi(parts[2])
+	if e1 != nil || e2 != nil || e3 != nil {
+		return time.Time{}, false
+	}
+	return time.Date(y, time.Month(m), day, 0, 0, 0, 0, time.UTC), true
+}
+
+// removeSignalFilesBefore deletes only files under dir whose YYYY/MM/DD
+// partition is strictly before beforeUTC, then prunes any directories
+// that became empty. Used by DropHistory when sel.BeforeUTC is set so
+// the partial-drop case still produces a clean tree to commit.
+func removeSignalFilesBefore(dir string, beforeUTC time.Time) error {
+	if _, err := os.Stat(dir); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d == nil || d.IsDir() {
+			return nil
+		}
+		if !strings.HasSuffix(d.Name(), fileSuffix) {
+			return nil
+		}
+		rel, rerr := filepath.Rel(dir, path)
+		if rerr != nil {
+			return nil
+		}
+		t, ok := partitionDateFromRel(rel)
+		if !ok || !t.Before(beforeUTC) {
+			return nil
+		}
+		return os.Remove(path)
+	})
+	if err != nil {
+		return err
+	}
+	return pruneEmptyDirs(dir)
+}
+
+// pruneEmptyDirs removes every empty directory under root, leaving root
+// itself in place even if it ends up empty.
+func pruneEmptyDirs(root string) error {
+	var dirs []string
+	if err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d == nil || !d.IsDir() {
+			return nil
+		}
+		dirs = append(dirs, p)
+		return nil
+	}); err != nil {
+		return err
+	}
+	// Walk parents-last so children get a chance to be removed first.
+	for i := len(dirs) - 1; i >= 0; i-- {
+		if dirs[i] == root {
+			continue
+		}
+		entries, err := os.ReadDir(dirs[i])
+		if err == nil && len(entries) == 0 {
+			_ = os.Remove(dirs[i])
+		}
+	}
+	return nil
 }
 
 func dateRangeFromPartitions(workDir string) (oldest, newest time.Time) {
