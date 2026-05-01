@@ -1,4 +1,4 @@
-package jest
+package parser
 
 import (
 	"bytes"
