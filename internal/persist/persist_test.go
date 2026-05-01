@@ -414,29 +414,6 @@ func TestPersist_RequiresOriginByDefault(t *testing.T) {
 	}
 }
 
-func TestPersist_LocalOnlyNoRemote(t *testing.T) {
-	requireGit(t)
-	dir := t.TempDir()
-	gitMust(t, "", "init", "-b", "main", dir)
-	gitMust(t, dir, "config", "user.email", "t@example.com")
-	gitMust(t, dir, "config", "user.name", "t")
-	gitMust(t, dir, "commit", "--allow-empty", "-m", "init")
-
-	run := newRunContext("local-run", "abc123", "main")
-	traces := WrapSpansInResource(run.Resource, []*tracepb.Span{NewRootSpan(run), makeTestSpan(run, "p/TestA", tracepb.Status_STATUS_CODE_OK)})
-	if err := New(Options{RepoDir: dir, NoRemote: true}).InsertNewRun(traces, nil); err != nil {
-		t.Fatalf("InsertNewRun (no-remote): %v", err)
-	}
-
-	got, err := New(Options{RepoDir: dir, NoRemote: true}).GetTestHistory("p/TestA")
-	if err != nil {
-		t.Fatalf("GetTestHistory: %v", err)
-	}
-	if len(got) != 1 {
-		t.Errorf("want 1 history row, got %d", len(got))
-	}
-}
-
 func TestPersist_DevModeWritesScratchDirAndSkipsGit(t *testing.T) {
 	requireGit(t)
 	dir := t.TempDir()

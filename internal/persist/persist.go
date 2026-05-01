@@ -57,7 +57,6 @@ type Options struct {
 	RepoDir    string
 	DataBranch string // "" → DefaultDataBranch
 	AuthToken  string
-	NoRemote   bool
 	Dev        bool
 }
 
@@ -105,6 +104,11 @@ type Backend interface {
 	// per-run bundling under WrapMetricsInResource. Returns nil when
 	// there is no metrics data on disk.
 	LoadAllMetrics() ([]*metricspb.ResourceMetrics, error)
+
+	// DropHistory inventories the data branch and (after confirm returns
+	// true) rewrites it via a single orphan commit force-pushed with
+	// --force-with-lease. See drop.go for full semantics.
+	DropHistory(sel DropSelector, confirm func(DropPlan) bool) error
 }
 
 // New returns the Backend implied by opts. Dev mode selects the local
@@ -1107,9 +1111,6 @@ func runGit(dir string, args ...string) (string, error) {
 }
 
 func resolveTargetURL(opts Options) (string, error) {
-	if opts.NoRemote {
-		return localGitDir(opts.RepoDir)
-	}
 	return readOriginURL(opts.RepoDir)
 }
 
@@ -1126,17 +1127,6 @@ func readOriginURL(repoDir string) (string, error) {
 		return "", ErrNoOrigin
 	}
 	return out, nil
-}
-
-func localGitDir(repoDir string) (string, error) {
-	out, err := runGit(repoDir, "rev-parse", "--git-common-dir")
-	if err != nil {
-		return "", err
-	}
-	if !filepath.IsAbs(out) {
-		out = filepath.Join(repoDir, out)
-	}
-	return filepath.Abs(out)
 }
 
 func branchExistsOnRemote(remoteURL, branch string) (bool, error) {

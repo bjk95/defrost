@@ -10,7 +10,6 @@ import (
 type SuppressOpts struct {
 	RepoDir    string
 	DataBranch string
-	NoRemote   bool
 	Dev        bool
 }
 
@@ -19,7 +18,6 @@ func (s SuppressOpts) toPersist() persist.Options {
 		RepoDir:    s.RepoDir,
 		DataBranch: s.DataBranch,
 		AuthToken:  os.Getenv("GITHUB_TOKEN"),
-		NoRemote:   s.NoRemote,
 		Dev:        s.Dev,
 	}
 }

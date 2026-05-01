@@ -35,7 +35,6 @@ type ExecOpts struct {
 	RepoDir    string
 	DataBranch string
 	Persist    bool
-	NoRemote   bool
 	Dev        bool
 }
 
@@ -81,7 +80,6 @@ func execWith(a runner.Adapter, cmd []string, opts ExecOpts) int {
 		RepoDir:    opts.RepoDir,
 		DataBranch: opts.DataBranch,
 		AuthToken:  os.Getenv("GITHUB_TOKEN"),
-		NoRemote:   opts.NoRemote,
 		Dev:        opts.Dev,
 	}
 
@@ -305,7 +303,7 @@ func persistRun(pOpts persist.Options, run models.RunContext, results []models.T
 
 	if err := persist.New(pOpts).InsertNewRun(traces, wrappedMetrics); err != nil {
 		if errors.Is(err, persist.ErrNoOrigin) {
-			return errors.New("no 'origin' remote configured. Either add one (`git remote add origin ...`) or pass --no-remote to persist locally only")
+			return errors.New("no 'origin' remote configured. Either add one (`git remote add origin ...`) or pass --dev to write to a local scratch dir")
 		}
 		return err
 	}
