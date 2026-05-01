@@ -509,16 +509,16 @@ func TestBuildArgs(t *testing.T) {
 			want: []string{"test", "--", "tests/foo", "--reporter=json", "--outputFile.json=/tmp/x.json"},
 		},
 		{
-			name: "pnpm test (needs separator)",
+			name: "pnpm test (no separator)",
 			cmd:  []string{"pnpm", "test"},
 			path: "/tmp/x.json",
-			want: []string{"test", "--", "--reporter=json", "--outputFile.json=/tmp/x.json"},
+			want: []string{"test", "--reporter=json", "--outputFile.json=/tmp/x.json"},
 		},
 		{
-			name: "pnpm run x (needs separator)",
+			name: "pnpm run x (no separator)",
 			cmd:  []string{"pnpm", "run", "x"},
 			path: "/tmp/x.json",
-			want: []string{"run", "x", "--", "--reporter=json", "--outputFile.json=/tmp/x.json"},
+			want: []string{"run", "x", "--reporter=json", "--outputFile.json=/tmp/x.json"},
 		},
 		{
 			name:      "piggyback skips injection (direct)",
@@ -797,5 +797,103 @@ func TestRunPiggybackParsesUserOutputFile(t *testing.T) {
 	}
 	if !results[0].Passed {
 		t.Errorf("Passed = false, want true")
+	}
+}
+
+// --- Bug fixes from PR #30 codex bot review (round 3) ---
+
+func TestRunArgvDoubleDashRunFlag(t *testing.T) {
+	// P2: --run is the documented vitest single-run flag (lint-staged
+	// usage). Should NOT be classified as watch.
+	cases := []struct {
+		name string
+		cmd  []string
+	}{
+		{"vitest --run", []string{"vitest", "--run"}},
+		{"vitest --run --coverage", []string{"vitest", "--run", "--coverage"}},
+		{"npx vitest --run", []string{"npx", "vitest", "--run"}},
+		{"vitest related ./x.ts --run", []string{"vitest", "related", "./x.ts", "--run"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a := &Adapter{}
+			a.Matches(tc.cmd)
+			stderr := captureStderr(t, func() {
+				_, _, _ = a.Run(tc.cmd)
+			})
+			if strings.Contains(stderr, "vitest in watch/UI mode") {
+				t.Errorf("--run should not trigger watch rejection; got %q", stderr)
+			}
+		})
+	}
+}
+
+func TestAdapterMatchesFormDDoubleDashRunFlag(t *testing.T) {
+	// P2 in script context: scripts.test = "vitest --run" should be
+	// classified scriptOK=true (not watch).
+	cases := []struct {
+		name   string
+		script string
+	}{
+		{"vitest --run", "vitest --run"},
+		{"vitest --run --coverage", "vitest --run --coverage"},
+		{"NODE_ENV=test vitest --run", "NODE_ENV=test vitest --run"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Chdir(dir)
+			writePackageJSON(t, map[string]string{"test": tc.script})
+
+			a := &Adapter{}
+			if !a.Matches([]string{"npm", "test"}) {
+				t.Fatal("expected matcher to recognize form D")
+			}
+			if !a.scriptOK {
+				t.Errorf("scriptOK = false; expected true for script %q", tc.script)
+			}
+			if a.watchInScript {
+				t.Errorf("watchInScript = true; expected false for script %q", tc.script)
+			}
+		})
+	}
+}
+
+func TestBuildArgsPnpmForwardsDirectly(t *testing.T) {
+	// P1: pnpm passes args directly to the script; -- is forwarded
+	// LITERALLY (verified empirically). So defrost must NOT inject --
+	// for pnpm forms — neither for `pnpm test` nor for `pnpm vitest …`.
+	cases := []struct {
+		name string
+		cmd  []string
+		path string
+		want []string
+	}{
+		{
+			name: "pnpm test (no separator)",
+			cmd:  []string{"pnpm", "test"},
+			path: "/tmp/x.json",
+			want: []string{"test", "--reporter=json", "--outputFile.json=/tmp/x.json"},
+		},
+		{
+			name: "pnpm run x (no separator)",
+			cmd:  []string{"pnpm", "run", "x"},
+			path: "/tmp/x.json",
+			want: []string{"run", "x", "--reporter=json", "--outputFile.json=/tmp/x.json"},
+		},
+		{
+			name: "pnpm vitest run (no separator, was already correct)",
+			cmd:  []string{"pnpm", "vitest", "run"},
+			path: "/tmp/x.json",
+			want: []string{"vitest", "run", "--reporter=json", "--outputFile.json=/tmp/x.json"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := buildArgs(tc.cmd, tc.path, false)
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("\ngot:  %v\nwant: %v", got, tc.want)
+			}
+		})
 	}
 }

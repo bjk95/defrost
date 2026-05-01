@@ -164,7 +164,7 @@ func (a *Adapter) matchScript(name string) bool {
 	// vitest-shaped. Without that signal, treat as watch trigger.
 	hasRun := false
 	for _, t := range tokens[i+1:] {
-		if t == "run" || isWatchDisableToken(t) {
+		if t == "run" || t == "--run" || isWatchDisableToken(t) {
 			hasRun = true
 			continue
 		}
@@ -363,7 +363,7 @@ func detectWatchTriggerArgv(cmd []string) bool {
 		if isWatchEnableFlag(t) {
 			return true
 		}
-		if t == "run" || isWatchDisableToken(t) {
+		if t == "run" || t == "--run" || isWatchDisableToken(t) {
 			hasRun = true
 		}
 	}
@@ -496,19 +496,21 @@ func buildArgs(cmd []string, jsonPath string, piggyback bool) []string {
 
 // needsSeparator returns true when cmd is a package-runner script
 // invocation that requires a `--` token before user-injected flags so
-// the runner forwards them to the underlying script. npm only enters
-// this adapter via script forms (npm test / npm run X) so it always
-// needs the separator. pnpm enters either via direct binary exec
-// (`pnpm vitest …`, no separator) or via script forms (`pnpm test` /
-// `pnpm run X`, separator). yarn forwards args directly in all forms.
+// the runner forwards them to the underlying script.
+//
+// Only npm needs this. yarn forwards args directly without `--`.
+// pnpm also forwards directly: empirical test shows
+//
+//	pnpm <script> --foo bar    → script receives --foo bar
+//	pnpm <script> -- --foo bar → script receives -- --foo bar (-- passed
+//	                             literally, then vitest's cac CLI parser
+//	                             treats following tokens as positionals
+//	                             so they aren't parsed as flags)
+//
+// So inserting a `--` for pnpm actively breaks defrost — vitest never
+// sees the `--reporter=json` flag and we get no JSON output.
 func needsSeparator(cmd []string) bool {
-	switch cmd[0] {
-	case "npm":
-		return true
-	case "pnpm":
-		return len(cmd) < 2 || cmd[1] != "vitest"
-	}
-	return false
+	return cmd[0] == "npm"
 }
 
 // stripWrapperTokens returns argv as it would look if the user had
