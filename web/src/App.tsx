@@ -12,6 +12,7 @@ import { RunsPage } from "@/pages/RunsPage";
 import { RunDetailPage } from "@/pages/RunDetailPage";
 import { SuppressionsPage } from "@/pages/SuppressionsPage";
 import { MetricsPage } from "@/pages/MetricsPage";
+import { ManagementPage } from "@/pages/ManagementPage";
 
 const THEME_KEY = "defrost.theme.v1";
 
@@ -49,9 +50,10 @@ export default function App() {
   const location = useLocation();
   const onSuppressions = location.pathname.startsWith("/suppressions");
   const onMetrics = location.pathname.startsWith("/metrics");
+  const onManagement = location.pathname.startsWith("/management");
   const onRuns =
     location.pathname.startsWith("/runs") || location.pathname === "/run";
-  const onTests = !onSuppressions && !onRuns && !onMetrics;
+  const onTests = !onSuppressions && !onRuns && !onMetrics && !onManagement;
 
   const { data, isPending, error, refetch } = useQuery({
     queryKey: ["tests"],
@@ -143,6 +145,7 @@ export default function App() {
               )}
             </span>
           </NavLink>
+          <NavLink to="/management" active={onManagement}>Management</NavLink>
         </nav>
         <div style={{ flex: 1 }} />
         {data && (
@@ -192,6 +195,7 @@ export default function App() {
           <Route path="/run" element={<RunDetailPage />} />
           <Route path="/suppressions" element={<SuppressionsPage />} />
           <Route path="/metrics" element={<MetricsPage />} />
+          <Route path="/management" element={<ManagementPage />} />
         </Routes>
       </main>
     </div>

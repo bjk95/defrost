@@ -46,3 +46,41 @@ export function removeSuppression(testId: string): Promise<SuppressionsResponse>
     { method: "DELETE" },
   );
 }
+
+export interface DropPlan {
+  branch: string;
+  origin_url?: string;
+  dev: boolean;
+  trace_files: number;
+  metric_files: number;
+  trace_bytes: number;
+  metric_bytes: number;
+  oldest_run_utc?: string;
+  newest_run_utc?: string;
+  suppressions_n: number;
+  branch_missing: boolean;
+  drop_traces: boolean;
+  drop_metrics: boolean;
+  nothing: boolean;
+}
+
+export interface DropSelector {
+  drop_traces: boolean;
+  drop_metrics: boolean;
+}
+
+export function getDropPlan(sel: DropSelector): Promise<DropPlan> {
+  const params = new URLSearchParams({
+    drop_traces: String(sel.drop_traces),
+    drop_metrics: String(sel.drop_metrics),
+  });
+  return fetchJSON<DropPlan>(`/api/drop/plan?${params.toString()}`);
+}
+
+export function dropHistory(sel: DropSelector): Promise<DropPlan> {
+  return fetchJSON<DropPlan>("/api/drop", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(sel),
+  });
+}

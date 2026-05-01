@@ -34,6 +34,17 @@ type suppressionsBackend interface {
 	UpdateSuppressions(mutate func([]string) []string, msg string) error
 }
 
+// dropBackendFn is the seam for the drop endpoints. Tests override it to
+// plug in an in-memory implementation; the default opens a fresh
+// persist.Backend per call.
+var dropBackendFn = func(opts persist.Options) dropBackend {
+	return persist.New(opts)
+}
+
+type dropBackend interface {
+	DropHistory(sel persist.DropSelector, confirm func(persist.DropPlan) bool) error
+}
+
 // New returns the http.Handler for `defrost serve`. It does not retain
 // any per-request state — each /api/* request loads the data branch via
 // loaderFn(opts). A single progress bus is shared across all requests
@@ -76,6 +87,23 @@ func New(opts persist.Options, assets fs.FS) http.Handler {
 			return
 		}
 		handleRemoveSuppression(w, r, opts)
+	})
+
+	mux.HandleFunc("/api/drop/plan", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", "GET")
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		handleDropPlan(w, r, opts)
+	})
+	mux.HandleFunc("/api/drop", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", "POST")
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		handleDrop(w, r, opts)
 	})
 
 	mux.HandleFunc("/api/metrics", func(w http.ResponseWriter, r *http.Request) {

@@ -48,6 +48,17 @@ export const fmt = {
     if (parts.length === 1) return parts[0].slice(0, 2).toLowerCase();
     return (parts[0][0] + parts[parts.length - 1][0]).toLowerCase();
   },
+  bytes(n: number): string {
+    if (n < 1024) return `${n} B`;
+    const units = ["KiB", "MiB", "GiB", "TiB"];
+    let u = -1;
+    let v = n;
+    do {
+      v /= 1024;
+      u++;
+    } while (v >= 1024 && u < units.length - 1);
+    return `${v.toFixed(1)} ${units[u]}`;
+  },
 };
 
 export interface TestStats {
