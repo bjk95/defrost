@@ -194,7 +194,8 @@ func isWatchDisableToken(t string) bool {
 	}
 	if strings.HasPrefix(t, "--watch=") ||
 		strings.HasPrefix(t, "--watchAll=") ||
-		strings.HasPrefix(t, "--ui=") {
+		strings.HasPrefix(t, "--ui=") ||
+		strings.HasPrefix(t, "-w=") {
 		eq := strings.IndexByte(t, '=')
 		if eq < 0 {
 			return false
@@ -209,12 +210,13 @@ func isWatchDisableToken(t string) bool {
 // mode (or the UI, which implies watch). Used by argv and script
 // inspection.
 func isWatchEnableFlag(t string) bool {
-	if t == "--watch" || t == "--watchAll" || t == "--ui" {
+	if t == "--watch" || t == "--watchAll" || t == "--ui" || t == "-w" {
 		return true
 	}
 	if strings.HasPrefix(t, "--watch=") ||
 		strings.HasPrefix(t, "--watchAll=") ||
-		strings.HasPrefix(t, "--ui=") {
+		strings.HasPrefix(t, "--ui=") ||
+		strings.HasPrefix(t, "-w=") {
 		return !isWatchDisableToken(t)
 	}
 	return false
@@ -245,6 +247,11 @@ func (a *Adapter) Run(cmd []string) ([]models.TestResult, []*metricspb.Metric, i
 	if detectWatchTriggerArgv(cmd) {
 		fmt.Fprintln(os.Stderr,
 			"defrost: vitest in watch/UI mode can't be wrapped; use 'vitest run [args]' instead")
+		return nil, nil, 2
+	}
+	if a.formD && detectWatchFlagInFormDArgv(cmd) {
+		fmt.Fprintln(os.Stderr,
+			"defrost: watch/UI flag passed through to vitest in argv; remove --watch / --ui / -w to enable result capture")
 		return nil, nil, 2
 	}
 	if a.formD && !a.scriptOK {
@@ -361,6 +368,27 @@ func detectWatchTriggerArgv(cmd []string) bool {
 		}
 	}
 	return !hasRun
+}
+
+// detectWatchFlagInFormDArgv scans the argv tail of a form-D cmd for
+// any explicit watch-enable flag forwarded through the script-runner.
+// stripWrapperTokens returns nil for form-D, so detectWatchTriggerArgv
+// can't see these flags. Form-D runners forward args differently
+// (npm/pnpm via --, yarn directly), so we don't try to model which
+// runner forwards what — any watch-enable flag anywhere in cmd[1:] is
+// a strong signal not to wrap.
+//
+// Note: the wrapper subcommand itself (e.g. cmd[1] = "test" for `npm
+// test`) is not a watch trigger even when literally "watch" — a script
+// named "watch" is allowed. We only flag explicit --watch / -w / --ui /
+// --watchAll flags here.
+func detectWatchFlagInFormDArgv(cmd []string) bool {
+	for _, t := range cmd[1:] {
+		if isWatchEnableFlag(t) {
+			return true
+		}
+	}
+	return false
 }
 
 // detectUserOutputPath returns the json output file path the user is

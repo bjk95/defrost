@@ -632,6 +632,127 @@ func TestRunArgvWatchDisableFlags(t *testing.T) {
 	}
 }
 
+// --- Bug fixes from PR #30 codex bot review (round 2) ---
+
+func TestRunArgvShortWatchFlag(t *testing.T) {
+	// P2: -w is the vitest short-form alias for --watch.
+	cases := []struct {
+		name string
+		cmd  []string
+	}{
+		{"vitest -w", []string{"vitest", "-w"}},
+		{"vitest run -w", []string{"vitest", "run", "-w"}},
+		{"vitest -w=true", []string{"vitest", "-w=true"}},
+		{"npx vitest -w", []string{"npx", "vitest", "-w"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a := &Adapter{}
+			a.Matches(tc.cmd)
+			var code int
+			stderr := captureStderr(t, func() {
+				_, _, code = a.Run(tc.cmd)
+			})
+			if code != 2 {
+				t.Errorf("exit code = %d, want 2", code)
+			}
+			if !strings.Contains(stderr, "watch") {
+				t.Errorf("stderr should mention watch; got %q", stderr)
+			}
+		})
+	}
+}
+
+func TestRunArgvShortWatchDisable(t *testing.T) {
+	// P2 negative: -w=false explicitly disables watch.
+	a := &Adapter{}
+	a.Matches([]string{"vitest", "run", "-w=false"})
+	stderr := captureStderr(t, func() {
+		_, _, _ = a.Run([]string{"vitest", "run", "-w=false"})
+	})
+	if strings.Contains(stderr, "vitest in watch/UI mode can't be wrapped") {
+		t.Errorf("'-w=false' should not trigger watch rejection; got %q", stderr)
+	}
+}
+
+func TestAdapterMatchesFormDShortWatchFlag(t *testing.T) {
+	// P2 in script context: scripts.test = "vitest -w" should be classified
+	// as watch.
+	dir := t.TempDir()
+	t.Chdir(dir)
+	writePackageJSON(t, map[string]string{"test": "vitest -w"})
+
+	a := &Adapter{}
+	if !a.Matches([]string{"npm", "test"}) {
+		t.Fatal("expected matcher to recognize form D")
+	}
+	if a.scriptOK {
+		t.Errorf("scriptOK = true; expected false for 'vitest -w'")
+	}
+	if !a.watchInScript {
+		t.Errorf("watchInScript = false; expected true for 'vitest -w'")
+	}
+}
+
+func TestRunFormDForwardedWatchFlag(t *testing.T) {
+	// P1: user passes --watch through script-runner.
+	// scripts.test = "vitest run" is fine on its own, but
+	// `npm test -- --watch` forwards --watch to vitest.
+	cases := []struct {
+		name string
+		cmd  []string
+	}{
+		{"npm test -- --watch", []string{"npm", "test", "--", "--watch"}},
+		{"npm test --watch (conservative)", []string{"npm", "test", "--watch"}},
+		{"npm test -- -w", []string{"npm", "test", "--", "-w"}},
+		{"yarn test --watch (yarn forwards directly)", []string{"yarn", "test", "--watch"}},
+		{"pnpm test -- --watch", []string{"pnpm", "test", "--", "--watch"}},
+		{"npm test -- --ui", []string{"npm", "test", "--", "--ui"}},
+		{"npm run test -- --watchAll", []string{"npm", "run", "test", "--", "--watchAll"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Chdir(dir)
+			writePackageJSON(t, map[string]string{"test": "vitest run"})
+
+			a := &Adapter{}
+			if !a.Matches(tc.cmd) {
+				t.Fatalf("expected matcher to recognize form D for %v", tc.cmd)
+			}
+			if !a.scriptOK {
+				t.Fatalf("expected scriptOK=true for clean script; got watchInScript=%v", a.watchInScript)
+			}
+			var code int
+			stderr := captureStderr(t, func() {
+				_, _, code = a.Run(tc.cmd)
+			})
+			if code != 2 {
+				t.Errorf("exit code = %d, want 2 for %v", code, tc.cmd)
+			}
+			if !strings.Contains(stderr, "watch") {
+				t.Errorf("stderr should mention watch for %v; got %q", tc.cmd, stderr)
+			}
+		})
+	}
+}
+
+func TestRunFormDForwardedDisableFlagOK(t *testing.T) {
+	// Negative for P1: user explicitly disables watch via forwarded flag.
+	dir := t.TempDir()
+	t.Chdir(dir)
+	writePackageJSON(t, map[string]string{"test": "vitest run"})
+
+	a := &Adapter{}
+	a.Matches([]string{"npm", "test", "--", "--watch=false"})
+	stderr := captureStderr(t, func() {
+		_, _, _ = a.Run([]string{"npm", "test", "--", "--watch=false"})
+	})
+	if strings.Contains(stderr, "vitest in watch/UI mode") || strings.Contains(stderr, "watch/UI flag passed through") {
+		t.Errorf("'--watch=false' should not be rejected; got %q", stderr)
+	}
+}
+
 func TestRunPiggybackParsesUserOutputFile(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
