@@ -361,6 +361,76 @@ func TestRunAcceptsExplicitRun(t *testing.T) {
 	}
 }
 
+func TestDetectUserOutputPath(t *testing.T) {
+	cases := []struct {
+		name     string
+		cmd      []string
+		wantPath string
+		wantOK   bool
+	}{
+		{
+			name:   "no output flags",
+			cmd:    []string{"vitest", "run"},
+			wantOK: false,
+		},
+		{
+			name:     "--outputFile.json=mine.json wins regardless",
+			cmd:      []string{"vitest", "run", "--outputFile.json=mine.json"},
+			wantPath: "mine.json",
+			wantOK:   true,
+		},
+		{
+			name:     "--outputFile=results.json with --reporter=json",
+			cmd:      []string{"vitest", "run", "--outputFile=results.json", "--reporter=json"},
+			wantPath: "results.json",
+			wantOK:   true,
+		},
+		{
+			name:   "--outputFile=junit.xml with --reporter=junit (not piggybacked)",
+			cmd:    []string{"vitest", "run", "--outputFile=junit.xml", "--reporter=junit"},
+			wantOK: false,
+		},
+		{
+			name:   "--outputFile=foo with --reporter=json AND --reporter=junit (ambiguous)",
+			cmd:    []string{"vitest", "run", "--outputFile=foo", "--reporter=json", "--reporter=junit"},
+			wantOK: false,
+		},
+		{
+			name:   "--outputFile=foo with --reporter=html (not piggybacked)",
+			cmd:    []string{"vitest", "run", "--outputFile=foo", "--reporter=html"},
+			wantOK: false,
+		},
+		{
+			name:   "--outputFile=results.json without explicit --reporter=json",
+			cmd:    []string{"vitest", "run", "--outputFile=results.json"},
+			wantOK: false,
+		},
+		{
+			name:     "--outputFile.json=x.json wins even with another file-emitting reporter",
+			cmd:      []string{"vitest", "run", "--outputFile.json=x.json", "--outputFile.junit=y.xml", "--reporter=junit", "--reporter=json"},
+			wantPath: "x.json",
+			wantOK:   true,
+		},
+		{
+			name:     "--outputFile foo (space form)",
+			cmd:      []string{"vitest", "run", "--outputFile", "foo.json", "--reporter=json"},
+			wantPath: "foo.json",
+			wantOK:   true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path, ok := detectUserOutputPath(tc.cmd)
+			if ok != tc.wantOK {
+				t.Fatalf("ok = %v, want %v (path=%q)", ok, tc.wantOK, path)
+			}
+			if ok && path != tc.wantPath {
+				t.Errorf("path = %q, want %q", path, tc.wantPath)
+			}
+		})
+	}
+}
+
 func TestRunPassthroughForFormDShapeFailure(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)

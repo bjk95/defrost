@@ -262,6 +262,85 @@ func detectWatchTriggerArgv(cmd []string) bool {
 	return !hasRun
 }
 
+// detectUserOutputPath returns the json output file path the user is
+// already going to write, if defrost can confidently piggyback on it.
+// Rules (priority order):
+//
+//  1. --outputFile.json=<X> (explicit dot-notation pin) → X.
+//  2. --outputFile=<X> AND --reporter=json AND no other file-emitting
+//     reporter (junit/html) → X.
+//  3. otherwise → no piggyback.
+//
+// The piggyback target must be the json reporter's output file, not
+// some other reporter's. Rule 2's "no other file-emitting reporter"
+// condition prevents us from claiming the user's junit.xml or html
+// output as ours.
+func detectUserOutputPath(cmd []string) (string, bool) {
+	var (
+		outputFile           string
+		hasOutputFile        bool
+		outputJSON           string
+		hasOutputJSON        bool
+		hasReporterJSON      bool
+		hasOtherFileReporter bool
+	)
+	for i := 0; i < len(cmd); i++ {
+		a := cmd[i]
+		// --outputFile.json=X
+		if strings.HasPrefix(a, "--outputFile.json=") {
+			outputJSON = strings.TrimPrefix(a, "--outputFile.json=")
+			hasOutputJSON = true
+			continue
+		}
+		// --outputFile.<other>=X — junit, html — note for ambiguity check
+		if strings.HasPrefix(a, "--outputFile.") {
+			// e.g. --outputFile.junit=…  Doesn't disqualify json piggyback by itself.
+			continue
+		}
+		// --outputFile=X
+		if strings.HasPrefix(a, "--outputFile=") {
+			outputFile = strings.TrimPrefix(a, "--outputFile=")
+			hasOutputFile = true
+			continue
+		}
+		// --outputFile X (space form)
+		if a == "--outputFile" && i+1 < len(cmd) {
+			outputFile = cmd[i+1]
+			hasOutputFile = true
+			i++
+			continue
+		}
+		// --reporter=json / --reporter=junit / --reporter=html
+		if strings.HasPrefix(a, "--reporter=") {
+			rep := strings.TrimPrefix(a, "--reporter=")
+			if rep == "json" {
+				hasReporterJSON = true
+			} else if rep == "junit" || rep == "html" {
+				hasOtherFileReporter = true
+			}
+			continue
+		}
+		// --reporter X (space form)
+		if a == "--reporter" && i+1 < len(cmd) {
+			rep := cmd[i+1]
+			if rep == "json" {
+				hasReporterJSON = true
+			} else if rep == "junit" || rep == "html" {
+				hasOtherFileReporter = true
+			}
+			i++
+			continue
+		}
+	}
+	if hasOutputJSON {
+		return outputJSON, true
+	}
+	if hasOutputFile && hasReporterJSON && !hasOtherFileReporter {
+		return outputFile, true
+	}
+	return "", false
+}
+
 // stripWrapperTokens returns argv as it would look if the user had
 // invoked vitest directly. Removes leading wrapper tokens like
 // npm/yarn/pnpm/run/<script-name>, npx flags, etc.
