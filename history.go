@@ -13,16 +13,16 @@ import (
 // historyMarshal emits one ResourceSpans per line as canonical OTLP/JSON.
 var historyMarshal = protojson.MarshalOptions{UseProtoNames: true, EmitUnpopulated: false}
 
-func HandleHistory(testName, repoDir, dataBranch string, noRemote bool) int {
+func HandleHistory(testName, repoDir, dataBranch string, dev bool) int {
 	traces, err := persist.New(persist.Options{
 		RepoDir:    repoDir,
 		DataBranch: dataBranch,
 		AuthToken:  os.Getenv("GITHUB_TOKEN"),
-		NoRemote:   noRemote,
+		Dev:        dev,
 	}).GetTestHistory(testName)
 	if err != nil {
 		if errors.Is(err, persist.ErrNoOrigin) {
-			fmt.Fprintln(os.Stderr, "history: no 'origin' remote configured. Either add one (`git remote add origin ...`) or pass --no-remote to read from the local repo.")
+			fmt.Fprintln(os.Stderr, "history: no 'origin' remote configured. Either add one (`git remote add origin ...`) or pass --dev to read from the local scratch dir.")
 			return 1
 		}
 		fmt.Fprintln(os.Stderr, "history:", err)

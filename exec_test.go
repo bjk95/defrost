@@ -278,10 +278,9 @@ func TestExecPlumbsAdapterMetricsToPersistence(t *testing.T) {
 	a := stubAdapter{results: results, metrics: metrics, code: 0}
 
 	code := execWith(a, []string{"stub"}, ExecOpts{
-		RepoDir:  repo,
-		Persist:  true,
-		NoRemote: true,
-		Dev:      true,
+		RepoDir: repo,
+		Persist: true,
+		Dev:     true,
 	})
 	if code != 0 {
 		t.Fatalf("expected exit 0, got %d", code)

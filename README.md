@@ -92,6 +92,61 @@ Manage the suppression list. When every failing test in a run is suppressed,
 defrost rewrites the exit code to 0 — anything outside the list (a new
 failure, a build error, a panic) still exits non-zero.
 
+### `defrost drop history`
+
+Defrost is append-only — every run adds one trace and one metrics file to
+the data branch. Over months that branch grows. `defrost drop history`
+permanently deletes persisted traces and metrics and rewrites the branch
+so git can actually reclaim the space.
+
+```sh
+# Drop everything. Shows an inventory and asks before touching anything.
+defrost drop history
+
+# Drop only one signal.
+defrost drop history --traces-only
+defrost drop history --metrics-only
+
+# Skip the prompt (CI / scripts).
+defrost drop history --yes
+
+# Wipe the local scratch dir from `--dev` runs.
+defrost drop history --dev
+```
+
+You'll see:
+
+```
+About to drop history on branch _defrost (origin: git@github.com:you/repo.git):
+  traces:  142 files, 18.4 MB  (2024-09-12 → 2026-04-29)
+  metrics: 142 files,  4.2 MB  (2024-09-12 → 2026-04-29)
+
+This rewrites the branch via orphan commit + force-push and is irreversible.
+Preserved: suppressions.json (37 entries), README.md.
+
+Type "drop" to confirm:
+```
+
+**What's preserved.** Suppressions, the data-branch `README.md`, and
+whichever signal you didn't drop (e.g. metrics, when you used
+`--traces-only`).
+
+**How space gets reclaimed.** Defrost replaces the data branch with a
+single new commit containing only the kept files. Old commits become
+unreachable and the remote (GitHub, GitLab, …) garbage-collects them over
+time. Local clones of the data branch keep their old objects until the
+next `git gc` — `defrost serve` always re-clones from origin, so the
+dashboard reflects the rewritten state immediately.
+
+**Concurrency.** If someone else's `defrost exec` lands between the
+confirmation and the push, defrost aborts with a clear error rather than
+overwriting their data. Re-run `defrost drop history` and the new run
+shows up in the inventory.
+
+**Nothing to drop.** If the data branch doesn't exist yet, or there are
+zero files for the selectors you chose, defrost prints a one-line
+explanation and exits 0 without prompting.
+
 ### `defrost serve`
 
 Serves the dashboard at `127.0.0.1:6969` (override with `--port`).
@@ -106,6 +161,10 @@ OTel `trace_id`).
 
 To experiment without touching git, pass `--no-persist` (don't store
 anything) or `--dev` (write to `.defrost-dev/` instead of the data branch).
+
+When the branch grows large enough to matter, use
+[`defrost drop history`](#defrost-drop-history) to rewrite it and reclaim
+space. Suppressions are preserved.
 
 ### Under the hood
 

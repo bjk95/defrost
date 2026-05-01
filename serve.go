@@ -17,7 +17,7 @@ type ServeOpts struct {
 	Port       int
 	RepoDir    string
 	DataBranch string
-	NoRemote   bool
+	Dev        bool
 }
 
 func HandleServe(opts ServeOpts) int {
@@ -25,7 +25,7 @@ func HandleServe(opts ServeOpts) int {
 		RepoDir:    opts.RepoDir,
 		DataBranch: opts.DataBranch,
 		AuthToken:  os.Getenv("GITHUB_TOKEN"),
-		NoRemote:   opts.NoRemote,
+		Dev:        opts.Dev,
 	}
 
 	addr := "127.0.0.1:" + strconv.Itoa(opts.Port)

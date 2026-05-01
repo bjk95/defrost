@@ -8,7 +8,7 @@ import (
 
 func TestHandleSuppressAdd_Single(t *testing.T) {
 	repo := makeRepo(t)
-	opts := SuppressOpts{RepoDir: repo, NoRemote: true, Dev: true}
+	opts := SuppressOpts{RepoDir: repo, Dev: true}
 
 	code := HandleSuppressAdd([]string{"pkg/TestA"}, opts)
 	if code != 0 {
@@ -27,7 +27,7 @@ func TestHandleSuppressAdd_Single(t *testing.T) {
 
 func TestHandleSuppressAdd_MultipleIDs(t *testing.T) {
 	repo := makeRepo(t)
-	opts := SuppressOpts{RepoDir: repo, NoRemote: true, Dev: true}
+	opts := SuppressOpts{RepoDir: repo, Dev: true}
 
 	code := HandleSuppressAdd([]string{"a", "b", "c"}, opts)
 	if code != 0 {
@@ -46,7 +46,7 @@ func TestHandleSuppressAdd_MultipleIDs(t *testing.T) {
 
 func TestHandleSuppressAdd_EmptySliceFails(t *testing.T) {
 	repo := makeRepo(t)
-	opts := SuppressOpts{RepoDir: repo, NoRemote: true, Dev: true}
+	opts := SuppressOpts{RepoDir: repo, Dev: true}
 	code := HandleSuppressAdd(nil, opts)
 	if code != 2 {
 		t.Fatalf("expected 2, got %d", code)
@@ -55,7 +55,7 @@ func TestHandleSuppressAdd_EmptySliceFails(t *testing.T) {
 
 func TestHandleSuppressAdd_SkipsEmptyStrings(t *testing.T) {
 	repo := makeRepo(t)
-	opts := SuppressOpts{RepoDir: repo, NoRemote: true, Dev: true}
+	opts := SuppressOpts{RepoDir: repo, Dev: true}
 	code := HandleSuppressAdd([]string{"", "real-id", ""}, opts)
 	if code != 0 {
 		t.Fatalf("expected 0, got %d", code)
@@ -72,7 +72,7 @@ func TestHandleSuppressAdd_SkipsEmptyStrings(t *testing.T) {
 
 func TestHandleSuppressAdd_AllEmptyStringsFails(t *testing.T) {
 	repo := makeRepo(t)
-	opts := SuppressOpts{RepoDir: repo, NoRemote: true, Dev: true}
+	opts := SuppressOpts{RepoDir: repo, Dev: true}
 	code := HandleSuppressAdd([]string{"", ""}, opts)
 	if code != 2 {
 		t.Fatalf("expected 2, got %d", code)
