@@ -14,6 +14,7 @@ import (
 	"github.com/bjk95/defrost/internal/eval/promptfoo"
 	"github.com/bjk95/defrost/internal/golang"
 	"github.com/bjk95/defrost/internal/javascript/jest"
+	"github.com/bjk95/defrost/internal/javascript/vitest"
 	"github.com/bjk95/defrost/internal/models"
 	"github.com/bjk95/defrost/internal/otlp"
 	"github.com/bjk95/defrost/internal/persist"
@@ -56,6 +57,7 @@ func HandleExecution(cmd []string, opts ExecOpts) int {
 	// happens to be jest-shaped. Strict matchers go first.
 	reg.Register(&promptfoo.Adapter{})
 	reg.Register(&jest.Adapter{})
+	reg.Register(&vitest.Adapter{})
 	// Passthrough must be registered last: it matches everything, so
 	// anything ahead of it gets first crack at recognising the cmd.
 	reg.Register(passthrough.Adapter{})
