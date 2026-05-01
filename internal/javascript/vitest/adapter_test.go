@@ -360,3 +360,32 @@ func TestRunAcceptsExplicitRun(t *testing.T) {
 		t.Errorf("'vitest run' should not trigger watch rejection; got %q", stderr)
 	}
 }
+
+func TestRunPassthroughForFormDShapeFailure(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	writePackageJSON(t, map[string]string{"test": "vitest && eslint ."})
+
+	a := &Adapter{}
+	if !a.Matches([]string{"npm", "test"}) {
+		t.Fatal("expected matcher to recognize form D")
+	}
+	if a.scriptOK {
+		t.Fatal("expected scriptOK=false for composite shell")
+	}
+	if a.watchInScript {
+		t.Fatal("expected watchInScript=false for composite-shell case")
+	}
+	// We can't easily invoke `npm test` for real in this test, so we just
+	// assert that Run prints a passthrough warning and does NOT exit 2.
+	var code int
+	stderr := captureStderr(t, func() {
+		_, _, code = a.Run([]string{"npm", "test"})
+	})
+	if code == 2 {
+		t.Errorf("expected non-2 exit (passthrough), got %d", code)
+	}
+	if !strings.Contains(stderr, "scripts.test") || !strings.Contains(stderr, "passthrough") {
+		t.Errorf("stderr should explain passthrough; got %q", stderr)
+	}
+}

@@ -4,12 +4,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"regexp"
 	"strings"
 
 	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
 
 	"github.com/bjk95/defrost/internal/models"
+	"github.com/bjk95/defrost/internal/runner"
 )
 
 // Adapter implements runner.Adapter for vitest invocations. Forms supported:
@@ -198,9 +200,28 @@ func (a *Adapter) Run(cmd []string) ([]models.TestResult, []*metricspb.Metric, i
 			"defrost: vitest in watch/UI mode can't be wrapped; use 'vitest run [args]' instead")
 		return nil, nil, 2
 	}
-	// Subsequent tasks add: form-D shape failure passthrough,
-	// piggyback/inject decision, child spawn, parse.
+	if a.formD && !a.scriptOK {
+		fmt.Fprintf(os.Stderr,
+			"defrost: scripts.%s in package.json isn't a direct vitest invocation; running passthrough (no per-test results will be recorded). For per-test results, run vitest via 'npx vitest run …' or simplify the script.\n",
+			a.scriptName)
+		return passthroughRun(cmd)
+	}
+	// Subsequent tasks add: piggyback/inject decision, child spawn, parse.
 	return nil, nil, 0
+}
+
+// passthroughRun executes cmd verbatim with stdio + signals wired,
+// returning the child exit code and no test results. Used when the
+// adapter recognises the invocation form but can't safely capture
+// results (form-D non-watch shape failures).
+func passthroughRun(cmd []string) ([]models.TestResult, []*metricspb.Metric, int) {
+	c := exec.Command(cmd[0], cmd[1:]...)
+	code, err := runner.RunChild(c)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "defrost:", err)
+		return nil, nil, 1
+	}
+	return nil, nil, code
 }
 
 // detectWatchTriggerArgv inspects the *resolved* argv (i.e. excluding
