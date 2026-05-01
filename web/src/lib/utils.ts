@@ -240,10 +240,12 @@ export interface SuppressionsView {
 // while the (slow) git push runs in the background. On mutation error
 // the optimistic change is rolled back.
 //
-// The fetch is gated on the /api/tests query having data so we don't
-// compete with the initial cold clone — git-backed suppression reads
-// also clone the data branch, so two parallel clones on first paint
-// would double startup latency for nothing.
+// The fetch waits until /api/tests is no longer in flight so we don't
+// compete with the initial cold clone (git-backed suppression reads
+// also clone the data branch). Crucially we gate on isFetching, not
+// `data !== undefined` — if /api/tests fails we still want
+// suppressions to load so the Suppressions page and orphaned-test
+// cleanup remain reachable.
 export function useSuppressions(): SuppressionsView {
   const qc = useQueryClient();
   const testsCache = useQuery({
@@ -255,7 +257,7 @@ export function useSuppressions(): SuppressionsView {
     queryKey: SUPPRESSIONS_QUERY_KEY,
     queryFn: getSuppressions,
     staleTime: 60_000,
-    enabled: testsCache.data !== undefined,
+    enabled: !testsCache.isFetching,
   });
   const ids = query.data?.test_ids ?? [];
   const set = useMemo(() => new Set(ids), [ids]);

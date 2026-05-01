@@ -91,6 +91,11 @@ function TestsPageInner({
   onCollapse: (next: Record<string, boolean>) => void;
   onOpenTest: (testId: string) => void;
 }) {
+  // Subscribe to suppressions ONCE for the whole page. Per-row hooks
+  // would instantiate a query observer + two mutation hooks for every
+  // leaf — unnecessary scaling on big test trees. Pass the resolved
+  // Set down so leaves are pure computation.
+  const suppressedSet = useSuppressions().set;
   const visibleRuns = useMemo(
     () => runs.slice(0, parseInt(windowSize, 10)),
     [runs, windowSize],
@@ -237,6 +242,7 @@ function TestsPageInner({
           collapsed={collapsed}
           onToggle={toggle}
           onOpenTest={onOpenTest}
+          suppressedSet={suppressedSet}
         />
       ))}
     </div>
@@ -252,12 +258,14 @@ function TreeNodeView({
   collapsed,
   onToggle,
   onOpenTest,
+  suppressedSet,
 }: {
   node: TreeNode;
   runs: RunSummary[];
   collapsed: Record<string, boolean>;
   onToggle: (path: string) => void;
   onOpenTest: (testId: string) => void;
+  suppressedSet: Set<string>;
 }) {
   if (node.kind === "leaf") {
     return (
@@ -267,6 +275,7 @@ function TreeNodeView({
         runs={runs}
         depth={node.depth}
         onClick={() => onOpenTest(node.test.test_id)}
+        isSuppressed={suppressedSet.has(node.test.test_id)}
       />
     );
   }
@@ -290,6 +299,7 @@ function TreeNodeView({
             collapsed={collapsed}
             onToggle={onToggle}
             onOpenTest={onOpenTest}
+            suppressedSet={suppressedSet}
           />
         ))}
     </div>
@@ -406,16 +416,17 @@ function TestRowView({
   runs,
   depth,
   onClick,
+  isSuppressed,
 }: {
   test: TestRow;
   leafName: string;
   runs: RunSummary[];
   depth: number;
   onClick: () => void;
+  isSuppressed: boolean;
 }) {
   const [hover, setHover] = useState(false);
   const stats = testStats(test.cells);
-  const isSuppressed = useSuppressions().has(test.test_id);
   const indent = ROW_BASE_INDENT + depth * ROW_INDENT_STEP;
   return (
     <div
