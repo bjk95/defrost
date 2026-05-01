@@ -1,4 +1,8 @@
-package jest
+// Package parser decodes the jest-compatible JSON reporter shape, as
+// emitted by jest 29+ (via --json --outputFile) and vitest 3+ (via
+// --reporter=json --outputFile / --outputFile.json). Both adapters
+// share this package because the documents are byte-compatible.
+package parser
 
 import (
 	"encoding/json"

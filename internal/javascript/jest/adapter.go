@@ -10,6 +10,7 @@ import (
 
 	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
 
+	"github.com/bjk95/defrost/internal/javascript/parser"
 	"github.com/bjk95/defrost/internal/models"
 	"github.com/bjk95/defrost/internal/runner"
 )
@@ -246,7 +247,7 @@ func parseOrPreserve(path, cwd string, exitCode int) ([]models.TestResult, []*me
 			exitCode)
 		return nil, nil, exitCode
 	}
-	results, err := ParseFile(path, cwd)
+	results, err := parser.ParseFile(path, cwd)
 	if err != nil {
 		fmt.Fprintf(os.Stderr,
 			"defrost: parse jest output: %v; recording run with no per-test results\n",

@@ -1,0 +1,10 @@
+{
+  "name": "defrost-vitest-example-js",
+  "private": true,
+  "scripts": {
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "vitest": "^3"
+  }
+}
