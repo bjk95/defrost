@@ -201,6 +201,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   addSuppression as apiAdd,
   getSuppressions,
+  getTests,
   removeSuppression as apiRemove,
   type SuppressionsResponse,
 } from "@/api";
@@ -226,12 +227,23 @@ export interface SuppressionsView {
 // optimistically updated on mutation start so the UI flips immediately
 // while the (slow) git push runs in the background. On mutation error
 // the optimistic change is rolled back.
+//
+// The fetch is gated on the /api/tests query having data so we don't
+// compete with the initial cold clone — git-backed suppression reads
+// also clone the data branch, so two parallel clones on first paint
+// would double startup latency for nothing.
 export function useSuppressions(): SuppressionsView {
   const qc = useQueryClient();
+  const testsCache = useQuery({
+    queryKey: ["tests"],
+    queryFn: getTests,
+    enabled: false,
+  });
   const query = useQuery({
     queryKey: SUPPRESSIONS_QUERY_KEY,
     queryFn: getSuppressions,
     staleTime: 60_000,
+    enabled: testsCache.data !== undefined,
   });
   const ids = query.data?.test_ids ?? [];
   const set = useMemo(() => new Set(ids), [ids]);

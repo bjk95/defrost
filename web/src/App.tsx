@@ -1,11 +1,11 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Link, Route, Routes, useLocation } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { getTests } from "@/api";
+import { getSuppressions, getTests } from "@/api";
 import { Icon, Logo } from "@/components/Icons";
 import { FailureScreen, failureKindFromMessage } from "@/components/EmptyStates";
 import { LoadingScreen } from "@/components/LoadingScreen";
-import { useSuppressions } from "@/lib/utils";
+import { SUPPRESSIONS_QUERY_KEY } from "@/lib/utils";
 import { TestsPage } from "@/pages/TestsPage";
 import { TestDetailPage } from "@/pages/TestDetailPage";
 import { RunsPage } from "@/pages/RunsPage";
@@ -59,7 +59,17 @@ export default function App() {
     queryKey: ["tests"],
     queryFn: getTests,
   });
-  const suppressionCount = useSuppressions().count;
+  // Passive read of the suppressions cache for the nav badge — never
+  // triggers a fetch (enabled:false), so the initial /api/tests cold
+  // clone isn't competing with a parallel /api/suppressions clone just
+  // to render a count. Pages that actually need the list (Suppressions,
+  // Tests, TestDetail, Management) call useSuppressions() to fetch.
+  const suppressionsCache = useQuery({
+    queryKey: SUPPRESSIONS_QUERY_KEY,
+    queryFn: getSuppressions,
+    enabled: false,
+  });
+  const suppressionCount = suppressionsCache.data?.test_ids.length ?? 0;
   const [offline, setOffline] = useState(false);
   const showBootScreen = useDelayedTrue(isPending && !offline, 300);
 
