@@ -10,6 +10,7 @@ const queryClient = new QueryClient({
 
 const withTheme: Decorator = (Story, context) => {
   const theme = (context.globals.theme as "light" | "dark") ?? "light";
+  const fullscreen = context.parameters?.layout === "fullscreen";
   useEffect(() => {
     const root = document.documentElement;
     if (theme === "dark") root.classList.add("dark");
@@ -22,7 +23,7 @@ const withTheme: Decorator = (Story, context) => {
         color: "var(--fg)",
         fontFamily: "var(--font-sans)",
         minHeight: "100vh",
-        padding: 24,
+        padding: fullscreen ? 0 : 24,
       }}
     >
       <Story />
@@ -30,13 +31,20 @@ const withTheme: Decorator = (Story, context) => {
   );
 };
 
-const withProviders: Decorator = (Story) => (
-  <QueryClientProvider client={queryClient}>
-    <MemoryRouter>
+// Stories that bring their own MemoryRouter (e.g. page stories that need to
+// drive an initial route) opt out via `parameters: { skipRouter: true }`.
+// React Router v7 throws if a Router is nested inside another Router, so we
+// must give them a router-less wrapper.
+const withProviders: Decorator = (Story, context) => {
+  const skipRouter = context.parameters?.skipRouter;
+  const inner = (
+    <QueryClientProvider client={queryClient}>
       <Story />
-    </MemoryRouter>
-  </QueryClientProvider>
-);
+    </QueryClientProvider>
+  );
+  if (skipRouter) return inner;
+  return <MemoryRouter>{inner}</MemoryRouter>;
+};
 
 const preview: Preview = {
   parameters: {
