@@ -55,4 +55,15 @@ var CLI struct {
 		DataBranch string `name:"data-branch" default:"_defrost" help:"Branch name to read from."`
 		Dev        bool   `name:"dev" short:"d" help:"Dev mode: read the local scratch dir instead of the data branch."`
 	} `cmd:"" help:"Serve a local UI for inspecting test history."`
+
+	Flake struct {
+		List struct {
+			Window     int     `name:"window" default:"20" help:"Most-recent runs per test to consider. 0 means use the full history."`
+			Threshold  float64 `name:"threshold" default:"0" help:"Only show tests with transition rate >= this value (0..1). 0 shows every test."`
+			Branch     string  `name:"branch" default:"" help:"Only consider runs from this branch (vcs.repository.ref.name). Empty means all branches."`
+			RepoDir    string  `name:"repo-dir" default:"." help:"Path to the git repo."`
+			DataBranch string  `name:"data-branch" default:"_defrost" help:"Branch name to read from."`
+			Dev        bool    `name:"dev" short:"d" help:"Dev mode: read the local scratch dir instead of the data branch."`
+		} `cmd:"" help:"List every test ranked by recent pass\u2194fail transition rate (transition-state flake metric)."`
+	} `cmd:"" help:"Detect flaky tests using transition-rate analysis on persisted history."`
 }

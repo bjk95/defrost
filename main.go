@@ -56,6 +56,15 @@ func main() {
 			DataBranch: CLI.Serve.DataBranch,
 			Dev:        CLI.Serve.Dev,
 		}))
+	case strings.HasPrefix(cmd, "flake list"):
+		os.Exit(HandleFlakeList(FlakeOpts{
+			RepoDir:    CLI.Flake.List.RepoDir,
+			DataBranch: CLI.Flake.List.DataBranch,
+			Dev:        CLI.Flake.List.Dev,
+			Window:     CLI.Flake.List.Window,
+			Branch:     CLI.Flake.List.Branch,
+			Threshold:  CLI.Flake.List.Threshold,
+		}))
 	default:
 		fmt.Fprintln(os.Stderr, "unknown command:", cmd)
 		os.Exit(2)
