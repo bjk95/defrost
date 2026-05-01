@@ -67,9 +67,14 @@ func New(opts persist.Options, assets fs.FS) http.Handler {
 		loadMu.Lock()
 		bus.Reset()
 		ds, err := loaderFn(opts, bus.Emit)
-		loadMu.Unlock()
+		// Publish the error event before releasing the lock so a queued
+		// loader can't call bus.Reset() between our Unlock and Emit and
+		// inherit our error in its history.
 		if err != nil {
 			bus.Emit(ProgressEvent{Phase: "error", Detail: err.Error()})
+		}
+		loadMu.Unlock()
+		if err != nil {
 			writeJSONError(w, http.StatusInternalServerError, err.Error())
 			return
 		}

@@ -243,6 +243,42 @@ func TestDropHistory_DevMode_RemovesSignalDirs(t *testing.T) {
 	}
 }
 
+func TestBuildDropPlan_PreservedSignalReportsFullCount(t *testing.T) {
+	dir := t.TempDir()
+	// Two trace files spanning the cutoff, two metric files spanning the cutoff.
+	mustWriteFile(t, filepath.Join(dir, "traces", "2026", "03", "15", "old.otlp.pb.zst"), 100)
+	mustWriteFile(t, filepath.Join(dir, "traces", "2026", "04", "10", "new.otlp.pb.zst"), 200)
+	mustWriteFile(t, filepath.Join(dir, "metrics", "2026", "03", "15", "old.otlp.pb.zst"), 50)
+	mustWriteFile(t, filepath.Join(dir, "metrics", "2026", "04", "10", "new.otlp.pb.zst"), 75)
+
+	cutoff := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+
+	// drop_traces only with cutoff: traces filtered to pre-cutoff,
+	// metrics report total count (preserved).
+	plan := buildDropPlan(dir, DropSelector{DropTraces: true, BeforeUTC: cutoff})
+	if plan.TraceFiles != 1 {
+		t.Errorf("traces (drop): want 1 (pre-cutoff), got %d", plan.TraceFiles)
+	}
+	if plan.MetricFiles != 2 {
+		t.Errorf("metrics (preserved) must report total: want 2, got %d", plan.MetricFiles)
+	}
+
+	// drop_metrics only with cutoff: mirror image.
+	plan = buildDropPlan(dir, DropSelector{DropMetrics: true, BeforeUTC: cutoff})
+	if plan.TraceFiles != 2 {
+		t.Errorf("traces (preserved) must report total: want 2, got %d", plan.TraceFiles)
+	}
+	if plan.MetricFiles != 1 {
+		t.Errorf("metrics (drop): want 1 (pre-cutoff), got %d", plan.MetricFiles)
+	}
+
+	// drop both with cutoff: both filtered.
+	plan = buildDropPlan(dir, DropSelector{DropTraces: true, DropMetrics: true, BeforeUTC: cutoff})
+	if plan.TraceFiles != 1 || plan.MetricFiles != 1 {
+		t.Errorf("both signals filtered by cutoff: want (1,1), got (%d,%d)", plan.TraceFiles, plan.MetricFiles)
+	}
+}
+
 func TestInventorySignalDir_BeforeCutoff_OnlyCountsMatchingFiles(t *testing.T) {
 	dir := t.TempDir()
 	mustWriteFile(t, filepath.Join(dir, "2026", "03", "15", "old.otlp.pb.zst"), 100)

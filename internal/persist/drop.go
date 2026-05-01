@@ -174,8 +174,20 @@ func (b *fileBackend) DropHistory(sel DropSelector, confirm func(DropPlan) bool)
 
 func buildDropPlan(dir string, sel DropSelector) DropPlan {
 	plan := DropPlan{Sel: sel}
-	plan.TraceFiles, plan.TraceBytes = inventorySignalDir(filepath.Join(dir, "traces"), sel.BeforeUTC)
-	plan.MetricFiles, plan.MetricBytes = inventorySignalDir(filepath.Join(dir, "metrics"), sel.BeforeUTC)
+	// The cutoff only narrows files for signals we're actually dropping.
+	// A "preserved" signal in a mixed-scope drop reports its TOTAL file
+	// count regardless of cutoff — otherwise the UI's
+	// "preserved · N files, X KiB" line underreports because files
+	// on/after the cutoff would be excluded.
+	var traceCutoff, metricCutoff time.Time
+	if sel.DropTraces {
+		traceCutoff = sel.BeforeUTC
+	}
+	if sel.DropMetrics {
+		metricCutoff = sel.BeforeUTC
+	}
+	plan.TraceFiles, plan.TraceBytes = inventorySignalDir(filepath.Join(dir, "traces"), traceCutoff)
+	plan.MetricFiles, plan.MetricBytes = inventorySignalDir(filepath.Join(dir, "metrics"), metricCutoff)
 	plan.OldestRunUTC, plan.NewestRunUTC = dateRangeFromPartitions(dir)
 	if ids, err := readSuppressionsFile(dir); err == nil {
 		plan.SuppressionsN = len(ids)
