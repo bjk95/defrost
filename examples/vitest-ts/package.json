@@ -1,0 +1,12 @@
+{
+  "name": "defrost-vitest-example-ts",
+  "private": true,
+  "scripts": {
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "vitest": "^3",
+    "typescript": "^5",
+    "@types/node": "^20"
+  }
+}
