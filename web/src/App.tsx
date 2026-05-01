@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Link, Route, Routes, useLocation } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { getTests } from "@/api";
 import { Icon, Logo } from "@/components/Icons";
 import { FailureScreen, failureKindFromMessage } from "@/components/EmptyStates";
-import { suppression } from "@/lib/utils";
+import { LoadingScreen } from "@/components/LoadingScreen";
+import { useSuppressions } from "@/lib/utils";
 import { TestsPage } from "@/pages/TestsPage";
 import { TestDetailPage } from "@/pages/TestDetailPage";
 import { RunsPage } from "@/pages/RunsPage";
@@ -28,10 +29,19 @@ function useTheme(): [string, (next: string) => void] {
   return [theme, setTheme];
 }
 
-function useSuppressionCount(): number {
-  const subscribe = useCallback((cb: () => void) => suppression.subscribe(cb), []);
-  const get = useCallback(() => suppression.count(), []);
-  return useSyncExternalStore(subscribe, get, get);
+// Returns true only after `value` has been true for `delayMs` continuous ms.
+// Used to suppress the loading screen during sub-300ms warm-clone loads.
+function useDelayedTrue(value: boolean, delayMs: number): boolean {
+  const [delayed, setDelayed] = useState(false);
+  useEffect(() => {
+    if (!value) {
+      setDelayed(false);
+      return;
+    }
+    const timer = setTimeout(() => setDelayed(true), delayMs);
+    return () => clearTimeout(timer);
+  }, [value, delayMs]);
+  return delayed;
 }
 
 export default function App() {
@@ -43,12 +53,13 @@ export default function App() {
     location.pathname.startsWith("/runs") || location.pathname === "/run";
   const onTests = !onSuppressions && !onRuns && !onMetrics;
 
-  const { data, error, refetch } = useQuery({
+  const { data, isPending, error, refetch } = useQuery({
     queryKey: ["tests"],
     queryFn: getTests,
   });
-  const suppressionCount = useSuppressionCount();
+  const suppressionCount = useSuppressions().count;
   const [offline, setOffline] = useState(false);
+  const showBootScreen = useDelayedTrue(isPending && !offline, 300);
 
   if (error && !offline) {
     const msg = (error as Error).message;
@@ -61,6 +72,10 @@ export default function App() {
         onShowQuickstart={() => setOffline(true)}
       />
     );
+  }
+
+  if (isPending && !offline) {
+    return showBootScreen ? <LoadingScreen done={false} /> : null;
   }
 
   return (

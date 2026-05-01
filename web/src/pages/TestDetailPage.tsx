@@ -1,18 +1,12 @@
-import { useCallback, useMemo, useState, useSyncExternalStore } from "react";
+import { useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { getTests, getTestRun } from "@/api";
-import { decodeTestId, fmt, suppression, testStats } from "@/lib/utils";
+import { decodeTestId, fmt, testStats, useSuppressions } from "@/lib/utils";
 import type { Cell, RunSummary } from "@/types";
 import { Avatar, SectionLabel, StatusPill } from "@/components/Primitives";
 import { Icon } from "@/components/Icons";
 import { DurationChart, type ChartPoint } from "@/components/DurationChart";
-
-function useSuppression(testId: string) {
-  const subscribe = useCallback((cb: () => void) => suppression.subscribe(cb), []);
-  const get = useCallback(() => suppression.has(testId), [testId]);
-  return useSyncExternalStore(subscribe, get, get);
-}
 
 export function TestDetailPage() {
   const [searchParams] = useSearchParams();
@@ -62,7 +56,10 @@ function TestDetailInner({
   onBack: () => void;
   onOpenRun: (rid: string) => void;
 }) {
-  const isSuppressed = useSuppression(testId);
+  const suppressions = useSuppressions();
+  const isSuppressed = suppressions.has(testId);
+  const isAddingThis = suppressions.pendingAddId === testId;
+  const isRemovingThis = suppressions.pendingRemoveId === testId;
 
   const points: ChartPoint[] = useMemo(() => {
     const byRun = new Map(cells.map((c) => [c.run_id, c] as const));
@@ -145,12 +142,14 @@ function TestDetailInner({
         <div style={{ flex: 1 }} />
         <SuppressionAction
           suppressed={isSuppressed}
-          onAdd={() => suppression.add(testId)}
-          onRemove={() => suppression.remove(testId)}
+          pendingAdd={isAddingThis}
+          pendingRemove={isRemovingThis}
+          onAdd={() => suppressions.add(testId)}
+          onRemove={() => suppressions.remove(testId)}
         />
       </div>
 
-      {isSuppressed && <SuppressionBanner onRemove={() => suppression.remove(testId)} />}
+      {isSuppressed && <SuppressionBanner onRemove={() => suppressions.remove(testId)} />}
 
       <div
         style={{
@@ -609,15 +608,46 @@ function RunHistoryTable({
 
 function SuppressionAction({
   suppressed,
+  pendingAdd,
+  pendingRemove,
   onAdd,
   onRemove,
 }: {
   suppressed: boolean;
+  pendingAdd: boolean;
+  pendingRemove: boolean;
   onAdd: () => void;
   onRemove: () => void;
 }) {
   const [hover, setHover] = useState(false);
   const [confirming, setConfirming] = useState(false);
+
+  // While a mutation is in flight render a unified pending button whose
+  // verb matches the action the user actually triggered. This avoids the
+  // optimistic-flip of `suppressed` from inverting the label.
+  if (pendingAdd || pendingRemove) {
+    return (
+      <button
+        disabled
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 6,
+          padding: "6px 12px",
+          fontSize: 12,
+          fontWeight: 500,
+          background: "var(--bg)",
+          color: "var(--fg-muted)",
+          border: "1px solid var(--border)",
+          borderRadius: 6,
+          cursor: "wait",
+          opacity: 0.7,
+        }}
+      >
+        <Spinner /> {pendingAdd ? "Adding…" : "Removing…"}
+      </button>
+    );
+  }
 
   if (suppressed) {
     return (
@@ -703,6 +733,25 @@ function SuppressionAction({
     >
       <Icon.EyeOff /> Add to suppression list
     </button>
+  );
+}
+
+function Spinner() {
+  return (
+    <span
+      aria-hidden
+      style={{
+        display: "inline-block",
+        width: 12,
+        height: 12,
+        border: "1.5px solid currentColor",
+        borderTopColor: "transparent",
+        borderRadius: "50%",
+        animation: "defrostSuppressSpin 0.8s linear infinite",
+      }}
+    >
+      <style>{`@keyframes defrostSuppressSpin { to { transform: rotate(360deg); } }`}</style>
+    </span>
   );
 }
 

@@ -82,7 +82,7 @@ func makeTestRS(name, runID, status string, startNs, endNs uint64, output string
 func newTestServer(t *testing.T, ds Dataset, assets fstest.MapFS) *httptest.Server {
 	t.Helper()
 	prev := loaderFn
-	loaderFn = func(_ persist.Options) (Dataset, error) { return ds, nil }
+	loaderFn = func(_ persist.Options, _ ProgressEmitter) (Dataset, error) { return ds, nil }
 	t.Cleanup(func() { loaderFn = prev })
 
 	h := New(persist.Options{}, assets)
@@ -286,10 +286,10 @@ func TestServer_GetMetrics_TranslatesGaugeAndHistogram(t *testing.T) {
 			Name       string `json:"name"`
 			Instrument string `json:"instrument"`
 			Points     []struct {
-				RunID   string             `json:"run_id"`
-				Attrs   map[string]string  `json:"attrs"`
-				Value   *float64           `json:"value"`
-				Count   *uint64            `json:"count"`
+				RunID   string            `json:"run_id"`
+				Attrs   map[string]string `json:"attrs"`
+				Value   *float64          `json:"value"`
+				Count   *uint64           `json:"count"`
 				Buckets []struct {
 					LE    *float64 `json:"le"`
 					Count uint64   `json:"count"`

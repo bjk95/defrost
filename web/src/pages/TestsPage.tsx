@@ -1,12 +1,12 @@
-import { useCallback, useMemo, useState, useSyncExternalStore } from "react";
+import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { getTests } from "@/api";
 import {
   buildTestTree,
   fmt,
-  suppression,
   testStats,
+  useSuppressions,
   type TreeBranch,
   type TreeNode,
 } from "@/lib/utils";
@@ -23,15 +23,6 @@ import { TestsEmpty } from "@/components/EmptyStates";
 
 type StatusFilter = "all" | "failing" | "flaky";
 type WindowSize = "10" | "20" | "50";
-
-function useSuppressedTest(testId: string) {
-  const subscribe = useCallback(
-    (cb: () => void) => suppression.subscribe(cb),
-    [],
-  );
-  const get = useCallback(() => suppression.has(testId), [testId]);
-  return useSyncExternalStore(subscribe, get, get);
-}
 
 export function TestsPage() {
   const navigate = useNavigate();
@@ -424,7 +415,7 @@ function TestRowView({
 }) {
   const [hover, setHover] = useState(false);
   const stats = testStats(test.cells);
-  const isSuppressed = useSuppressedTest(test.test_id);
+  const isSuppressed = useSuppressions().has(test.test_id);
   const indent = ROW_BASE_INDENT + depth * ROW_INDENT_STEP;
   return (
     <div

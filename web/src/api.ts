@@ -1,8 +1,8 @@
 import { normalizeWireMetrics, type MetricSeries } from "./lib/metrics";
 import type { GridResponse, TestRunDetail } from "./types";
 
-async function fetchJSON<T>(url: string): Promise<T> {
-  const r = await fetch(url);
+async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
+  const r = await fetch(url, init);
   if (!r.ok) throw new Error(`${url}: ${r.status} ${r.statusText}`);
   return (await r.json()) as T;
 }
@@ -22,4 +22,27 @@ export async function getMetrics(): Promise<MetricSeries[]> {
     "/api/metrics",
   );
   return normalizeWireMetrics(body.metrics ?? []);
+}
+
+export interface SuppressionsResponse {
+  test_ids: string[];
+}
+
+export function getSuppressions(): Promise<SuppressionsResponse> {
+  return fetchJSON<SuppressionsResponse>("/api/suppressions");
+}
+
+export function addSuppression(testId: string): Promise<SuppressionsResponse> {
+  return fetchJSON<SuppressionsResponse>("/api/suppressions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ test_id: testId }),
+  });
+}
+
+export function removeSuppression(testId: string): Promise<SuppressionsResponse> {
+  return fetchJSON<SuppressionsResponse>(
+    `/api/suppressions/${encodeURIComponent(testId)}`,
+    { method: "DELETE" },
+  );
 }

@@ -105,11 +105,29 @@ type Backend interface {
 	// there is no metrics data on disk.
 	LoadAllMetrics() ([]*metricspb.ResourceMetrics, error)
 
+	// LoadAllWithProgress is LoadAll with phase boundaries emitted to
+	// progress (clone, spans, parse). Used by the serve boot screen to
+	// stream a real terminal log as the data branch is cloned and
+	// parsed. Pass nil to opt out — equivalent to LoadAll.
+	LoadAllWithProgress(progress ProgressFn) (rootSpans []*tracepb.ResourceSpans, byEncodedName map[string][]*tracepb.ResourceSpans, err error)
+
+	// LoadAllMetricsWithProgress is LoadAllMetrics with progress events
+	// emitted (metrics phase + final data point count). Pass nil to opt
+	// out — equivalent to LoadAllMetrics.
+	LoadAllMetricsWithProgress(progress ProgressFn) ([]*metricspb.ResourceMetrics, error)
+
 	// DropHistory inventories the data branch and (after confirm returns
 	// true) rewrites it via a single orphan commit force-pushed with
 	// --force-with-lease. See drop.go for full semantics.
 	DropHistory(sel DropSelector, confirm func(DropPlan) bool) error
 }
+
+// ProgressFn is the callback shape used to report per-phase progress
+// during a read. phase is one of: clone, spans, parse, metrics. detail
+// is the active sub-step (e.g. the actual git command); stream is an
+// optional log line carrying real numbers (e.g. "found 50 run files").
+// Either detail or stream may be empty.
+type ProgressFn func(phase, detail, stream string)
 
 // New returns the Backend implied by opts. Dev mode selects the local
 // scratch backend; otherwise the git-data-branch backend is used.
@@ -459,21 +477,41 @@ func (b *gitBackend) GetTestHistory(testName string) ([]*tracepb.ResourceSpans, 
 }
 
 func (b *gitBackend) LoadAll() ([]*tracepb.ResourceSpans, map[string][]*tracepb.ResourceSpans, error) {
+	return b.LoadAllWithProgress(nil)
+}
+
+func (b *gitBackend) LoadAllMetrics() ([]*metricspb.ResourceMetrics, error) {
+	return b.LoadAllMetricsWithProgress(nil)
+}
+
+func (b *gitBackend) LoadAllWithProgress(progress ProgressFn) ([]*tracepb.ResourceSpans, map[string][]*tracepb.ResourceSpans, error) {
+	emit := nopProgress(progress)
+	emit("clone", "git clone --depth=1 --single-branch --branch "+b.dataBranch(), "")
 	dir, cleanup, err := b.cloneForRead()
 	if err != nil || dir == "" {
 		return nil, nil, err
 	}
 	defer cleanup()
-	return readAllSpans(dir)
+	return readAllSpansWithProgress(dir, emit)
 }
 
-func (b *gitBackend) LoadAllMetrics() ([]*metricspb.ResourceMetrics, error) {
+func (b *gitBackend) LoadAllMetricsWithProgress(progress ProgressFn) ([]*metricspb.ResourceMetrics, error) {
+	emit := nopProgress(progress)
 	dir, cleanup, err := b.cloneForRead()
 	if err != nil || dir == "" {
 		return nil, err
 	}
 	defer cleanup()
-	return readAllMetrics(dir)
+	return readAllMetricsWithProgress(dir, emit)
+}
+
+// nopProgress wraps a possibly-nil ProgressFn so callers can emit
+// unconditionally without per-call nil checks.
+func nopProgress(fn ProgressFn) ProgressFn {
+	if fn == nil {
+		return func(string, string, string) {}
+	}
+	return fn
 }
 
 func (b *gitBackend) dataBranch() string {
@@ -543,23 +581,31 @@ func (b *fileBackend) GetTestHistory(testName string) ([]*tracepb.ResourceSpans,
 }
 
 func (b *fileBackend) LoadAll() ([]*tracepb.ResourceSpans, map[string][]*tracepb.ResourceSpans, error) {
+	return b.LoadAllWithProgress(nil)
+}
+
+func (b *fileBackend) LoadAllMetrics() ([]*metricspb.ResourceMetrics, error) {
+	return b.LoadAllMetricsWithProgress(nil)
+}
+
+func (b *fileBackend) LoadAllWithProgress(progress ProgressFn) ([]*tracepb.ResourceSpans, map[string][]*tracepb.ResourceSpans, error) {
 	if _, err := os.Stat(b.dir); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil, nil
 		}
 		return nil, nil, err
 	}
-	return readAllSpans(b.dir)
+	return readAllSpansWithProgress(b.dir, nopProgress(progress))
 }
 
-func (b *fileBackend) LoadAllMetrics() ([]*metricspb.ResourceMetrics, error) {
+func (b *fileBackend) LoadAllMetricsWithProgress(progress ProgressFn) ([]*metricspb.ResourceMetrics, error) {
 	if _, err := os.Stat(b.dir); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
 		}
 		return nil, err
 	}
-	return readAllMetrics(b.dir)
+	return readAllMetricsWithProgress(b.dir, nopProgress(progress))
 }
 
 // --- write helpers ---
@@ -811,11 +857,14 @@ func readTestHistoryFromDir(dir, testName string) ([]*tracepb.ResourceSpans, err
 	return out, nil
 }
 
-// readAllSpans walks every per-run trace file, splits each into one
-// ResourceSpans per span, separates root spans from test spans, and
-// groups test spans by encoded span name (matching the existing serve-
-// layer key shape). Decoding is parallelised across CPU cores.
-func readAllSpans(dir string) ([]*tracepb.ResourceSpans, map[string][]*tracepb.ResourceSpans, error) {
+// readAllSpansWithProgress walks every per-run trace file, splits each
+// into one ResourceSpans per span, separates root spans from test spans,
+// and groups test spans by encoded span name (matching the existing
+// serve-layer key shape). Decoding is parallelised across CPU cores.
+// Emits one "spans" event with the file count, then one "parse" event
+// per file decoded. progress must be non-nil — call sites use
+// nopProgress to wrap.
+func readAllSpansWithProgress(dir string, progress ProgressFn) ([]*tracepb.ResourceSpans, map[string][]*tracepb.ResourceSpans, error) {
 	tracesDir := filepath.Join(dir, "traces")
 	if _, err := os.Stat(tracesDir); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -823,9 +872,20 @@ func readAllSpans(dir string) ([]*tracepb.ResourceSpans, map[string][]*tracepb.R
 		}
 		return nil, nil, err
 	}
+	files, err := listOTLPFiles(tracesDir)
+	if err != nil {
+		return nil, nil, err
+	}
+	progress("spans", "scanning runs/*.otlp.pb.zst", fmt.Sprintf("found %d run files", len(files)))
 	var roots []*tracepb.ResourceSpans
 	byEncodedName := make(map[string][]*tracepb.ResourceSpans)
-	err := walkOTLPTraceFilesParallel(tracesDir, func(rss []*tracepb.ResourceSpans) {
+	progress("parse", "decoding OTLP ResourceSpans", "")
+	parsed := 0
+	emitEvery := 1
+	if len(files) > 10 {
+		emitEvery = len(files) / 10
+	}
+	err = walkOTLPTraceFilesParallelFiles(files, func(rss []*tracepb.ResourceSpans) {
 		for _, rs := range rss {
 			for _, ss := range rs.ScopeSpans {
 				for _, s := range ss.Spans {
@@ -841,6 +901,10 @@ func readAllSpans(dir string) ([]*tracepb.ResourceSpans, map[string][]*tracepb.R
 				}
 			}
 		}
+		parsed++
+		if parsed%emitEvery == 0 || parsed == len(files) {
+			progress("parse", "", fmt.Sprintf("parsed %d/%d runs", parsed, len(files)))
+		}
 	})
 	if err != nil {
 		return nil, nil, err
@@ -848,11 +912,13 @@ func readAllSpans(dir string) ([]*tracepb.ResourceSpans, map[string][]*tracepb.R
 	return roots, byEncodedName, nil
 }
 
-// readAllMetrics walks every per-run metrics file and returns one
-// *metricspb.ResourceMetrics per stored Metric (matching the existing
-// caller contract from the NDJSON era). Decoding is parallelised across
-// CPU cores.
-func readAllMetrics(dir string) ([]*metricspb.ResourceMetrics, error) {
+// readAllMetricsWithProgress walks every per-run metrics file and
+// returns one *metricspb.ResourceMetrics per stored Metric (matching
+// the existing caller contract from the NDJSON era). Decoding is
+// parallelised across CPU cores. Emits one "metrics" event before the
+// walk and a final stream event reporting the parsed data point count.
+// progress must be non-nil — call sites use nopProgress to wrap.
+func readAllMetricsWithProgress(dir string, progress ProgressFn) ([]*metricspb.ResourceMetrics, error) {
 	metricsDir := filepath.Join(dir, "metrics")
 	if _, err := os.Stat(metricsDir); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -860,6 +926,7 @@ func readAllMetrics(dir string) ([]*metricspb.ResourceMetrics, error) {
 		}
 		return nil, err
 	}
+	progress("metrics", "decoding OTLP ResourceMetrics", "")
 	var out []*metricspb.ResourceMetrics
 	err := walkOTLPMetricsFilesParallel(metricsDir, func(rms []*metricspb.ResourceMetrics) {
 		for _, rm := range rms {
@@ -869,6 +936,7 @@ func readAllMetrics(dir string) ([]*metricspb.ResourceMetrics, error) {
 	if err != nil {
 		return nil, err
 	}
+	progress("metrics", "", fmt.Sprintf("parsed %d metric data points", len(out)))
 	return out, nil
 }
 
@@ -908,6 +976,13 @@ func walkOTLPTraceFilesParallel(root string, emit func([]*tracepb.ResourceSpans)
 	if err != nil {
 		return err
 	}
+	return walkOTLPTraceFilesParallelFiles(files, emit)
+}
+
+// walkOTLPTraceFilesParallelFiles is walkOTLPTraceFilesParallel with the
+// file list pre-resolved by the caller. Used so progress reporters can
+// take a count *before* the parallel decode starts.
+func walkOTLPTraceFilesParallelFiles(files []string, emit func([]*tracepb.ResourceSpans)) error {
 	if len(files) == 0 {
 		return nil
 	}
