@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -77,9 +78,23 @@ func dropLocation(plan persist.DropPlan) string {
 		return ".defrost-dev/"
 	}
 	if plan.OriginURL != "" {
-		return fmt.Sprintf("branch %s (origin: %s)", plan.Branch, plan.OriginURL)
+		return fmt.Sprintf("branch %s (origin: %s)", plan.Branch, sanitizeOriginURL(plan.OriginURL))
 	}
 	return fmt.Sprintf("branch %s", plan.Branch)
+}
+
+// sanitizeOriginURL strips userinfo from the origin URL so an embedded
+// token in an HTTPS remote (e.g. https://<pat>@github.com/foo/bar.git or
+// https://user:pass@host/...) doesn't leak into the confirmation prompt
+// or, with --yes, into CI logs. SCP-style SSH remotes (git@host:path)
+// don't parse as URLs and pass through unchanged; they carry no secret.
+func sanitizeOriginURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" || u.User == nil {
+		return raw
+	}
+	u.User = nil
+	return u.String()
 }
 
 func printDropPlan(w *os.File, plan persist.DropPlan) {
