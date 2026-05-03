@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/bjk95/defrost/internal/cliout"
 	"github.com/bjk95/defrost/internal/persist"
 )
 
@@ -22,35 +23,35 @@ import (
 // Confirmation prompt is on by default because deleting `.defrost/`
 // also removes cache.duckdb (the dashboard's read cache). Pass --yes
 // to skip the prompt in scripts.
-func HandleReset(c ResetCmd) int {
+func HandleReset(c ResetCmd, root RootOpts, out *cliout.Printer) int {
 	opts := persist.Options{
-		RepoDir:   c.RepoDir,
+		RepoDir:   root.RepoDir,
 		AuthToken: os.Getenv("GITHUB_TOKEN"),
 	}
-	root := persist.LocalRoot(opts)
-	info, err := os.Stat(root)
+	localRoot := persist.LocalRoot(opts)
+	info, err := os.Stat(localRoot)
 	missing := errors.Is(err, fs.ErrNotExist)
 	switch {
 	case missing:
 		// Nothing to wipe, but we still re-clone below so the user
 		// ends up with a populated .defrost/ either way.
 	case err != nil:
-		fmt.Fprintln(os.Stderr, "defrost reset:", err)
+		out.Failf("defrost reset: %v", err)
 		return 1
 	case !info.IsDir():
-		fmt.Fprintf(os.Stderr, "defrost reset: %s exists but is not a directory; remove it manually.\n", root)
+		out.Failf("defrost reset: %s exists but is not a directory; remove it manually.", localRoot)
 		return 1
 	}
 
-	if !missing && !c.Yes && !confirmReset(os.Stdin, os.Stderr, root) {
+	if !missing && !c.Yes && !confirmReset(os.Stdin, os.Stderr, localRoot) {
 		return 0
 	}
 	if !missing {
-		if err := os.RemoveAll(root); err != nil {
-			fmt.Fprintln(os.Stderr, "defrost reset:", err)
+		if err := os.RemoveAll(localRoot); err != nil {
+			out.Failf("defrost reset: %v", err)
 			return 1
 		}
-		fmt.Fprintf(os.Stderr, "defrost reset: removed %s.\n", root)
+		fmt.Fprintf(os.Stderr, "defrost reset: removed %s.\n", localRoot)
 	}
 
 	// Re-clone immediately so the user is left with a usable worktree.
@@ -60,7 +61,7 @@ func HandleReset(c ResetCmd) int {
 	// note it.
 	snap, err := persist.New(opts).CloneForRead()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "defrost reset: re-clone failed:", err)
+		out.Failf("defrost reset: re-clone failed: %v", err)
 		fmt.Fprintf(os.Stderr, "  the local cache is wiped; the next read will retry the clone.\n")
 		return 1
 	}

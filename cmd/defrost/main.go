@@ -21,6 +21,7 @@ import (
 	"github.com/alecthomas/kong"
 
 	"github.com/bjk95/defrost/internal/cli"
+	"github.com/bjk95/defrost/internal/cliout"
 	"github.com/bjk95/defrost/internal/persist"
 	"github.com/bjk95/defrost/internal/query/duckdb"
 	"github.com/bjk95/defrost/internal/serve"
@@ -28,44 +29,106 @@ import (
 )
 
 func main() {
+	os.Exit(run())
+}
+
+func run() int {
+	startDir, _ := os.Getwd()
+	resolver, cfgWarnings, cfgErr := cli.LoadConfigResolver(startDir)
+	if cfgErr != nil {
+		fmt.Fprintln(os.Stderr, cfgErr)
+		return 2
+	}
+
 	var c cli.CLI
-	parsed := kong.Parse(&c)
+
+	// helpFn captures the printer at render time. Kong fires the help
+	// callback during Parse, which is BEFORE the resolver/parser fully
+	// populate c — we re-derive verbosity/color from os.Args + env so
+	// help renders correctly even at that early point.
+	helpFn := func(opts kong.HelpOptions, ctx *kong.Context) error {
+		p := cli.NewPrinter(&cli.CLI{
+			NoColor: hasArg("--no-color"),
+		})
+		return cli.MakeHelpPrinter(p)(opts, ctx)
+	}
+
+	parsed := kong.Parse(&c,
+		kong.Name("defrost"),
+		kong.Description("Track AI evals, metrics, and tests with Git as the database."),
+		kong.UsageOnError(),
+		kong.Vars{"version": cli.VersionString()},
+		kong.Help(helpFn),
+		kong.Resolvers(resolver),
+		kong.Groups{
+			"core":       "CORE COMMANDS",
+			"inspection": "INSPECTION COMMANDS",
+			"management": "MANAGEMENT COMMANDS",
+		},
+	)
+
+	if msg, code := cli.ValidateGlobalFlags(&c); msg != "" {
+		fmt.Fprintln(os.Stderr, msg)
+		return code
+	}
+
+	out := cli.NewPrinter(&c)
+	for _, w := range cfgWarnings {
+		out.Warn(w)
+	}
+
+	root := c.Root()
 	cmd := parsed.Command()
 
 	switch {
 	case strings.HasPrefix(cmd, "exec"):
-		os.Exit(cli.HandleExec(c.Exec))
+		return cli.HandleExec(c.Exec, root, out)
 	case strings.HasPrefix(cmd, "history"):
-		os.Exit(cli.HandleHistory(c.History))
+		return cli.HandleHistory(c.History, root, out)
 	case strings.HasPrefix(cmd, "suppress add"):
-		os.Exit(cli.HandleSuppressAdd(c.Suppress.Add))
+		return cli.HandleSuppressAdd(c.Suppress.Add, root, out)
 	case strings.HasPrefix(cmd, "suppress remove"):
-		os.Exit(cli.HandleSuppressRemove(c.Suppress.Remove))
+		return cli.HandleSuppressRemove(c.Suppress.Remove, root, out)
 	case strings.HasPrefix(cmd, "suppress list"):
-		os.Exit(cli.HandleSuppressList(c.Suppress.List))
+		return cli.HandleSuppressList(c.Suppress.List, root, out)
 	case strings.HasPrefix(cmd, "drop history"):
-		os.Exit(cli.HandleDropHistory(c.Drop.History))
+		return cli.HandleDropHistory(c.Drop.History, root, out)
 	case strings.HasPrefix(cmd, "reset"):
-		os.Exit(cli.HandleReset(c.Reset))
+		return cli.HandleReset(c.Reset, root, out)
 	case strings.HasPrefix(cmd, "serve"):
-		os.Exit(handleServe(c.Serve))
+		return handleServe(c.Serve, root, out)
 	default:
-		fmt.Fprintln(os.Stderr, "unknown command:", cmd)
-		os.Exit(2)
+		out.Failf("unknown command: %s", cmd)
+		return 2
 	}
 }
 
-func handleServe(c cli.ServeCmd) int {
+// hasArg returns true if name appears anywhere in os.Args[1:].
+// Used by the help callback because Kong fires it before c is
+// populated; we need to know --no-color status to colorize headings
+// correctly even in the help output.
+func hasArg(name string) bool {
+	for _, a := range os.Args[1:] {
+		if a == name {
+			return true
+		}
+	}
+	return false
+}
+
+// handleServe is the full binary's serve handler. The slim CI binary
+// prints an install hint instead.
+func handleServe(c cli.ServeCmd, root cli.RootOpts, out *cliout.Printer) int {
 	pOpts := persist.Options{
-		RepoDir:    c.RepoDir,
-		DataBranch: c.DataBranch,
+		RepoDir:    root.RepoDir,
+		DataBranch: root.DataBranch,
 		AuthToken:  os.Getenv("GITHUB_TOKEN"),
-		Dev:        c.Dev,
+		Dev:        root.Dev,
 	}
 
 	q, err := duckdb.New(pOpts)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "serve: open cache:", err)
+		out.Failf("serve: open cache: %v", err)
 		return 1
 	}
 	defer q.Close()
@@ -74,10 +137,10 @@ func handleServe(c cli.ServeCmd) int {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		if errors.Is(err, syscall.EADDRINUSE) {
-			fmt.Fprintf(os.Stderr, "port %d already in use; pass --port to override\n", c.Port)
+			out.Failf("port %d already in use; pass --port to override", c.Port)
 			return 1
 		}
-		fmt.Fprintln(os.Stderr, "serve:", err)
+		out.Failf("serve: %v", err)
 		return 1
 	}
 
@@ -88,9 +151,9 @@ func handleServe(c cli.ServeCmd) int {
 	})
 	srv := &http.Server{Handler: handler}
 
-	fmt.Printf("→ http://localhost:%d\n", c.Port)
+	out.Stepf("%s", out.URL(fmt.Sprintf("http://localhost:%d", c.Port)))
 	if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		fmt.Fprintln(os.Stderr, "serve:", err)
+		out.Failf("serve: %v", err)
 		return 1
 	}
 	return 0

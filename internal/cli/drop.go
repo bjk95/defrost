@@ -8,11 +8,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bjk95/defrost/internal/cliout"
 	"github.com/bjk95/defrost/internal/persist"
 )
 
 // HandleDropHistory implements `defrost drop history`.
-func HandleDropHistory(c DropHistoryCmd) int {
+func HandleDropHistory(c DropHistoryCmd, root RootOpts, out *cliout.Printer) int {
 	exclusive := 0
 	if c.TracesOnly {
 		exclusive++
@@ -24,7 +25,7 @@ func HandleDropHistory(c DropHistoryCmd) int {
 		exclusive++
 	}
 	if exclusive > 1 {
-		fmt.Fprintln(os.Stderr, "drop history: --traces-only / --metrics-only / --logs-only are mutually exclusive")
+		out.Fail("drop history: --traces-only / --metrics-only / --logs-only are mutually exclusive")
 		return 2
 	}
 	sel := persist.DropSelector{
@@ -33,10 +34,10 @@ func HandleDropHistory(c DropHistoryCmd) int {
 		DropLogs:    !c.TracesOnly && !c.MetricsOnly,
 	}
 	be := persist.New(persist.Options{
-		RepoDir:    c.RepoDir,
-		DataBranch: c.DataBranch,
+		RepoDir:    root.RepoDir,
+		DataBranch: root.DataBranch,
 		AuthToken:  os.Getenv("GITHUB_TOKEN"),
-		Dev:        c.Dev,
+		Dev:        root.Dev,
 	})
 
 	confirm := func(plan persist.DropPlan) bool {
@@ -56,7 +57,7 @@ func HandleDropHistory(c DropHistoryCmd) int {
 	}
 
 	if err := be.DropHistory(sel, confirm); err != nil {
-		fmt.Fprintln(os.Stderr, "drop history:", err)
+		out.Failf("drop history: %v", err)
 		return 1
 	}
 	return 0

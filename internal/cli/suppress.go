@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/bjk95/defrost/internal/cliout"
 	"github.com/bjk95/defrost/internal/persist"
 )
 
@@ -19,9 +20,9 @@ func suppressOpts(repoDir, dataBranch string, dev bool) persist.Options {
 // HandleSuppressAdd appends each test ID in c.Tests to the suppression
 // list in a single commit. Empty input is an error; empty individual
 // IDs are skipped silently.
-func HandleSuppressAdd(c SuppressAddCmd) int {
+func HandleSuppressAdd(c SuppressAddCmd, root RootOpts, out *cliout.Printer) int {
 	if len(c.Tests) == 0 {
-		fmt.Fprintln(os.Stderr, "suppress add: no test ids provided")
+		out.Fail("suppress add: no test ids provided")
 		return 2
 	}
 	cleaned := make([]string, 0, len(c.Tests))
@@ -32,13 +33,13 @@ func HandleSuppressAdd(c SuppressAddCmd) int {
 		cleaned = append(cleaned, id)
 	}
 	if len(cleaned) == 0 {
-		fmt.Fprintln(os.Stderr, "suppress add: all provided test ids were empty")
+		out.Fail("suppress add: all provided test ids were empty")
 		return 2
 	}
-	be := persist.New(suppressOpts(c.RepoDir, c.DataBranch, c.Dev))
+	be := persist.New(suppressOpts(root.RepoDir, root.DataBranch, root.Dev))
 	mutate := func(cur []string) []string { return append(cur, cleaned...) }
 	if err := be.UpdateSuppressions(mutate, commitMessageForAdd(cleaned)); err != nil {
-		fmt.Fprintln(os.Stderr, "suppress add:", err)
+		out.Failf("suppress add: %v", err)
 		return 1
 	}
 	return 0
@@ -54,12 +55,12 @@ func commitMessageForAdd(ids []string) string {
 }
 
 // HandleSuppressRemove removes a test ID from the suppression list.
-func HandleSuppressRemove(c SuppressRemoveCmd) int {
+func HandleSuppressRemove(c SuppressRemoveCmd, root RootOpts, out *cliout.Printer) int {
 	if c.Test == "" {
-		fmt.Fprintln(os.Stderr, "suppress remove: empty test id")
+		out.Fail("suppress remove: empty test id")
 		return 2
 	}
-	be := persist.New(suppressOpts(c.RepoDir, c.DataBranch, c.Dev))
+	be := persist.New(suppressOpts(root.RepoDir, root.DataBranch, root.Dev))
 	mutate := func(cur []string) []string {
 		out := make([]string, 0, len(cur))
 		for _, id := range cur {
@@ -70,22 +71,22 @@ func HandleSuppressRemove(c SuppressRemoveCmd) int {
 		return out
 	}
 	if err := be.UpdateSuppressions(mutate, "suppress: remove "+c.Test); err != nil {
-		fmt.Fprintln(os.Stderr, "suppress remove:", err)
+		out.Failf("suppress remove: %v", err)
 		return 1
 	}
 	return 0
 }
 
 // HandleSuppressList prints every suppressed test id on its own line.
-func HandleSuppressList(c SuppressListCmd) int {
-	be := persist.New(suppressOpts(c.RepoDir, c.DataBranch, c.Dev))
+func HandleSuppressList(c SuppressListCmd, root RootOpts, out *cliout.Printer) int {
+	be := persist.New(suppressOpts(root.RepoDir, root.DataBranch, root.Dev))
 	ids, err := be.GetSuppressions()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "suppress list:", err)
+		out.Failf("suppress list: %v", err)
 		return 1
 	}
 	for _, id := range ids {
-		fmt.Println(id)
+		out.Println(id)
 	}
 	return 0
 }

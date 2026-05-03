@@ -15,6 +15,7 @@ import (
 	"go.opentelemetry.io/collector/pdata/ptrace"
 	"go.opentelemetry.io/collector/pdata/ptrace/ptraceotlp"
 
+	"github.com/bjk95/defrost/internal/cliout"
 	"github.com/bjk95/defrost/internal/eval/inspect"
 	"github.com/bjk95/defrost/internal/eval/promptfoo"
 	"github.com/bjk95/defrost/internal/golang"
@@ -44,9 +45,9 @@ const drainTimeout = 60 * time.Second
 
 // HandleExec is the `defrost exec` subcommand handler. Returns the
 // process exit code.
-func HandleExec(c ExecCmd) int {
+func HandleExec(c ExecCmd, root RootOpts, out *cliout.Printer) int {
 	if len(c.Cmd) == 0 {
-		fmt.Fprintln(os.Stderr, "exec: no command provided")
+		out.Fail("exec: no command provided")
 		return 2
 	}
 
@@ -61,20 +62,20 @@ func HandleExec(c ExecCmd) int {
 
 	a := reg.Find(c.Cmd)
 	if a == nil {
-		fmt.Fprintf(os.Stderr, "exec: unsupported test command: %q\n", c.Cmd[0])
+		out.Failf("exec: unsupported test command: %q", c.Cmd[0])
 		return 2
 	}
-	return execWith(a, c)
+	return execWith(a, c, root, out)
 }
 
 // execWith runs a known adapter and applies persistence + suppression
 // rewrite. Split out so tests can drive it with a stub adapter.
-func execWith(a runner.Adapter, c ExecCmd) int {
+func execWith(a runner.Adapter, c ExecCmd, root RootOpts, out *cliout.Printer) int {
 	pOpts := persist.Options{
-		RepoDir:    c.RepoDir,
-		DataBranch: c.DataBranch,
+		RepoDir:    root.RepoDir,
+		DataBranch: root.DataBranch,
 		AuthToken:  os.Getenv("GITHUB_TOKEN"),
-		Dev:        c.Dev,
+		Dev:        root.Dev,
 	}
 	persistEnabled := !c.NoPersist
 
@@ -88,10 +89,10 @@ func execWith(a runner.Adapter, c ExecCmd) int {
 		var runErr error
 		run, runErr = persist.DetectRunContext(pOpts, c.Cmd, DefrostVersion)
 		if runErr != nil {
-			fmt.Fprintln(os.Stderr, "exec: detect run context, skipping persist:", runErr)
+			out.Warnf("exec: detect run context, skipping persist: %v", runErr)
 			persistFailed = true
 		} else {
-			receiver, sink, restoreEnv = startReceiver()
+			receiver, sink, restoreEnv = startReceiver(out)
 		}
 	}
 	defer restoreEnv()
@@ -110,18 +111,18 @@ func execWith(a runner.Adapter, c ExecCmd) int {
 
 	pass, fail, skip := tallyResults(results)
 	if pass+fail+skip > 0 {
-		fmt.Fprintf(os.Stderr, "defrost: results: %d pass, %d fail, %d skip\n", pass, fail, skip)
+		out.Stepf("%d passed   ✗ %d failed   ⊘ %d skipped", pass, fail, skip)
 	}
 
 	if persistEnabled && !persistFailed {
 		// Add the synthetic root span and run-duration metric, then
 		// flush everything as canonical OTLP bytes.
 		runEnd := time.Now()
-		root := runner.NewRootSpan(run)
-		runner.FinaliseRoot(root, runEnd, code)
-		root.ResourceSpans().MoveAndAppendTo(results.ResourceSpans())
+		root2 := runner.NewRootSpan(run)
+		runner.FinaliseRoot(root2, runEnd, code)
+		root2.ResourceSpans().MoveAndAppendTo(results.ResourceSpans())
 
-		dur := runner.RunDurationMetric(run, c.Cmd, persist.RepoPrefix(c.RepoDir), runEnd)
+		dur := runner.RunDurationMetric(run, c.Cmd, persist.RepoPrefix(root.RepoDir), runEnd)
 		dur.ResourceMetrics().MoveAndAppendTo(adapterMetrics.ResourceMetrics())
 
 		// Drain the sink one more time in case the SDK was still
@@ -141,8 +142,7 @@ func execWith(a runner.Adapter, c ExecCmd) int {
 			// on the data branch by exact filename match — much more
 			// robust than counting committed files since the last
 			// fetch.
-			fmt.Fprintf(os.Stderr,
-				"defrost: persisted: trace_id=%s, spans=%d, metric_points=%d, log_records=%d\n",
+			out.Passf("persisted: trace_id=%s, spans=%d, metric_points=%d, log_records=%d",
 				hex.EncodeToString(run.TraceID[:]),
 				results.SpanCount(), adapterMetrics.DataPointCount(), receiverLogs.LogRecordCount())
 		}
@@ -152,7 +152,7 @@ func execWith(a runner.Adapter, c ExecCmd) int {
 	// happened, the test command's signal is what matters. The user's
 	// terminal got a clear warning above; suppression rewriting still
 	// applies. See docs/guides/troubleshooting/persist-failed.md.
-	code = maybeRewriteExitCode(code, results, pOpts)
+	code = maybeRewriteExitCode(code, results, pOpts, out)
 	return code
 }
 
@@ -201,11 +201,11 @@ func drainSink(sink *otlp.Sink, receiver *otlp.Receiver) (ptrace.Traces, pmetric
 // it scoped to OTEL_EXPORTER_OTLP_METRICS_*; the upstream
 // otlpreceiver speaks all three signals so the generic override is
 // safe and ensures the user's traces/logs don't 404 silently.
-func startReceiver() (*otlp.Receiver, *otlp.Sink, func()) {
+func startReceiver(out *cliout.Printer) (*otlp.Receiver, *otlp.Sink, func()) {
 	sink := otlp.NewSink()
 	r, port, err := otlp.Start(context.Background(), sink)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "exec: otlp receiver bind failed, continuing without telemetry:", err)
+		out.Warnf("exec: otlp receiver bind failed, continuing without telemetry: %v", err)
 		return nil, sink, func() {}
 	}
 	endpoint := fmt.Sprintf("http://127.0.0.1:%d", port)
@@ -325,20 +325,19 @@ func tallyResults(td ptrace.Traces) (pass, fail, skip int) {
 // maybeRewriteExitCode rewrites a non-zero exit to 0 when every failing
 // test (excluding file-level errors, which we never suppress) is on
 // the suppression list.
-func maybeRewriteExitCode(code int, td ptrace.Traces, pOpts persist.Options) int {
+func maybeRewriteExitCode(code int, td ptrace.Traces, pOpts persist.Options, out *cliout.Printer) int {
 	failing, hasFileError := failingAndFileError(td)
 	if len(failing) == 0 {
 		return code
 	}
 	if hasFileError {
-		fmt.Fprintf(os.Stderr,
-			"defrost: file-level error present; exit %d preserved\n", code)
+		out.Warnf("file-level error present; exit %d preserved", code)
 		return code
 	}
-	fmt.Fprintf(os.Stderr, "defrost: checking suppression list for %d failing test(s)\n", len(failing))
+	out.Infof("checking suppression list for %d failing test(s)", len(failing))
 	suppressed, err := persist.New(pOpts).GetSuppressions()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "defrost: suppression read failed (exit code unchanged):", err)
+		out.Warnf("suppression read failed (exit code unchanged): %v", err)
 		return code
 	}
 	suppSet := make(map[string]struct{}, len(suppressed))
@@ -348,19 +347,17 @@ func maybeRewriteExitCode(code int, td ptrace.Traces, pOpts persist.Options) int
 	allSuppressed := true
 	for _, id := range failing {
 		if _, ok := suppSet[id]; ok {
-			fmt.Fprintf(os.Stderr, "defrost:   %s in suppression list -> ignoring\n", id)
+			out.Infof("  %s in suppression list -> ignoring", id)
 		} else {
-			fmt.Fprintf(os.Stderr, "defrost:   %s not in suppression list -> failing build\n", id)
+			out.Infof("  %s not in suppression list -> failing build", id)
 			allSuppressed = false
 		}
 	}
 	if !allSuppressed {
-		fmt.Fprintf(os.Stderr, "defrost: not all failures suppressed; exit %d preserved\n", code)
+		out.Warnf("not all failures suppressed; exit %d preserved", code)
 		return code
 	}
-	fmt.Fprintf(os.Stderr,
-		"defrost: all %d failing test(s) suppressed; rewriting exit %d → 0\n",
-		len(failing), code)
+	out.Passf("all %d failing test(s) suppressed; rewriting exit %d → 0", len(failing), code)
 	return 0
 }
 
