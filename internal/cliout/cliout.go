@@ -44,12 +44,14 @@ func (p *Printer) Info(msg string) { p.line("·", colorDim, msg, 1) }
 func (p *Printer) Debug(msg string) { p.line("·", colorDim, msg, 2) }
 
 const (
-	colorReset  = "\x1b[0m"
-	colorCyan   = "\x1b[36m"
-	colorGreen  = "\x1b[32m"
-	colorRed    = "\x1b[31m"
-	colorYellow = "\x1b[33m"
-	colorDim    = "\x1b[2m"
+	colorReset     = "\x1b[0m"
+	colorCyan      = "\x1b[36m"
+	colorGreen     = "\x1b[32m"
+	colorRed       = "\x1b[31m"
+	colorYellow    = "\x1b[33m"
+	colorDim       = "\x1b[2m"
+	styleBold      = "\x1b[1m"
+	styleUnderline = "\x1b[4m"
 )
 
 // Println writes msg followed by '\n' to stdout, undecorated. Use for
@@ -119,4 +121,38 @@ func (p *Printer) line(symbol, color, msg string, minVerbosity int) {
 	} else {
 		fmt.Fprintf(p.stderr, "%s %s\n", symbol, msg)
 	}
+}
+
+// Bold wraps s in bold ANSI escapes when color is enabled, else returns s unchanged.
+func (p *Printer) Bold(s string) string { return p.style(styleBold, s) }
+
+// Dim wraps s in dim ANSI escapes when color is enabled.
+func (p *Printer) Dim(s string) string { return p.style(colorDim, s) }
+
+// Cyan wraps s in cyan ANSI escapes when color is enabled.
+func (p *Printer) Cyan(s string) string { return p.style(colorCyan, s) }
+
+// Yellow wraps s in yellow ANSI escapes when color is enabled.
+func (p *Printer) Yellow(s string) string { return p.style(colorYellow, s) }
+
+// Green wraps s in green ANSI escapes when color is enabled.
+func (p *Printer) Green(s string) string { return p.style(colorGreen, s) }
+
+// Red wraps s in red ANSI escapes when color is enabled.
+func (p *Printer) Red(s string) string { return p.style(colorRed, s) }
+
+// URL wraps s in underlined cyan ANSI escapes when color is enabled.
+// Used for clickable URLs in the terminal.
+func (p *Printer) URL(s string) string {
+	if !p.color {
+		return s
+	}
+	return styleUnderline + colorCyan + s + colorReset
+}
+
+func (p *Printer) style(code, s string) string {
+	if !p.color {
+		return s
+	}
+	return code + s + colorReset
 }

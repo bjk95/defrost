@@ -132,6 +132,41 @@ func TestPassfWarnfStepfFailfInfofDebugf(t *testing.T) {
 	}
 }
 
+func TestStylersWithColorOn(t *testing.T) {
+	var stderr, stdout bytes.Buffer
+	p := New(&stderr, &stdout, 0, true)
+	cases := []struct {
+		name string
+		got  string
+		want string
+	}{
+		{"Bold", p.Bold("x"), "\x1b[1mx\x1b[0m"},
+		{"Dim", p.Dim("x"), "\x1b[2mx\x1b[0m"},
+		{"Cyan", p.Cyan("x"), "\x1b[36mx\x1b[0m"},
+		{"Yellow", p.Yellow("x"), "\x1b[33mx\x1b[0m"},
+		{"Green", p.Green("x"), "\x1b[32mx\x1b[0m"},
+		{"Red", p.Red("x"), "\x1b[31mx\x1b[0m"},
+		{"URL", p.URL("https://x"), "\x1b[4m\x1b[36mhttps://x\x1b[0m"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.got != tc.want {
+				t.Errorf("%s = %q; want %q", tc.name, tc.got, tc.want)
+			}
+		})
+	}
+}
+
+func TestStylersWithColorOffAreIdentity(t *testing.T) {
+	var stderr, stdout bytes.Buffer
+	p := New(&stderr, &stdout, 0, false)
+	for _, fn := range []func(string) string{p.Bold, p.Dim, p.Cyan, p.Yellow, p.Green, p.Red, p.URL} {
+		if got := fn("hello"); got != "hello" {
+			t.Errorf("color-off styler returned %q; want identity %q", got, "hello")
+		}
+	}
+}
+
 func TestShouldUseColor(t *testing.T) {
 	cases := []struct {
 		name      string
