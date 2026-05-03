@@ -81,6 +81,32 @@ func (p *Printer) Infof(format string, args ...any) { p.Info(fmt.Sprintf(format,
 // Debugf is Debug with formatting.
 func (p *Printer) Debugf(format string, args ...any) { p.Debug(fmt.Sprintf(format, args...)) }
 
+// ShouldUseColor decides whether color output should be enabled.
+// Precedence (highest first):
+//  1. --no-color flag       → off
+//  2. NO_COLOR env (any non-empty value, per https://no-color.org)
+//                           → off
+//  3. FORCE_COLOR env (any non-empty value, GNU/Node convention)
+//                           → on, even when not a TTY
+//  4. isTTY                 → on iff true
+//
+// Callers pass isTTY (typically `isatty.IsTerminal(os.Stderr.Fd())`),
+// the parsed --no-color bool, and os.Getenv("NO_COLOR") /
+// os.Getenv("FORCE_COLOR"). Keeping all inputs as parameters means
+// this function is trivially testable without env mutation.
+func ShouldUseColor(isTTY, noColorFlag bool, noColorEnv, forceColorEnv string) bool {
+	if noColorFlag {
+		return false
+	}
+	if noColorEnv != "" {
+		return false
+	}
+	if forceColorEnv != "" {
+		return true
+	}
+	return isTTY
+}
+
 // line emits "<symbol> <msg>\n" to stderr, gated by minVerbosity.
 // minVerbosity is the lowest verbosity level at which the line is shown.
 // A line with minVerbosity = -2 is shown even when verbosity == -1 (-q).

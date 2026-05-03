@@ -131,3 +131,31 @@ func TestPassfWarnfStepfFailfInfofDebugf(t *testing.T) {
 		}
 	}
 }
+
+func TestShouldUseColor(t *testing.T) {
+	cases := []struct {
+		name      string
+		isTTY     bool
+		noColor   bool
+		envNoCol  string
+		envFCol   string
+		want      bool
+	}{
+		{"tty no flags", true, false, "", "", true},
+		{"not tty", false, false, "", "", false},
+		{"--no-color overrides tty", true, true, "", "", false},
+		{"NO_COLOR env overrides tty", true, false, "1", "", false},
+		{"NO_COLOR empty does not disable", true, false, "", "", true},
+		{"FORCE_COLOR overrides not-tty", false, false, "", "1", true},
+		{"--no-color beats FORCE_COLOR", false, true, "", "1", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ShouldUseColor(tc.isTTY, tc.noColor, tc.envNoCol, tc.envFCol)
+			if got != tc.want {
+				t.Errorf("ShouldUseColor(tty=%v, no-color=%v, NO_COLOR=%q, FORCE_COLOR=%q) = %v; want %v",
+					tc.isTTY, tc.noColor, tc.envNoCol, tc.envFCol, got, tc.want)
+			}
+		})
+	}
+}
