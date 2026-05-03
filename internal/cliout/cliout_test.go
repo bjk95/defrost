@@ -84,3 +84,50 @@ func TestVerbosityGates(t *testing.T) {
 		})
 	}
 }
+
+func TestPlainStdoutWriters(t *testing.T) {
+	var stderr, stdout bytes.Buffer
+	p := New(&stderr, &stdout, -1, true) // -q + color: should not affect stdout
+	p.Println("github.com/x/p.TestA")
+	p.Printlnf("github.com/x/p.%s", "TestB")
+	got := stdout.String()
+	want := "github.com/x/p.TestA\ngithub.com/x/p.TestB\n"
+	if got != want {
+		t.Errorf("stdout = %q; want %q", got, want)
+	}
+	if stderr.Len() != 0 {
+		t.Errorf("stderr should be empty, got %q", stderr.String())
+	}
+	if strings.Contains(got, "\x1b[") {
+		t.Errorf("stdout must never contain ANSI escapes: %q", got)
+	}
+}
+
+func TestQuietAndVerboseAreMutuallyExclusive(t *testing.T) {
+	// Defensive sanity: cliout doesn't enforce, but the constructor must
+	// accept any combination — enforcement lives in flag parsing.
+	var stderr, stdout bytes.Buffer
+	p := New(&stderr, &stdout, -1, false)
+	p.Fail("must still print")
+	if !strings.Contains(stderr.String(), "must still print") {
+		t.Error("Fail must always print, even at -q")
+	}
+}
+
+// Printf-style variants for when the message is built from args.
+func TestPassfWarnfStepfFailfInfofDebugf(t *testing.T) {
+	var stderr, stdout bytes.Buffer
+	p := New(&stderr, &stdout, 2, false)
+	p.Stepf("running %s", "build")
+	p.Passf("%d passed", 42)
+	p.Failf("%d failed", 7)
+	p.Warnf("warn %s", "x")
+	p.Infof("info %s", "y")
+	p.Debugf("debug %s", "z")
+	got := stderr.String()
+	for _, want := range []string{"→ running build", "✓ 42 passed", "✗ 7 failed", "! warn x", "· info y", "· debug z"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in stderr:\n%s", want, got)
+		}
+	}
+}

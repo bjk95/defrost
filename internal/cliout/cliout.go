@@ -52,6 +52,35 @@ const (
 	colorDim    = "\x1b[2m"
 )
 
+// Println writes msg followed by '\n' to stdout, undecorated. Use for
+// pipe-friendly data output (NDJSON, lists) — never use it for chrome.
+func (p *Printer) Println(msg string) {
+	fmt.Fprintln(p.stdout, msg)
+}
+
+// Printlnf is Println with formatting.
+func (p *Printer) Printlnf(format string, args ...any) {
+	fmt.Fprintf(p.stdout, format+"\n", args...)
+}
+
+// Stepf is Step with formatting.
+func (p *Printer) Stepf(format string, args ...any) { p.Step(fmt.Sprintf(format, args...)) }
+
+// Passf is Pass with formatting.
+func (p *Printer) Passf(format string, args ...any) { p.Pass(fmt.Sprintf(format, args...)) }
+
+// Failf is Fail with formatting.
+func (p *Printer) Failf(format string, args ...any) { p.Fail(fmt.Sprintf(format, args...)) }
+
+// Warnf is Warn with formatting.
+func (p *Printer) Warnf(format string, args ...any) { p.Warn(fmt.Sprintf(format, args...)) }
+
+// Infof is Info with formatting.
+func (p *Printer) Infof(format string, args ...any) { p.Info(fmt.Sprintf(format, args...)) }
+
+// Debugf is Debug with formatting.
+func (p *Printer) Debugf(format string, args ...any) { p.Debug(fmt.Sprintf(format, args...)) }
+
 // line emits "<symbol> <msg>\n" to stderr, gated by minVerbosity.
 // minVerbosity is the lowest verbosity level at which the line is shown.
 // A line with minVerbosity = -2 is shown even when verbosity == -1 (-q).
