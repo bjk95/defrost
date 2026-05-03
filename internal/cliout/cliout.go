@@ -37,6 +37,12 @@ func (p *Printer) Fail(msg string) { p.line("✗", colorRed, msg, -2) }
 // Warn prints a ! yellow line. Default verbosity.
 func (p *Printer) Warn(msg string) { p.line("!", colorYellow, msg, 0) }
 
+// Info prints a · dim line. Shown at -v and above.
+func (p *Printer) Info(msg string) { p.line("·", colorDim, msg, 1) }
+
+// Debug prints a · dim line. Shown at -vv and above.
+func (p *Printer) Debug(msg string) { p.line("·", colorDim, msg, 2) }
+
 const (
 	colorReset  = "\x1b[0m"
 	colorCyan   = "\x1b[36m"

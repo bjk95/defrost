@@ -51,3 +51,36 @@ func TestColorEmitsANSI(t *testing.T) {
 		t.Errorf("expected ✓ symbol, got %q", got)
 	}
 }
+
+func TestVerbosityGates(t *testing.T) {
+	cases := []struct {
+		name      string
+		verbosity int
+		emit      func(*Printer)
+		want      string
+		notWant   string
+	}{
+		{"default hides Info", 0, func(p *Printer) { p.Info("hidden") }, "", "hidden"},
+		{"-v shows Info", 1, func(p *Printer) { p.Info("shown") }, "shown", ""},
+		{"-v hides Debug", 1, func(p *Printer) { p.Debug("hidden") }, "", "hidden"},
+		{"-vv shows Debug", 2, func(p *Printer) { p.Debug("shown") }, "shown", ""},
+		{"-q hides Pass", -1, func(p *Printer) { p.Pass("hidden") }, "", "hidden"},
+		{"-q hides Warn", -1, func(p *Printer) { p.Warn("hidden") }, "", "hidden"},
+		{"-q hides Step", -1, func(p *Printer) { p.Step("hidden") }, "", "hidden"},
+		{"-q still shows Fail", -1, func(p *Printer) { p.Fail("shown") }, "shown", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var stderr, stdout bytes.Buffer
+			p := New(&stderr, &stdout, tc.verbosity, false)
+			tc.emit(p)
+			got := stderr.String()
+			if tc.want != "" && !strings.Contains(got, tc.want) {
+				t.Errorf("expected %q in stderr, got %q", tc.want, got)
+			}
+			if tc.notWant != "" && strings.Contains(got, tc.notWant) {
+				t.Errorf("did not expect %q in stderr, got %q", tc.notWant, got)
+			}
+		})
+	}
+}
