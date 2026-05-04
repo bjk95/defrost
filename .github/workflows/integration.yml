@@ -285,9 +285,15 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Suppress known-intentional failures (dogfood the suppression flow)
+        # Suppressions are now per-project at <project>/.defrost/suppressions.json
+        # rather than centralised on the data branch, so the suppress
+        # call must run from the same dir as the exec call below
+        # (examples/promptfoo) — otherwise it'd write to the parent
+        # repo's .defrost/ instead of the example's.
         run: |
           set -e
-          ./defrost suppress add \
+          cd examples/promptfoo
+          ../../defrost suppress add \
             'examples/promptfoo¬answer="I have no idea",question="capital-germany-wrong",prompt="f7a68f6f0557",provider="defrost-smoke-mock"' \
             'examples/promptfoo¬answer="London is the answer",question="contaminated-output",prompt="f7a68f6f0557",provider="defrost-smoke-mock"' \
             'examples/promptfoo¬answer="paris",question="case-sensitive",prompt="f7a68f6f0557",provider="defrost-smoke-mock"' \
@@ -366,9 +372,12 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Suppress known-intentional failures (dogfood the suppression flow)
+        # Suppressions are per-project at <project>/.defrost/suppressions.json,
+        # so suppress must run from the same dir as exec below.
         run: |
           set -e
-          ./defrost suppress add \
+          cd examples/inspect
+          ../../defrost suppress add \
             'examples/inspect¬task="capital_cities",sample="germany-fail"' \
             'examples/inspect¬task="capital_cities",sample="empty-fail"'
         env:
