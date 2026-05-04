@@ -37,6 +37,19 @@ export default defineConfig({
       description:
         "Track AI evals, metrics, and tests with Git as the database.",
       customCss: ["./src/styles/global.css"],
+      // Code blocks use a single dark theme regardless of mode — matches
+      // the dashboard's terminal aesthetic from the design system.
+      // styleOverrides aligns the rounded corners with --radius-md (8px).
+      expressiveCode: {
+        themes: ["github-dark"],
+        styleOverrides: {
+          borderRadius: "8px",
+          borderColor: "transparent",
+          codeFontFamily: "var(--sl-font-mono)",
+          codeFontSize: "12.5px",
+          codeLineHeight: "1.65",
+        },
+      },
       social: [
         {
           icon: "github",
