@@ -17,77 +17,14 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
-
-      - name: Probe runner
-        # First debug step uses NO go: rules out setup-go failure as
-        # the cause of exit 127.
-        shell: bash
-        run: |
-          {
-            echo "## Probe runner"
-            echo '```'
-            echo "PWD=$(pwd)"
-            echo "PATH=$PATH"
-            echo "USER=$(id)"
-            which go || echo "go not in PATH"
-            ls -la /opt/hostedtoolcache/go/ 2>&1 || echo "no go toolcache"
-            echo
-            echo "ls -la:"
-            ls -la
-            echo
-            echo "head go.mod:"
-            head -10 go.mod
-            echo '```'
-          } | tee -a "$GITHUB_STEP_SUMMARY"
-
-      - name: Debug go env
-        # Temporary: surface the actual build error (job has been
-        # failing in 11-13s with exit 127 and no visible cause).
-        # Writes to $GITHUB_STEP_SUMMARY so the output is visible
-        # even if logs are gated behind sign-in.
-        shell: bash
-        run: |
-          {
-            echo "## Go env"
-            echo '```'
-            go version || echo "go version failed: $?"
-            echo
-            go env GOPROXY GOSUMDB GOFLAGS GOMODCACHE GOOS GOARCH CGO_ENABLED || echo "go env failed: $?"
-            echo
-            echo "PATH=$PATH"
-            echo "PWD=$(pwd)"
-            ls -la
-            echo
-            head -20 go.mod
-            echo '```'
-          } | tee -a "$GITHUB_STEP_SUMMARY"
-
-      - name: Mod download
-        shell: bash
-        run: |
-          set -o pipefail
-          echo "## Mod download" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          go mod download -x 2>&1 | tail -50 | tee -a "$GITHUB_STEP_SUMMARY"
-          rc=${PIPESTATUS[0]}
-          echo "exit: $rc" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          exit "$rc"
+          go-version-file: go.mod
 
       - name: Build defrost-ci
-        shell: bash
-        run: |
-          set -o pipefail
-          echo "## Build defrost-ci" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          go build -v -o defrost ./cmd/defrost-ci 2>&1 | tail -50 | tee -a "$GITHUB_STEP_SUMMARY"
-          rc=${PIPESTATUS[0]}
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "exit: $rc" >> "$GITHUB_STEP_SUMMARY"
-          ls -la defrost >> "$GITHUB_STEP_SUMMARY" 2>&1 || echo "no defrost binary" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          exit "$rc"
+        # CI workflows use defrost-ci (the slim binary): no DuckDB cgo,
+        # no embedded web bundle. Same exec/history/suppress/drop
+        # subcommands as the full binary; only serve differs (it's a
+        # stub that prints the install hint).
+        run: go build -o defrost ./cmd/defrost-ci
 
       - name: Configure git auth for defrost persist
         run: |

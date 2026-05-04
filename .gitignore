@@ -1,15 +1,14 @@
 # Defrost dev-mode scratch directory (see `defrost exec --dev`)
 .defrost-dev/
 
-# Build artefacts
-defrost
-defrost.exe
-defrost-ci
-defrost-ci.exe
-/cmd/defrost/defrost
-/cmd/defrost/defrost.exe
-/cmd/defrost-ci/defrost-ci
-/cmd/defrost-ci/defrost-ci.exe
+# Build artefacts. Anchor with a leading slash so the patterns only
+# match files at the repo root — bare 'defrost' or 'defrost-ci' would
+# also match the cmd/defrost/ and cmd/defrost-ci/ source directories,
+# silently skipping main.go and breaking CI builds.
+/defrost
+/defrost.exe
+/defrost-ci
+/defrost-ci.exe
 
 # Web tooling
 web/node_modules/
