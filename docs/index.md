@@ -1,4 +1,6 @@
-# defrost
+---
+title: 'defrost'
+---
 
 Track AI evals, metrics, and tests with Git as the database.
 

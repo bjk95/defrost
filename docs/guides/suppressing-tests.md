@@ -1,4 +1,6 @@
-# Suppressing known-failing tests
+---
+title: 'Suppressing known-failing tests'
+---
 
 Suppression marks a test as known-failing **without skipping it in
 source**. The test still runs, results are still recorded, but its

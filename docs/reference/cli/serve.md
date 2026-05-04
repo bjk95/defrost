@@ -1,4 +1,6 @@
-# `defrost serve`
+---
+title: '`defrost serve`'
+---
 
 Serve a local web dashboard for browsing recorded test history.
 

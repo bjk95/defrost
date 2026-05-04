@@ -1,4 +1,6 @@
-# Guides
+---
+title: 'Guides'
+---
 
 Task-oriented walkthroughs. Start with the Quickstart, then pick the
 guide that matches what you're trying to do.

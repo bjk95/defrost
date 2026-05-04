@@ -1,4 +1,6 @@
-# Running the dashboard
+---
+title: 'Running the dashboard'
+---
 
 `defrost serve` opens a local web UI for browsing recorded test history.
 

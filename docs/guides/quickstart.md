@@ -1,4 +1,6 @@
-# Quickstart
+---
+title: 'Quickstart'
+---
 
 Install defrost, record your first run, see the result. About five
 minutes.

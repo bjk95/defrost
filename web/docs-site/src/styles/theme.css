@@ -1,0 +1,114 @@
+/*
+ * Starlight theme override. Starlight ships its own CSS variables
+ * (--sl-color-*, --sl-font, etc.); this file maps them onto the
+ * dashboard's OKLCH design tokens so the docs site renders in the
+ * same palette and typography as `defrost serve`.
+ *
+ * Anything Starlight doesn't define a token for is left to its
+ * defaults — this file is a remap, not a full restyle.
+ */
+
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
+
+:root {
+  /* House design tokens, mirrored from web/src/index.css. Kept in this
+     file too because the Astro project does not import the dashboard's
+     stylesheet — the dashboard SPA and the docs site build independently. */
+  --gray-0: oklch(1 0 0);
+  --gray-50: oklch(0.985 0 0);
+  --gray-100: oklch(0.97 0 0);
+  --gray-200: oklch(0.935 0 0);
+  --gray-300: oklch(0.88 0 0);
+  --gray-400: oklch(0.74 0 0);
+  --gray-500: oklch(0.62 0 0);
+  --gray-600: oklch(0.52 0 0);
+  --gray-700: oklch(0.38 0 0);
+  --gray-800: oklch(0.24 0 0);
+  --gray-900: oklch(0.16 0 0);
+  --gray-1000: oklch(0.09 0 0);
+
+  --blue-500: oklch(0.60 0.22 255);
+  --blue-600: oklch(0.54 0.22 258);
+  --blue-700: oklch(0.45 0.20 258);
+
+  --success: oklch(0.62 0.17 150);
+  --warning: oklch(0.76 0.16 75);
+  --danger: oklch(0.58 0.24 27);
+}
+
+/*
+ * Light theme — Starlight uses [data-theme="light"] on <html>.
+ * Starlight's color scale is a numeric ramp from --sl-color-white (foreground
+ * on dark backgrounds) through --sl-color-gray-1..7 to --sl-color-black.
+ * We map the existing --gray-* ramp onto it, lightest at gray-1.
+ */
+:root[data-theme="light"] {
+  --sl-color-white: var(--gray-900);
+  --sl-color-gray-1: var(--gray-800);
+  --sl-color-gray-2: var(--gray-700);
+  --sl-color-gray-3: var(--gray-500);
+  --sl-color-gray-4: var(--gray-400);
+  --sl-color-gray-5: var(--gray-300);
+  --sl-color-gray-6: var(--gray-200);
+  --sl-color-gray-7: var(--gray-100);
+  --sl-color-black: var(--gray-0);
+
+  --sl-color-accent-low: oklch(0.95 0.04 258);
+  --sl-color-accent: var(--blue-600);
+  --sl-color-accent-high: var(--blue-700);
+
+  --sl-color-text: var(--gray-900);
+  --sl-color-text-accent: var(--blue-700);
+  --sl-color-text-invert: var(--gray-0);
+  --sl-color-bg: var(--gray-0);
+  --sl-color-bg-nav: var(--gray-0);
+  --sl-color-bg-sidebar: var(--gray-0);
+  --sl-color-bg-inline-code: var(--gray-100);
+  --sl-color-bg-accent: var(--blue-600);
+  --sl-color-hairline-light: var(--gray-200);
+  --sl-color-hairline: var(--gray-200);
+  --sl-color-hairline-shade: var(--gray-300);
+}
+
+/* Dark theme: Starlight uses [data-theme="dark"]. */
+:root[data-theme="dark"] {
+  --sl-color-white: var(--gray-0);
+  --sl-color-gray-1: var(--gray-50);
+  --sl-color-gray-2: var(--gray-200);
+  --sl-color-gray-3: var(--gray-400);
+  --sl-color-gray-4: var(--gray-500);
+  --sl-color-gray-5: var(--gray-700);
+  --sl-color-gray-6: var(--gray-800);
+  --sl-color-gray-7: var(--gray-900);
+  --sl-color-black: var(--gray-1000);
+
+  --sl-color-accent-low: oklch(0.32 0.10 258);
+  --sl-color-accent: var(--blue-500);
+  --sl-color-accent-high: oklch(0.92 0.06 258);
+
+  --sl-color-text: var(--gray-50);
+  --sl-color-text-accent: var(--blue-500);
+  --sl-color-text-invert: var(--gray-900);
+  --sl-color-bg: var(--gray-1000);
+  --sl-color-bg-nav: var(--gray-1000);
+  --sl-color-bg-sidebar: var(--gray-1000);
+  --sl-color-bg-inline-code: var(--gray-800);
+  --sl-color-bg-accent: var(--blue-500);
+  --sl-color-hairline-light: oklch(1 0 0 / 0.08);
+  --sl-color-hairline: oklch(1 0 0 / 0.1);
+  --sl-color-hairline-shade: oklch(1 0 0 / 0.15);
+}
+
+/* Typography: Geist for body, Geist Mono for code blocks and
+   inline code. Matches the dashboard's font stack exactly. */
+:root {
+  --sl-font: 'Geist Variable', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --sl-font-mono: 'Geist Mono Variable', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+}
+
+html {
+  font-feature-settings: 'ss01', 'cv11', 'tnum';
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}

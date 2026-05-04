@@ -1,4 +1,6 @@
-# `defrost suppress`
+---
+title: '`defrost suppress`'
+---
 
 Manage the suppression list. When every failing test in a `defrost exec`
 run is suppressed, the exit code is rewritten to `0` so CI can stay

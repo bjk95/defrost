@@ -1,4 +1,6 @@
-# OpenTelemetry as the ingestion API
+---
+title: 'OpenTelemetry as the ingestion API'
+---
 
 defrost speaks [OpenTelemetry](https://opentelemetry.io/) over OTLP/HTTP
 rather than shipping a defrost-specific client library. This page

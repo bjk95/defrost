@@ -1,4 +1,6 @@
-# Serve HTTP API
+---
+title: 'Serve HTTP API'
+---
 
 `defrost serve` exposes a JSON / SSE API alongside the SPA. The dashboard
 uses these endpoints; you can also use them directly from scripts.

@@ -1,4 +1,6 @@
-# The `_defrost` branch
+---
+title: 'The `_defrost` branch'
+---
 
 defrost writes to a single git branch — by default named `_defrost` —
 that lives alongside `main`. This page covers its lifecycle and how to

@@ -1,4 +1,6 @@
-# Reference
+---
+title: 'Reference'
+---
 
 The behavioural contract for defrost. Every command, flag, default,
 configuration option, on-disk path, and HTTP endpoint is documented

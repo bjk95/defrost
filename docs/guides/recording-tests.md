@@ -1,4 +1,6 @@
-# Recording test results
+---
+title: 'Recording test results'
+---
 
 Wrap any supported test command with `defrost exec`. defrost selects an
 adapter based on the command, parses the runner's output, and records

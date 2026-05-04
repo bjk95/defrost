@@ -1,4 +1,6 @@
-# `defrost history`
+---
+title: '`defrost history`'
+---
 
 Print recorded history for a single test as newline-delimited JSON. Each
 line is one OTel `ResourceSpans` (canonical OTel JSON encoding) — the

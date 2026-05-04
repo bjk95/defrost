@@ -1,4 +1,6 @@
-# CI setup
+---
+title: 'CI setup'
+---
 
 defrost is designed for CI: every job that runs tests records to the
 same data branch, history accumulates in the repo, no external service

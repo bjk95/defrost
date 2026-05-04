@@ -1,4 +1,6 @@
-# Recording evals
+---
+title: 'Recording evals'
+---
 
 Test runs give you pass/fail. Evals usually want a number — accuracy,
 latency, token cost, judge score. Push those as OpenTelemetry metrics

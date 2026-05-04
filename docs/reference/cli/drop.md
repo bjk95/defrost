@@ -1,4 +1,6 @@
-# `defrost drop`
+---
+title: '`defrost drop`'
+---
 
 Destructively drop persisted traces and/or metrics. Used to garbage-collect
 the data branch when it grows too large or accumulates noise from

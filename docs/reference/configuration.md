@@ -1,4 +1,6 @@
-# Configuration
+---
+title: 'Configuration'
+---
 
 defrost has no config file. Behaviour is controlled by per-command flags
 (see each [CLI page](./index.md#cli)) and a small number of environment

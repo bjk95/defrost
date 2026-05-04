@@ -1,4 +1,6 @@
-# Storage layout
+---
+title: 'Storage layout'
+---
 
 What defrost writes to the data branch (default: `_defrost`).
 

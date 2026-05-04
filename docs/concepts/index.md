@@ -1,4 +1,6 @@
-# Concepts
+---
+title: 'Concepts'
+---
 
 Background reading. These pages explain how defrost works and why it's
 built the way it is — read these before wiring defrost into a real

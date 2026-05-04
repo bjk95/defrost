@@ -1,4 +1,6 @@
-# `defrost exec`
+---
+title: '`defrost exec`'
+---
 
 Execute a test command, capture results as OpenTelemetry traces and
 metrics, and commit them to the data branch.

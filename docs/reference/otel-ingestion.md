@@ -1,4 +1,6 @@
-# OpenTelemetry ingestion
+---
+title: 'OpenTelemetry ingestion'
+---
 
 `defrost exec` embeds an OTLP/HTTP receiver. Any OTel SDK in the child
 process can export to it without configuration: defrost sets the

@@ -1,4 +1,6 @@
-# Git as the database
+---
+title: 'Git as the database'
+---
 
 defrost stores test, eval, and metric history as commits on a branch
 inside the same repo as the code under test. There is no separate
