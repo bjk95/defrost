@@ -9,6 +9,8 @@
 
 > Track AI evals, metrics, and tests with Git as the database.
 
+**Docs:** <https://bjk95.github.io/defrost/>
+
 Every team wants a record of how their evals, benchmarks, and tests have changed
 over time. Almost nobody wants to host a database for it. **defrost** records
 each run as commits on a `_defrost` branch in the same repo, so the history
@@ -69,7 +71,13 @@ latency.record(elapsed_ms, {"endpoint": "/api/search"})
 Counters, gauges, sums, and histograms are all captured. Same SDK pattern
 works in Go, Node, Rust, Java, and every other OTel-supported language.
 
+See [Recording evals](https://bjk95.github.io/defrost/guides/recording-evals/)
+and the [OTel ingestion reference](https://bjk95.github.io/defrost/reference/otel-ingestion/)
+for the full contract.
+
 ## Commands
+
+Full CLI reference: <https://bjk95.github.io/defrost/reference/cli/>.
 
 ### `defrost exec <cmd...>`
 
@@ -159,6 +167,11 @@ repo to share it. Concurrent runs from different machines never conflict
 because each writer owns a unique filename (one file per run, named by its
 OTel `trace_id`).
 
+For the design rationale see
+[Git as the database](https://bjk95.github.io/defrost/concepts/git-as-database/);
+for the on-disk format see the
+[storage layout reference](https://bjk95.github.io/defrost/reference/storage-layout/).
+
 To experiment without touching git, pass `--no-persist` (don't store
 anything) or `--dev` (write to `.defrost-dev/` instead of the data branch).
 
@@ -187,3 +200,16 @@ Run-scoped attributes (commit, branch, author, command, OS/arch, run id,
 the canonical fully qualified test name — no lossy projections are stored
 alongside it. Compaction (collapsing many per-run files into one daily
 file) is on the roadmap.
+
+## Documentation
+
+Full docs live at <https://bjk95.github.io/defrost/>:
+
+- [Guides](https://bjk95.github.io/defrost/guides/) — Quickstart, recording
+  tests and evals, suppressing failures, the dashboard, CI setup.
+- [Reference](https://bjk95.github.io/defrost/reference/) — every CLI
+  command and flag, configuration, OTel ingestion, the serve API, and the
+  on-disk storage layout.
+- [Concepts](https://bjk95.github.io/defrost/concepts/) — Git as the
+  database, the `_defrost` branch lifecycle, OTel as the ingestion API,
+  the suppression model.
