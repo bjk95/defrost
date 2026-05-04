@@ -29,7 +29,7 @@ func HandleHistory(c HistoryCmd) int {
 		Dev:        c.Dev,
 	}
 	be := persist.New(pOpts)
-	dir, cleanup, err := be.CloneForRead()
+	snap, err := be.CloneForRead()
 	if err != nil {
 		if errors.Is(err, persist.ErrNoOrigin) {
 			fmt.Fprintln(os.Stderr, "history: no 'origin' remote configured. Either add one (`git remote add origin ...`) or pass --dev to read from the local scratch dir.")
@@ -38,11 +38,10 @@ func HandleHistory(c HistoryCmd) int {
 		fmt.Fprintln(os.Stderr, "history:", err)
 		return 1
 	}
-	defer cleanup()
-	if dir == "" {
+	if snap.Dir == "" {
 		return 0
 	}
-	files, err := persist.ListSignalFiles(dir, "traces")
+	files, err := persist.ListSignalFiles(snap.Dir, "traces")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "history:", err)
 		return 1

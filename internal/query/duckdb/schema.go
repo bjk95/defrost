@@ -53,4 +53,13 @@ CREATE TABLE IF NOT EXISTS hydration_state (
     file_size  BIGINT,
     file_mtime BIGINT
 );
+
+-- cache_meta is a single-row k/v table tracking the SHA of the data
+-- branch tip that the materialised tables were last hydrated against.
+-- Hydrate() compares 'last_sha' to git ls-remote's output and short-
+-- circuits the entire fetch+walk when they match.
+CREATE TABLE IF NOT EXISTS cache_meta (
+    key   VARCHAR PRIMARY KEY,
+    value VARCHAR
+);
 `

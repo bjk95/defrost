@@ -2,9 +2,7 @@ package duckdb
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -56,43 +54,11 @@ func New(opts persist.Options) (*Querier, error) {
 	return &Querier{pOpts: opts, db: db}, nil
 }
 
+// cacheDirForOpts returns the same per-repo cache root that
+// persist.CacheRoot uses, so cache.duckdb sits next to data/ under
+// $UserCacheDir/defrost/<repo-hash>/.
 func cacheDirForOpts(opts persist.Options) (string, error) {
-	root, err := os.UserCacheDir()
-	if err != nil {
-		return "", err
-	}
-	var seed string
-	if opts.Dev {
-		seed = "dev:" + opts.RepoDir
-	} else {
-		// Best-effort: if origin lookup fails, fall back to repo path.
-		// The hash is just a per-cache identifier, not security-relevant.
-		origin := readOriginURL(opts.RepoDir)
-		if origin == "" {
-			origin = "repo:" + opts.RepoDir
-		}
-		seed = origin
-	}
-	h := sha256.Sum256([]byte(seed))
-	id := hex.EncodeToString(h[:8])
-	return filepath.Join(root, "defrost", id), nil
-}
-
-func readOriginURL(repoDir string) string {
-	if repoDir == "" {
-		return ""
-	}
-	out, err := runCmdQuiet("git", "-C", repoDir, "remote", "get-url", "origin")
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(out)
-}
-
-func runCmdQuiet(name string, args ...string) (string, error) {
-	cmd := execCommand(name, args...)
-	out, err := cmd.Output()
-	return string(out), err
+	return persist.CacheRoot(opts)
 }
 
 // Close closes the underlying database connection.
@@ -104,22 +70,69 @@ func (q *Querier) Close() error {
 }
 
 // Hydrate brings the cache up to date with the current data branch
-// snapshot. Idempotent — files already in hydration_state are skipped.
+// snapshot.
+//
+// Two-stage freshness check before any work happens:
+//
+//  1. Cheap probe: `git ls-remote origin <branch>` (one round-trip,
+//     ~50ms typical). If the returned SHA matches cache_meta.last_sha,
+//     return immediately — DuckDB is up to date by definition since
+//     the data branch is append-only between drops.
+//
+//  2. CloneForRead against the persistent worktree at
+//     $UserCacheDir/defrost/<repo-hash>/data — first call clones,
+//     subsequent calls fetch+reset. If a force-reset is detected
+//     (snap.Reset, e.g. after `defrost drop history` rewrote the
+//     branch), the stale derived state is dropped and re-hydrated
+//     from scratch.
+//
+// Idempotent — files already in hydration_state are skipped on the
+// row-walk path.
 func (q *Querier) Hydrate() error {
 	be := persist.New(q.pOpts)
-	dir, cleanup, err := be.CloneForRead()
+	ctx := context.Background()
+
+	// (1) Cheap freshness probe. Skipped in dev mode (no remote).
+	if !q.pOpts.Dev {
+		remoteSHA, err := be.RemoteHeadSHA()
+		if err != nil {
+			return fmt.Errorf("remote head sha: %w", err)
+		}
+		if remoteSHA != "" {
+			lastSHA, err := q.cacheMeta(ctx, "last_sha")
+			if err != nil {
+				return err
+			}
+			if lastSHA == remoteSHA {
+				return nil
+			}
+		}
+	}
+
+	// (2) Materialise the working tree. Persistent in git mode; a
+	// no-op in dev (just stat).
+	snap, err := be.CloneForRead()
 	if err != nil {
 		return err
 	}
-	defer cleanup()
-	if dir == "" {
-		// No data yet (branch missing on origin, or scratch dir absent
-		// in dev mode). Schema is in place; nothing to insert.
+	if snap.Dir == "" {
+		// No data yet. Schema is in place; nothing to insert.
 		return nil
 	}
-	ctx := context.Background()
+
+	// (3) Force-reset detected — drop stale derived state. The file
+	// paths in hydration_state may now refer to deleted blobs and the
+	// rows in materialised tables may correspond to dropped runs.
+	if snap.Reset {
+		if err := q.wipeDerivedState(ctx); err != nil {
+			return err
+		}
+	}
+
+	// (4) Walk every signal partition under the worktree, INSERTing
+	// any file not already in hydration_state.
 	for _, signal := range signalDirs {
-		files, err := listFiles(dir, signal)
+		files, err := listFiles(snap.Dir, signal)
 		if err != nil {
 			return fmt.Errorf("list %s: %w", signal, err)
 		}
@@ -129,7 +142,66 @@ func (q *Querier) Hydrate() error {
 			}
 		}
 	}
+
+	// (5) Record the SHA we just hydrated against so the next call's
+	// cheap probe can short-circuit.
+	if snap.SHA != "" {
+		if err := q.setCacheMeta(ctx, "last_sha", snap.SHA); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+// cacheMeta reads a single key from cache_meta. Returns ("", nil) when
+// the key is absent.
+func (q *Querier) cacheMeta(ctx context.Context, key string) (string, error) {
+	var v string
+	err := q.db.QueryRowContext(ctx, `SELECT value FROM cache_meta WHERE key = ?`, key).Scan(&v)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("read cache_meta[%s]: %w", key, err)
+	}
+	return v, nil
+}
+
+func (q *Querier) setCacheMeta(ctx context.Context, key, value string) error {
+	_, err := q.db.ExecContext(ctx,
+		`INSERT INTO cache_meta (key, value) VALUES (?, ?)
+         ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
+		key, value)
+	if err != nil {
+		return fmt.Errorf("write cache_meta[%s]: %w", key, err)
+	}
+	return nil
+}
+
+// wipeDerivedState clears every row in the materialised tables and the
+// hydration_state index, preparing the cache for a fresh full walk.
+// Called when the persistent worktree was force-reset to a non-
+// fast-forward remote tip — typically after `defrost drop history`.
+//
+// cache_meta is preserved (just last_sha overwritten on the next
+// successful hydrate).
+func (q *Querier) wipeDerivedState(ctx context.Context) error {
+	tx, err := q.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	for _, stmt := range []string{
+		`DELETE FROM traces`,
+		`DELETE FROM metrics`,
+		`DELETE FROM logs`,
+		`DELETE FROM hydration_state`,
+	} {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("wipe: %s: %w", stmt, err)
+		}
+	}
+	return tx.Commit()
 }
 
 func (q *Querier) hydrateFile(ctx context.Context, signal, path string) error {

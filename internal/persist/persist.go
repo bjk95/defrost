@@ -101,12 +101,30 @@ type Backend interface {
 	// writes the result. msg is the commit message used for the update.
 	UpdateSuppressions(mutate func([]string) []string, msg string) error
 
-	// CloneForRead clones (or stats) the data branch at a single
-	// snapshot and returns the local working-tree directory.
-	// Caller MUST call cleanup. dir is "" when there's no data yet
-	// (branch missing on origin, or scratch dir absent in dev mode);
-	// in that case cleanup is a noop.
-	CloneForRead() (dir string, cleanup func(), err error)
+	// RemoteHeadSHA returns the commit SHA at the tip of the data
+	// branch on origin. Returns ("", nil) when the branch doesn't
+	// exist on origin; ("", nil) in dev mode (no remote).
+	//
+	// Used by the read path as a cheap freshness probe — when the
+	// returned SHA matches a previously-hydrated SHA, the caller can
+	// skip CloneForRead and the file walk entirely. One HTTPS round
+	// trip via `git ls-remote` (~50ms typical), no working tree
+	// involved.
+	RemoteHeadSHA() (string, error)
+
+	// CloneForRead ensures a local working tree of the data branch is
+	// present and current, then returns the snapshot identity. In
+	// git mode the working tree is persistent at
+	// $UserCacheDir/defrost/<repo-hash>/data; the first call clones
+	// into it, subsequent calls run `git fetch` + `git reset --hard`
+	// against origin. snap.Dir is "" when there's no data yet (branch
+	// missing on origin, or scratch dir absent in dev mode).
+	//
+	// snap.Reset is true when the persistent cache was force-reset to
+	// match a rewritten remote (e.g. after `defrost drop history`
+	// pushes an orphan commit). Callers maintaining derived state
+	// must drop and rebuild it when Reset is true.
+	CloneForRead() (snap Snapshot, err error)
 
 	// DropHistory inventories the data branch and (after confirm
 	// returns true) rewrites it via a single orphan commit force-pushed
@@ -292,32 +310,111 @@ func (b *gitBackend) InsertNewRun(run Run) error {
 	return pushWithRetry(workDir, branch, branchExisted)
 }
 
-func (b *gitBackend) CloneForRead() (string, func(), error) {
+// CloneForRead ensures a persistent local working tree of the data
+// branch at $UserCacheDir/defrost/<repo-hash>/data, fetching new
+// commits since the previous call rather than re-cloning. See the
+// Backend interface doc for the snapshot contract.
+//
+// Force-reset detection: a healthy fetch fast-forwards the local
+// `<branch>` to the remote tip. If that fails (the remote was rewritten
+// — `defrost drop history` does this), we wipe the worktree and clone
+// from scratch, returning Snapshot.Reset=true so callers know to drop
+// any derived state.
+func (b *gitBackend) CloneForRead() (Snapshot, error) {
 	branch := b.dataBranch()
 	remoteURL, err := resolveTargetURL(b.opts)
 	if err != nil {
-		return "", func() {}, err
+		return Snapshot{}, err
 	}
 	exists, err := branchExistsOnRemote(remoteURL, branch)
 	if err != nil {
-		return "", func() {}, err
+		return Snapshot{}, err
 	}
 	if !exists {
-		return "", func() {}, nil
+		return Snapshot{}, nil
 	}
 
-	workDir, err := os.MkdirTemp("", "defrost-read-")
+	workDir, err := b.dataCacheDir()
 	if err != nil {
-		return "", func() {}, fmt.Errorf("mktemp: %w", err)
+		return Snapshot{}, err
 	}
-	cleanup := func() { _ = os.RemoveAll(workDir) }
-	_ = os.Remove(workDir)
+	if err := os.MkdirAll(filepath.Dir(workDir), 0o755); err != nil {
+		return Snapshot{}, fmt.Errorf("mkdir cache dir: %w", err)
+	}
 
-	if _, err := runGit("", "clone", "--quiet", "--depth=1", "--single-branch", "--branch", branch, remoteURL, workDir); err != nil {
-		cleanup()
-		return "", func() {}, fmt.Errorf("clone data branch: %w", err)
+	// Cold path: no working tree yet. Full shallow clone into the
+	// cache dir; SHA from HEAD; Reset=false (first hydrate of this
+	// cache, by definition not a force-reset).
+	if _, err := os.Stat(filepath.Join(workDir, ".git")); err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			return Snapshot{}, err
+		}
+		if err := removeAllPreservingParent(workDir); err != nil {
+			return Snapshot{}, fmt.Errorf("clear stale cache dir: %w", err)
+		}
+		if _, err := runGit("", "clone", "--quiet", "--depth=1", "--single-branch", "--branch", branch, remoteURL, workDir); err != nil {
+			return Snapshot{}, fmt.Errorf("clone data branch: %w", err)
+		}
+		return Snapshot{Dir: workDir, SHA: localHeadSHA(workDir)}, nil
 	}
-	return workDir, cleanup, nil
+
+	// Warm path: a working tree already exists. Try a fetch+reset; if
+	// the remote tip isn't reachable (force-push detected via
+	// non-existent ref or shallow reject), fall back to a wipe-and-
+	// re-clone with Reset=true.
+	if reset, err := b.refreshWorktree(workDir, branch); err == nil {
+		return Snapshot{Dir: workDir, SHA: localHeadSHA(workDir), Reset: reset}, nil
+	}
+
+	// Reconcile by wiping and re-cloning. Anything that was on disk
+	// belonged to the old branch; the caller will see Reset=true and
+	// drop derived state.
+	if err := removeAllPreservingParent(workDir); err != nil {
+		return Snapshot{}, fmt.Errorf("wipe cache dir: %w", err)
+	}
+	if _, err := runGit("", "clone", "--quiet", "--depth=1", "--single-branch", "--branch", branch, remoteURL, workDir); err != nil {
+		return Snapshot{}, fmt.Errorf("re-clone data branch: %w", err)
+	}
+	return Snapshot{Dir: workDir, SHA: localHeadSHA(workDir), Reset: true}, nil
+}
+
+// refreshWorktree updates dir to the current remote tip. Returns
+// (reset, nil) on success — reset=true when the local branch could
+// not be fast-forwarded to the remote tip (i.e. the remote was
+// rewritten via force-push, typically by `defrost drop history`).
+//
+// Strategy: try a non-force fetch first. Git rejects non-fast-forward
+// updates by default, so a successful fetch implies the update was a
+// FF and the caller's derived state is still valid. A failed fetch
+// implies the remote diverged — we then force-fetch to reconcile the
+// working tree and report Reset=true so the caller drops derived
+// state. This works regardless of clone depth (no merge-base ancestor
+// walk needed).
+//
+// Returns a non-nil error when the working tree appears unrecoverable
+// (corrupt .git, missing remote, etc.) so the caller can fall back to
+// wipe-and-re-clone.
+func (b *gitBackend) refreshWorktree(dir, branch string) (bool, error) {
+	target := fmt.Sprintf("refs/remotes/origin/%s", branch)
+	plainRefspec := fmt.Sprintf("refs/heads/%s:%s", branch, target)
+	forceRefspec := "+" + plainRefspec
+
+	// Attempt a fast-forward fetch. Errors here are expected and
+	// benign — they signal that the remote wasn't a FF.
+	reset := false
+	if _, err := runGit(dir, "fetch", "--quiet", "origin", plainRefspec); err != nil {
+		// Force the fetch to reconcile, then tell the caller their
+		// derived state is stale.
+		if _, err2 := runGit(dir, "fetch", "--quiet", "origin", forceRefspec); err2 != nil {
+			return false, fmt.Errorf("fetch (force): %w", err2)
+		}
+		reset = true
+	}
+
+	if _, err := runGit(dir, "reset", "--hard", "--quiet", target); err != nil {
+		return false, fmt.Errorf("reset: %w", err)
+	}
+	return reset, nil
 }
 
 // fileBackend writes spans/metrics/logs to a plain directory; no git operations.
@@ -333,14 +430,18 @@ func (b *fileBackend) InsertNewRun(run Run) error {
 	return writeRunFiles(b.dir, run)
 }
 
-func (b *fileBackend) CloneForRead() (string, func(), error) {
+// CloneForRead in dev mode returns the scratch dir directly. SHA is
+// "" because there's no commit identity; Reset is always false because
+// the dev backend never gets force-reset (drop history just deletes
+// files in place).
+func (b *fileBackend) CloneForRead() (Snapshot, error) {
 	if _, err := os.Stat(b.dir); err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return "", func() {}, nil
+			return Snapshot{}, nil
 		}
-		return "", func() {}, err
+		return Snapshot{}, err
 	}
-	return b.dir, func() {}, nil
+	return Snapshot{Dir: b.dir}, nil
 }
 
 // hasAny reports whether the run has at least one signal to write.
