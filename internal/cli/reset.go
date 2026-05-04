@@ -14,38 +14,61 @@ import (
 
 // HandleReset implements `defrost reset` — the escape hatch when the
 // local <repo>/.defrost/ cache is in a state CloneForRead can't
-// refresh from. Deletes the directory entirely so the next read
-// clones fresh from origin. Local-only; the data branch on origin
-// is untouched.
+// refresh from. Deletes the directory and immediately re-clones the
+// data branch from origin so the user is left with a fresh, usable
+// worktree (not an absent one that the next command has to bootstrap).
+// Local-only; the data branch on origin is untouched.
 //
 // Confirmation prompt is on by default because deleting `.defrost/`
 // also removes cache.duckdb (the dashboard's read cache). Pass --yes
 // to skip the prompt in scripts.
 func HandleReset(c ResetCmd) int {
-	root := persist.LocalRoot(persist.Options{RepoDir: c.RepoDir})
+	opts := persist.Options{
+		RepoDir:   c.RepoDir,
+		AuthToken: os.Getenv("GITHUB_TOKEN"),
+	}
+	root := persist.LocalRoot(opts)
 	info, err := os.Stat(root)
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			fmt.Fprintf(os.Stderr, "defrost reset: nothing to do — %s does not exist.\n", root)
-			return 0
-		}
+	missing := errors.Is(err, fs.ErrNotExist)
+	switch {
+	case missing:
+		// Nothing to wipe, but we still re-clone below so the user
+		// ends up with a populated .defrost/ either way.
+	case err != nil:
 		fmt.Fprintln(os.Stderr, "defrost reset:", err)
 		return 1
-	}
-	if !info.IsDir() {
+	case !info.IsDir():
 		fmt.Fprintf(os.Stderr, "defrost reset: %s exists but is not a directory; remove it manually.\n", root)
 		return 1
 	}
 
-	if !c.Yes && !confirmReset(os.Stdin, os.Stderr, root) {
+	if !missing && !c.Yes && !confirmReset(os.Stdin, os.Stderr, root) {
 		return 0
 	}
+	if !missing {
+		if err := os.RemoveAll(root); err != nil {
+			fmt.Fprintln(os.Stderr, "defrost reset:", err)
+			return 1
+		}
+		fmt.Fprintf(os.Stderr, "defrost reset: removed %s.\n", root)
+	}
 
-	if err := os.RemoveAll(root); err != nil {
-		fmt.Fprintln(os.Stderr, "defrost reset:", err)
+	// Re-clone immediately so the user is left with a usable worktree.
+	// CloneForRead does the cold-path init+fetch+checkout against
+	// origin/<data-branch>; if the branch doesn't exist on origin yet
+	// (a brand new repo), it returns Snapshot{} cleanly and we just
+	// note it.
+	snap, err := persist.New(opts).CloneForRead()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "defrost reset: re-clone failed:", err)
+		fmt.Fprintf(os.Stderr, "  the local cache is wiped; the next read will retry the clone.\n")
 		return 1
 	}
-	fmt.Fprintf(os.Stderr, "defrost reset: removed %s. Next read will clone fresh from origin.\n", root)
+	if snap.Dir == "" {
+		fmt.Fprintf(os.Stderr, "defrost reset: data branch does not exist on origin yet; nothing to clone.\n")
+		return 0
+	}
+	fmt.Fprintf(os.Stderr, "defrost reset: cloned origin/<data-branch> into %s (HEAD: %s).\n", snap.Dir, snap.SHA[:min(8, len(snap.SHA))])
 	return 0
 }
 
