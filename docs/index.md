@@ -44,9 +44,3 @@ defrost history <test-id>  # NDJSON for a single test
   the `_defrost` branch lifecycle, OpenTelemetry as the ingestion API,
   the suppression model.
 
-## Docs as spec
-
-These docs are the specification. New behaviour lands here first (in a PR
-that updates the relevant guide and reference page) and the implementation
-follows. If the binary disagrees with this site, that is a bug — please
-[open an issue](https://github.com/bjk95/defrost/issues).

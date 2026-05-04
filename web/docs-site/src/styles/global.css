@@ -1,20 +1,29 @@
 /*
- * Starlight theme override. Starlight ships its own CSS variables
- * (--sl-color-*, --sl-font, etc.); this file maps them onto the
- * dashboard's OKLCH design tokens so the docs site renders in the
- * same palette and typography as `defrost serve`.
+ * Starlight + Tailwind v4 integration following the official guide:
+ * https://starlight.astro.build/guides/css-and-tailwind/#tailwind-css
  *
- * Anything Starlight doesn't define a token for is left to its
- * defaults — this file is a remap, not a full restyle.
+ * Layer order matters. Tailwind's `base` and Starlight's own styles
+ * sit at the bottom; theme tokens come next; component-level styles
+ * (Starlight's content) sit above; and Tailwind utilities sit on top
+ * so a utility class always wins over a component default.
  */
+
+@layer base, starlight, theme, components, utilities;
+
+@import "@astrojs/starlight-tailwind";
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
 
 @import "@fontsource-variable/geist";
 @import "@fontsource-variable/geist-mono";
 
+/*
+ * House design tokens, mirrored from the dashboard's web/src/index.css.
+ * These are the source of truth — Starlight's --sl-color-* and Tailwind's
+ * --color-* both reference them, so the docs site and the dashboard
+ * render in identical palettes.
+ */
 :root {
-  /* House design tokens, mirrored from web/src/index.css. Kept in this
-     file too because the Astro project does not import the dashboard's
-     stylesheet — the dashboard SPA and the docs site build independently. */
   --gray-0: oklch(1 0 0);
   --gray-50: oklch(0.985 0 0);
   --gray-100: oklch(0.97 0 0);
@@ -38,10 +47,10 @@
 }
 
 /*
- * Light theme — Starlight uses [data-theme="light"] on <html>.
- * Starlight's color scale is a numeric ramp from --sl-color-white (foreground
- * on dark backgrounds) through --sl-color-gray-1..7 to --sl-color-black.
- * We map the existing --gray-* ramp onto it, lightest at gray-1.
+ * Starlight theme override. Light mode uses the lighter end of the
+ * gray ramp; dark mode flips it. Starlight's --sl-color-white is the
+ * foreground and --sl-color-black is the background — counterintuitive
+ * but documented.
  */
 :root[data-theme="light"] {
   --sl-color-white: var(--gray-900);
@@ -71,7 +80,6 @@
   --sl-color-hairline-shade: var(--gray-300);
 }
 
-/* Dark theme: Starlight uses [data-theme="dark"]. */
 :root[data-theme="dark"] {
   --sl-color-white: var(--gray-0);
   --sl-color-gray-1: var(--gray-50);
@@ -100,8 +108,7 @@
   --sl-color-hairline-shade: oklch(1 0 0 / 0.15);
 }
 
-/* Typography: Geist for body, Geist Mono for code blocks and
-   inline code. Matches the dashboard's font stack exactly. */
+/* Geist for body, Geist Mono for code. Matches the dashboard. */
 :root {
   --sl-font: 'Geist Variable', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   --sl-font-mono: 'Geist Mono Variable', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
