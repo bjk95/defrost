@@ -52,14 +52,16 @@ type Snapshot struct {
 const LocalDir = ".defrost"
 
 // dataBranchGitignore is the .gitignore committed at the data branch
-// root. It excludes the local-only DuckDB cache files that share the
-// worktree with the committed data files.
-const dataBranchGitignore = `# .gitignore on the _defrost branch — keeps the per-machine DuckDB
-# read cache out of commits while letting it share the worktree at
+// root. It excludes the per-machine DuckDB cache and the
+// fileBackend's drop-sentinel from commits while letting them share
+// the worktree.
+const dataBranchGitignore = `# .gitignore on the _defrost branch — keeps per-machine artefacts
+# out of commits while letting them share the worktree at
 # <repo>/.defrost/.
 /cache.duckdb
 /cache.duckdb.wal
 /cache.duckdb.tmp
+/.defrost-dropped
 `
 
 // userRepoIgnoreLine is the line we add to the user's main-repo
