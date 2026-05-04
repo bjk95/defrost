@@ -50,8 +50,7 @@ logs/<YYYY>/<MM>/<DD>/<trace-id>.otlp.pb.zst
   canonical OTLP protobuf message, produced by upstream
   `pdata.{ptraceotlp,pmetricotlp,plogotlp}.MarshalProto` — the same
   serializers an OTel Collector exporter would use. Downstream
-  readers (the local DuckDB hydrator, future hosted ClickHouse)
-  decode without translation:
+  readers decode without translation:
   - `traces/...`: one `ExportTraceServiceRequest` containing the
     `defrost.run` root span and one child span per test result.
   - `metrics/...`: one `ExportMetricsServiceRequest` containing every

@@ -55,7 +55,7 @@ remote, persistence has nowhere to go.
 ```sh
 git remote add origin git@github.com:you/your-repo.git
 # OR
-defrost exec --dev go test ./...
+defrost --dev exec go test ./...
 ```
 
 ### 2. Authentication failure

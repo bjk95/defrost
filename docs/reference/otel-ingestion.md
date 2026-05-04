@@ -12,9 +12,8 @@ The embedded receiver is the upstream
 [`otlpreceiver`](https://pkg.go.dev/go.opentelemetry.io/collector/receiver/otlpreceiver)
 from the OpenTelemetry Collector, run in library mode. That means
 defrost speaks the same wire format the OTel ecosystem produces — no
-custom protocol, no shim code on the receive path. Library-mode
-upstream usage also means future migration to a hosted Collector
-distribution (`otelcol-defrost`) reuses the same ingestion contract.
+custom protocol, no shim code on the receive path. Library-mode upstream usage means defrost speaks the same ingestion
+contract as the broader OTel Collector ecosystem.
 
 - **Bind address:** `127.0.0.1` on a **random free port** chosen at
   startup. Never exposed beyond loopback.

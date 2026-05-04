@@ -14,12 +14,16 @@ mutations are idempotent. Mutations push to the data branch
 immediately (no manual commit needed); same conflict-resolution model
 as run writes (fetch + replay-mutation on non-FF, up to 5 retries).
 
+**Inherits global flags** `--repo-dir`, `--data-branch`, `--dev`,
+plus `--no-color`, `-v/--verbose`, `-q/--quiet`, `-V/--version`.
+See [Configuration](../configuration/).
+
 ## `defrost suppress add`
 
 Add one or more test IDs to the suppression list in a single commit.
 
 ```text
-defrost suppress add [flags] <test-id> [test-id...]
+defrost [global-flags] suppress add [flags] <test-id> [test-id...]
 ```
 
 ```sh
@@ -29,11 +33,7 @@ defrost suppress add \
   "tests/test_evals.py::test_latency"
 ```
 
-| Flag | Type | Default | Description |
-|---|---|---|---|
-| `--repo-dir` | string | `.` | Path to the git repo. |
-| `--data-branch` | string | `_defrost` | Branch where suppressions are stored. |
-| `--dev`, `-d` | bool | `false` | Read/write only the local `<repo>/.defrost/` tree (no remote operations). |
+This subcommand has no additional flags beyond the global flags.
 
 **Exit codes:** `0` on success (including no-op when every ID was
 already on the list). `1` on commit/push failure. `2` if no test IDs
@@ -44,14 +44,10 @@ were provided.
 Remove a single test ID from the suppression list.
 
 ```text
-defrost suppress remove [flags] <test-id>
+defrost [global-flags] suppress remove [flags] <test-id>
 ```
 
-| Flag | Type | Default | Description |
-|---|---|---|---|
-| `--repo-dir` | string | `.` | Path to the git repo. |
-| `--data-branch` | string | `_defrost` | Branch where suppressions are stored. |
-| `--dev`, `-d` | bool | `false` | Read/write only the local `<repo>/.defrost/` tree (no remote operations). |
+This subcommand has no additional flags beyond the global flags.
 
 **Exit codes:** `0` on success (including no-op when the ID was already
 absent). `1` on commit/push failure.
@@ -61,14 +57,10 @@ absent). `1` on commit/push failure.
 Print suppressed test IDs, sorted, one per line.
 
 ```text
-defrost suppress list [flags]
+defrost [global-flags] suppress list [flags]
 ```
 
-| Flag | Type | Default | Description |
-|---|---|---|---|
-| `--repo-dir` | string | `.` | Path to the git repo. |
-| `--data-branch` | string | `_defrost` | Branch to read from. |
-| `--dev`, `-d` | bool | `false` | Read only from the local `<repo>/.defrost/` tree (no remote operations). |
+This subcommand has no additional flags beyond the global flags.
 
 **Exit codes:** `0` on success. `1` on read failure.
 

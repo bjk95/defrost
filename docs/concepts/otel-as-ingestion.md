@@ -22,8 +22,7 @@ receiver hands its decoded `pdata.{Traces,Metrics,Logs}` straight to
 the same sink the adapters write into. The persist layer serializes
 that pdata via `ptraceotlp.MarshalProto` (and friends) — the canonical
 OTLP wire format an OTel Collector exporter would produce — and writes
-it to disk. Downstream readers (the local DuckDB hydrator, future
-hosted ClickHouse) decode the same bytes without translation.
+it to disk. Downstream readers decode the same bytes without translation.
 
 ## Why OTel and not a defrost SDK
 

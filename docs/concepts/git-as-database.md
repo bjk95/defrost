@@ -77,7 +77,5 @@ This model assumes you are willing to:
   limits of the git protocol. Plan for `defrost drop history` to be
   part of regular hygiene at scale.
 
-If you want a hosted service with cross-repo dashboards and a query
-API, you want a different product. If you want history that travels
-with the code and works in five years without anyone paying a bill,
-you probably want this.
+If you want history that travels with the code and works in five years
+without anyone paying a bill, you probably want this.

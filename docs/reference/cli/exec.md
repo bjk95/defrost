@@ -8,7 +8,7 @@ metrics, and logs, and commit them to the data branch.
 ## Synopsis
 
 ```text
-defrost exec [flags] -- <command> [args...]
+defrost [global-flags] exec [flags] -- <command> [args...]
 ```
 
 The `--` is optional but recommended when your command has flags of its
@@ -22,16 +22,18 @@ defrost exec go test ./...
 defrost exec pytest tests/
 defrost exec npm test
 defrost exec -- pytest -k "evals" --maxfail=1
+defrost --repo-dir=/path/to/repo exec go test ./...
 ```
+
+**Inherits global flags** `--repo-dir`, `--data-branch`, `--dev`,
+plus `--no-color`, `-v/--verbose`, `-q/--quiet`, `-V/--version`.
+See [Configuration](../configuration/).
 
 ## Flags
 
 | Flag | Type | Default | Description |
 |---|---|---|---|
-| `--repo-dir` | string | `.` | Path to the git repo to persist into. |
-| `--data-branch` | string | `_defrost` | Branch name where results are stored. |
 | `--no-persist` | bool | `false` | Run tests without persisting results. The OTel receiver still runs (so child SDKs do not error) but nothing is committed. |
-| `--dev`, `-d` | bool | `false` | Dev mode: write results locally only — files still land at `<repo-dir>/.defrost/` (same path as prod mode), but no push to origin. For developing defrost itself. |
 
 ## What it does
 
@@ -58,6 +60,18 @@ defrost exec -- pytest -k "evals" --maxfail=1
 8. Reads `<repo-dir>/.defrost/suppressions.json` (a local file in your
    working tree) and applies the [suppression rule](#exit-codes) to the
    exit code.
+
+## Output format
+
+After the child exits, defrost prints a one-line summary to stderr:
+
+```text
+→ N passed   ✗ N failed   ⊘ N skipped   ✱ N suppressed
+```
+
+When there are failures, a **Failures:** block follows listing each
+failed test ID. With `-v` / `--verbose`, the captured output for each
+failed test is printed below its ID.
 
 ## Exit codes
 

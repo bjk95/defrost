@@ -10,7 +10,7 @@ ID.
 ## Synopsis
 
 ```text
-defrost history [flags] <test-id>
+defrost [global-flags] history [flags] <test-id>
 ```
 
 ## Examples
@@ -32,13 +32,13 @@ Pipe through `jq` to inspect:
 defrost history <test-id> | jq -r '.scopeSpans[].spans[] | "\(.startTimeUnixNano) \(.status.code)"'
 ```
 
+**Inherits global flags** `--repo-dir`, `--data-branch`, `--dev`,
+plus `--no-color`, `-v/--verbose`, `-q/--quiet`, `-V/--version`.
+See [Configuration](../configuration/).
+
 ## Flags
 
-| Flag | Type | Default | Description |
-|---|---|---|---|
-| `--repo-dir` | string | `.` | Path to the git repo. |
-| `--data-branch` | string | `_defrost` | Branch name to read from. |
-| `--dev`, `-d` | bool | `false` | Dev mode: read only from `<repo-dir>/.defrost/` (no remote operations). |
+This subcommand has no additional flags beyond the global flags.
 
 ## Test ID format
 
