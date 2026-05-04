@@ -31,7 +31,7 @@ traces/<YYYY>/<MM>/<DD>/<trace-id>.otlp.pb.zst
 metrics/<YYYY>/<MM>/<DD>/<trace-id>.otlp.pb.zst
 ```
 
-See [storage layout](../reference/storage-layout.md) for the exact
+See [storage layout](../../reference/storage-layout/) for the exact
 file format and naming rules.
 
 ## Inspecting the branch by hand
@@ -64,7 +64,7 @@ Two reasons:
   There is no separate ACL to keep in sync.
 
 The cost is repo size. See the [trade-offs in the Git-as-database
-page](./git-as-database.md#trade-offs).
+page](../git-as-database/#trade-offs).
 
 ## Why orphan
 

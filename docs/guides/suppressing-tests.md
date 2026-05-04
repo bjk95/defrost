@@ -8,7 +8,7 @@ failure does not turn CI red — as long as every failing test in the
 run is suppressed.
 
 For the why and the trade-offs vs. skipping in source, see
-[the suppression concept page](../concepts/suppression.md).
+[the suppression concept page](../../concepts/suppression/).
 
 ## Suppress a test
 
@@ -79,4 +79,4 @@ The dashboard exposes the same operations as HTTP endpoints (used by
 the SPA). If you have programmatic suppression management — e.g. a
 bot that opens a PR adding suppressions when a flake threshold is
 crossed — you can either shell out to `defrost suppress add` or use
-the [Serve HTTP API](../reference/serve-api.md#suppressions) directly.
+the [Serve HTTP API](../../reference/serve-api/#suppressions) directly.

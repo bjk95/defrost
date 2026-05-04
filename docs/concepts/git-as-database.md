@@ -29,7 +29,7 @@ anywhere else would mean re-implementing things git already gives you:
 Each recorded run becomes a commit on the data branch (default
 `_defrost`) containing one trace file and optionally one metrics file,
 named by trace ID and partitioned by UTC date. See
-[storage layout](../reference/storage-layout.md) for the exact paths.
+[storage layout](../../reference/storage-layout/) for the exact paths.
 
 The branch is **orphan** — it shares no history with the main branch.
 That keeps the working tree clean (you never have trace files appearing

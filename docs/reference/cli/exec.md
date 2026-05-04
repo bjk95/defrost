@@ -39,7 +39,7 @@ defrost exec -- pytest -k "evals" --maxfail=1
    working tree, host OS/arch, defrost version. These become OTel
    resource attributes on the run.
 2. Starts an OTLP/HTTP receiver on a random free port on `127.0.0.1`
-   (see [OTel ingestion](../otel-ingestion.md)).
+   (see [OTel ingestion](../../otel-ingestion/)).
 3. Sets `OTEL_EXPORTER_OTLP_ENDPOINT` and `OTEL_EXPORTER_OTLP_PROTOCOL`
    in the child environment so any OTel SDK in the child auto-points at
    defrost.
@@ -51,7 +51,7 @@ defrost exec -- pytest -k "evals" --maxfail=1
 6. Waits up to 2 seconds after the child exits for in-flight OTel
    exports to drain.
 7. Writes one trace file and (if any metrics arrived) one metrics file
-   to the data branch — see [storage layout](../storage-layout.md).
+   to the data branch — see [storage layout](../../storage-layout/).
 8. Reads `suppressions.json` and applies the [suppression rule](#exit-codes)
    to the exit code.
 
@@ -75,5 +75,5 @@ defrost: all N failing test(s) suppressed; rewriting exit <code> → 0
 When `--dev` is not set and `--repo-dir` has a remote configured, defrost
 pushes the data branch after committing. If `GITHUB_TOKEN` is in the
 environment, it is used for HTTPS authentication; otherwise the default
-git credential flow applies. See [Configuration](../configuration.md) for
+git credential flow applies. See [Configuration](../../configuration/) for
 all environment variables read.

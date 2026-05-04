@@ -28,7 +28,7 @@ defrost exec npm test
 
 Output streams through to your terminal exactly as before. The exit
 code is your test runner's exit code (with one well-defined exception
-— see [suppression](../concepts/suppression.md)).
+— see [suppression](../../concepts/suppression/)).
 
 ## 3. See what was recorded
 
@@ -64,13 +64,13 @@ git worktree add ../defrost-data _defrost
 ls ../defrost-data/traces
 ```
 
-See [the `_defrost` branch](../concepts/defrost-branch.md) for the
+See [the `_defrost` branch](../../concepts/defrost-branch/) for the
 on-disk layout.
 
 ## What's next
 
-- **Wire it into CI.** See [CI setup](./ci-setup.md).
+- **Wire it into CI.** See [CI setup](../ci-setup/).
 - **Suppress a flaky test** so CI stays green without skipping it. See
-  [Suppressing known-failing tests](./suppressing-tests.md).
+  [Suppressing known-failing tests](../suppressing-tests/).
 - **Record eval metrics**, not just test pass/fail. See
-  [Recording evals](./recording-evals.md).
+  [Recording evals](../recording-evals/).

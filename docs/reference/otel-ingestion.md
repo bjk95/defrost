@@ -37,7 +37,7 @@ code change required.
 Every recorded run has the same structure:
 
 - One **root span**, name `defrost.run`. Resource attributes describe
-  the repo state — see [storage layout](./storage-layout.md#run-span-resource-attributes).
+  the repo state — see [storage layout](../storage-layout/#run-span-resource-attributes).
 - One **child span per test result**. Span name = the test ID. Status
   code is `OK` for pass, `ERROR` for fail. Skips and other statuses use
   attributes documented in the relevant adapter section below.

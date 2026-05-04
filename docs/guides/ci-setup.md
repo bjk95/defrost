@@ -56,7 +56,7 @@ GitHub Actions, no config needed):
 | `GITHUB_REF_NAME` | Secondary fallback for the branch name. |
 | `GITHUB_PR_NUMBER` | Recorded as `vcs.repository.change.id` on the run. Set this from the workflow context if you want it on PR runs:<br>`GITHUB_PR_NUMBER: ${{ github.event.pull_request.number }}` |
 
-See [Configuration](../reference/configuration.md#environment-variables)
+See [Configuration](../../reference/configuration/#environment-variables)
 for the full list.
 
 ## Parallel jobs

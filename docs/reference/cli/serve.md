@@ -55,5 +55,5 @@ deep links and the browser back button work.
 ## HTTP API
 
 The same server exposes a JSON API used by the SPA. See
-[Serve HTTP API](../serve-api.md) for the full endpoint list, request /
+[Serve HTTP API](../../serve-api/) for the full endpoint list, request /
 response shapes, and cache headers.

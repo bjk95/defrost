@@ -60,5 +60,5 @@ locally when you need it" is enough.
 ## Reading data without the dashboard
 
 For programmatic access, the same read endpoints are documented in the
-[Serve HTTP API](../reference/serve-api.md), and `defrost history`
+[Serve HTTP API](../../reference/serve-api/), and `defrost history`
 gives NDJSON for a single test from the command line.

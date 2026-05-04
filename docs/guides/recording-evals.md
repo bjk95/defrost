@@ -17,7 +17,7 @@ You don't need a defrost client library. Any OTel SDK works.
    `OTEL_EXPORTER_OTLP_PROTOCOL` in the child environment so the SDK
    auto-points at the embedded receiver.
 4. After the child exits, defrost writes a metrics file to the data
-   branch — see [storage layout](../reference/storage-layout.md).
+   branch — see [storage layout](../../reference/storage-layout/).
 
 ## Python
 
@@ -136,4 +136,4 @@ defrost serve
 
 Or pull NDJSON for a specific span via `defrost history`. Metrics are
 stored as a separate file per run alongside traces — see
-[storage layout](../reference/storage-layout.md#run-files).
+[storage layout](../../reference/storage-layout/#run-files).

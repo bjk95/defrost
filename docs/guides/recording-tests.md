@@ -93,13 +93,13 @@ defrost exec <your-eval-or-test-command>
 
 Anything written to `OTEL_EXPORTER_OTLP_ENDPOINT` is captured. defrost
 sets that env var to its embedded receiver before spawning the child —
-see [OTel as ingestion](../concepts/otel-as-ingestion.md).
+see [OTel as ingestion](../../concepts/otel-as-ingestion/).
 
 If your runner does **not** speak OTel and isn't supported by a
 built-in adapter, the run will still be wrapped (you'll see a
 `defrost.run` span with no test children) but you won't get per-test
 results. Open an issue requesting an adapter, or use the
-[recording-evals workflow](./recording-evals.md) to push metrics
+[recording-evals workflow](../recording-evals/) to push metrics
 directly from your code.
 
 ## Common flags
@@ -111,5 +111,5 @@ All adapters share these `defrost exec` flags:
 - `--dev` / `-d` — write to a local scratch dir instead of committing.
 - `--repo-dir <path>` — point at a different repo.
 
-See the [`defrost exec` reference](../reference/cli/exec.md) for the
+See the [`defrost exec` reference](../../reference/cli/exec/) for the
 full flag list and exit-code rules.

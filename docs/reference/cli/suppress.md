@@ -6,7 +6,7 @@ Manage the suppression list. When every failing test in a `defrost exec`
 run is suppressed, the exit code is rewritten to `0` so CI can stay
 green without skipping the test in source. Suppressions are stored in
 `suppressions.json` on the data branch — see
-[storage layout](../storage-layout.md#suppressionsjson).
+[storage layout](../../storage-layout/#suppressionsjson).
 
 `defrost suppress` has three subcommands: `add`, `remove`, `list`. All
 mutations are idempotent.
@@ -84,4 +84,4 @@ After a child exits with a non-zero code, `defrost exec` reads
 - If persistence failed, suppression is skipped entirely and the exit
   code is rewritten to `1`.
 
-See also [`defrost exec` exit codes](./exec.md#exit-codes).
+See also [`defrost exec` exit codes](../exec/#exit-codes).
