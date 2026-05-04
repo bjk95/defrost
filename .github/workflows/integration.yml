@@ -116,27 +116,14 @@ jobs:
             exit 1
           fi
 
-      - name: Assert OTel logs were captured
-        # End-to-end coverage of the third OTel signal: examples/python's
-        # conftest wires an OTLP log exporter when defrost sets
-        # OTEL_EXPORTER_OTLP_ENDPOINT, and test_pass emits one log
-        # record. defrost prints `defrost: persisted: spans=…,
-        # metric_points=…, log_records=N` after a successful push;
-        # we assert N >= 1.
-        run: |
-          line=$(grep -E '^defrost: persisted:' out.txt | tail -1)
-          if [ -z "$line" ]; then
-            echo "FAIL: no 'defrost: persisted:' line found (persist may have failed)"
-            cat out.txt
-            exit 1
-          fi
-          echo "persisted: $line"
-          n=$(echo "$line" | sed -E 's/.*log_records=([0-9]+).*/\1/')
-          if [ -z "$n" ] || [ "$n" -lt 1 ]; then
-            echo "FAIL: expected log_records >= 1, got '$n'"
-            cat out.txt
-            exit 1
-          fi
+      - name: Readback — verify all three signals landed on origin/_defrost
+        # Replaces the older "grep stderr counts" check with a real
+        # readback against the data branch. This is what would have
+        # caught the recent gitBackend-writing-under-data/ regression
+        # at the source (the file simply wouldn't exist at the
+        # expected path), and it's signal-agnostic: every example job
+        # uses this same script with the signals it expects.
+        run: .github/scripts/readback.sh out.txt _defrost traces metrics logs
 
       - name: Upload defrost output for debugging
         if: failure()

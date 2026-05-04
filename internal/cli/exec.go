@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -125,8 +126,14 @@ func execWith(a runner.Adapter, c ExecCmd) int {
 			persistFailed = true
 			logPersistFailure(err)
 		} else {
+			// Including trace_id in the summary lets readback checks
+			// (in CI and `defrost inspect`) find the just-pushed files
+			// on the data branch by exact filename match — much more
+			// robust than counting committed files since the last
+			// fetch.
 			fmt.Fprintf(os.Stderr,
-				"defrost: persisted: spans=%d, metric_points=%d, log_records=%d\n",
+				"defrost: persisted: trace_id=%s, spans=%d, metric_points=%d, log_records=%d\n",
+				hex.EncodeToString(run.TraceID[:]),
 				results.SpanCount(), adapterMetrics.DataPointCount(), receiverLogs.LogRecordCount())
 		}
 	}

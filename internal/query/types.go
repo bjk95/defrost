@@ -51,8 +51,16 @@ type GridData struct {
 
 // Run carries every field the dashboard renders for a single defrost
 // exec invocation. Populated from the run's root span resource.
+//
+// TraceID is the hex-encoded 16-byte trace id of the run's root span.
+// Used by the metrics handler to map exemplar trace_ids on metric
+// data points to their owning run (the strong correlation key);
+// without this, the handler falls back to a lossy time-window
+// heuristic. Empty when the run row didn't have a trace id (older
+// data or hydration anomaly).
 type Run struct {
 	RunID       string
+	TraceID     string
 	Timestamp   time.Time
 	Commit      string
 	Parent      string

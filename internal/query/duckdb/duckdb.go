@@ -374,6 +374,7 @@ func (q *Querier) Grid(w query.RunWindow) (query.GridData, error) {
 		runID, _ := attrs["cicd.pipeline.run.id"].(string)
 		r := query.Run{
 			RunID:       runID,
+			TraceID:     traceID,
 			Timestamp:   startTime,
 			Commit:      attrString(attrs, "vcs.repository.ref.revision"),
 			Parent:      attrString(attrs, "defrost.parent_commit"),
