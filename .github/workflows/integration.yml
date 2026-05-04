@@ -21,22 +21,41 @@ jobs:
 
       - name: Debug go env
         # Temporary: surface the actual build error (job has been
-        # failing in 13s with no visible cause).
+        # failing in 11-13s with exit 127 and no visible cause).
+        # Writes to $GITHUB_STEP_SUMMARY so the output is visible
+        # even if logs are gated behind sign-in.
+        shell: bash
         run: |
-          set -x
-          go version
-          go env GOPROXY GOSUMDB GOFLAGS GOMODCACHE GOOS GOARCH CGO_ENABLED
-          ls -la
-          head -30 go.mod
+          {
+            echo "## Go env"
+            echo '```'
+            go version || echo "go version failed: $?"
+            echo
+            go env GOPROXY GOSUMDB GOFLAGS GOMODCACHE GOOS GOARCH CGO_ENABLED || echo "go env failed: $?"
+            echo
+            echo "PATH=$PATH"
+            echo "PWD=$(pwd)"
+            ls -la
+            echo
+            head -20 go.mod
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Build defrost-ci
         # CI workflows use defrost-ci (the slim binary): no DuckDB cgo,
         # no embedded web bundle. Same exec/history/suppress/drop
         # subcommands as the full binary; only serve differs (it's a
         # stub that prints the install hint).
+        shell: bash
         run: |
-          set -x
-          go build -v -o defrost ./cmd/defrost-ci 2>&1 | tail -50
+          {
+            echo "## Build defrost-ci"
+            echo '```'
+            go build -v -o defrost ./cmd/defrost-ci 2>&1 || echo "build failed: $?"
+            echo
+            ls -la defrost 2>&1 || echo "no defrost binary"
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Configure git auth for defrost persist
         run: |
