@@ -90,42 +90,22 @@ func (b *fileBackend) UpdateSuppressions(mutate func([]string) []string, _ strin
 // fetch+reset cycle.
 
 func (b *gitBackend) GetSuppressions() ([]string, error) {
-	// Fast path: persistent worktree has the file. The worktree may be
-	// stale by minutes (we don't fetch on every read), but for
-	// suppression-list reads — which can tolerate seconds-to-minutes
-	// of staleness — that's the right trade-off.
-	worktreePath := LocalSuppressionsPath(b.opts)
-	if _, err := os.Stat(worktreePath); err == nil {
-		return readSuppressionsFromDir(LocalRoot(b.opts))
-	} else if !errors.Is(err, fs.ErrNotExist) {
-		return nil, err
-	}
-
-	// Slow path: no worktree yet. Temp-clone, read, drop. This is the
-	// first-time-on-this-machine case, e.g. a fresh CI job that
-	// never ran `defrost serve`.
-	branch := b.dataBranch()
-	remoteURL, err := resolveTargetURL(b.opts)
+	// Route through CloneForRead so we get the ls-remote freshness
+	// check + clone-once-then-fetch logic for free. When the local
+	// worktree's HEAD already matches origin's tip, CloneForRead is a
+	// single ~50ms ls-remote round-trip — no fetch, no reset. When it
+	// doesn't, the worktree is brought up to date before we read the
+	// file. Either way the suppressions we return reflect origin at
+	// command start, not whatever stale snapshot was last on disk.
+	snap, err := b.CloneForRead()
 	if err != nil {
 		return nil, err
 	}
-	exists, err := branchExistsOnRemote(remoteURL, branch)
-	if err != nil {
-		return nil, err
-	}
-	if !exists {
+	if snap.Dir == "" {
+		// Branch missing on origin → no suppressions yet.
 		return []string{}, nil
 	}
-	workDir, err := os.MkdirTemp("", "defrost-suppress-read-")
-	if err != nil {
-		return nil, fmt.Errorf("mktemp: %w", err)
-	}
-	defer os.RemoveAll(workDir)
-	_ = os.Remove(workDir) // git clone wants the path absent
-	if _, err := runGit("", "clone", "--quiet", "--depth=1", "--single-branch", "--branch", branch, remoteURL, workDir); err != nil {
-		return nil, fmt.Errorf("clone data branch: %w", err)
-	}
-	return readSuppressionsFromDir(workDir)
+	return readSuppressionsFromDir(snap.Dir)
 }
 
 func (b *gitBackend) UpdateSuppressions(mutate func([]string) []string, msg string) error {

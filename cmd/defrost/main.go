@@ -45,6 +45,8 @@ func main() {
 		os.Exit(cli.HandleSuppressList(c.Suppress.List))
 	case strings.HasPrefix(cmd, "drop history"):
 		os.Exit(cli.HandleDropHistory(c.Drop.History))
+	case strings.HasPrefix(cmd, "reset"):
+		os.Exit(cli.HandleReset(c.Reset))
 	case strings.HasPrefix(cmd, "serve"):
 		os.Exit(handleServe(c.Serve))
 	default:

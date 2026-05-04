@@ -29,6 +29,8 @@ type CLI struct {
 	} `cmd:"" help:"Destructive operations on the data branch."`
 
 	Serve ServeCmd `cmd:"" help:"Serve a local UI for inspecting test history."`
+
+	Reset ResetCmd `cmd:"" help:"Wipe the local <repo>/.defrost/ cache so the next read clones fresh from origin. The data branch on origin is untouched."`
 }
 
 // ExecCmd is the `defrost exec` subcommand.
@@ -89,6 +91,20 @@ type ServeCmd struct {
 	RepoDir    string `name:"repo-dir" default:"." help:"Path to the git repo."`
 	DataBranch string `name:"data-branch" default:"_defrost" help:"Branch name to read from."`
 	Dev        bool   `name:"dev" short:"d" help:"Dev mode: read only from the local <repo-dir>/.defrost/data/ tree; no remote operations."`
+}
+
+// ResetCmd is `defrost reset` — the escape hatch for when the local
+// .defrost/ cache is in a state CloneForRead can't refresh from
+// (corrupt .git, dir-without-.git from a half-failed prior clone,
+// network-induced ref skew, etc.). Wipes <repo>/.defrost/ and lets
+// the next read clone fresh.
+//
+// Local-only: the data branch on origin is untouched. Re-cloning is
+// safe because the worktree is a derived view of origin/<branch>;
+// nothing is lost that wasn't already on origin.
+type ResetCmd struct {
+	RepoDir string `name:"repo-dir" default:"." help:"Path to the git repo whose .defrost/ tree should be wiped."`
+	Yes     bool   `name:"yes" short:"y" help:"Skip the confirmation prompt."`
 }
 
 // DefrostVersion is the value stamped into the run's

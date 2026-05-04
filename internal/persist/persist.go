@@ -321,17 +321,37 @@ func (b *gitBackend) InsertNewRun(run Run) error {
 // — `defrost drop history` does this), we wipe the worktree and clone
 // from scratch, returning Snapshot.Reset=true so callers know to drop
 // any derived state.
+// CloneForRead ensures a persistent local working tree of the data
+// branch at <repo>/.defrost. The clone happens exactly once — the
+// first time this method is called for a given repo. Every subsequent
+// call short-circuits cheaply when the local HEAD already matches
+// origin's tip, otherwise performs a fetch+reset.
+//
+// Errors are surfaced as-is rather than papering over them with a
+// silent re-clone. If the user's local cache is broken in some way
+// that fetch can't recover from (corrupt .git, dir-without-.git,
+// etc.), they should run `defrost reset` to wipe and start fresh.
+//
+// The freshness model:
+//
+//   - ls-remote (~50ms) reports the remote tip.
+//   - If branch missing on remote → no data yet, return Snapshot{}.
+//   - If <repo>/.defrost/.git doesn't exist → first time on this
+//     machine, clone once.
+//   - If <repo>/.defrost/.git exists and localHeadSHA == remoteSHA →
+//     no fetch, return Snapshot.
+//   - If <repo>/.defrost/.git exists and SHAs differ → fetch + reset
+//     hard. Reset=true when the new tip wasn't a fast-forward of the
+//     previous local tip (so the caller can drop derived state).
+//   - If <repo>/.defrost/ exists but has no .git → ERROR, ask user
+//     to run `defrost reset`.
 func (b *gitBackend) CloneForRead() (Snapshot, error) {
 	branch := b.dataBranch()
-	remoteURL, err := resolveTargetURL(b.opts)
+	remoteSHA, err := b.RemoteHeadSHA()
 	if err != nil {
 		return Snapshot{}, err
 	}
-	exists, err := branchExistsOnRemote(remoteURL, branch)
-	if err != nil {
-		return Snapshot{}, err
-	}
-	if !exists {
+	if remoteSHA == "" {
 		return Snapshot{}, nil
 	}
 
@@ -347,40 +367,79 @@ func (b *gitBackend) CloneForRead() (Snapshot, error) {
 		return Snapshot{}, fmt.Errorf("mkdir cache parent: %w", err)
 	}
 
-	// Cold path: no working tree yet. Full shallow clone into the
-	// cache dir; SHA from HEAD; Reset=false (first hydrate of this
-	// cache, by definition not a force-reset).
-	if _, err := os.Stat(filepath.Join(workDir, ".git")); err != nil {
-		if !errors.Is(err, fs.ErrNotExist) {
+	gitDir := filepath.Join(workDir, ".git")
+	gitDirInfo, gitDirErr := os.Stat(gitDir)
+	workDirInfo, workDirErr := os.Stat(workDir)
+
+	// Cold path: no .git/ yet, either because <repo>/.defrost/ itself
+	// is missing or because the dir was pre-created (Querier.New does
+	// this when it opens cache.duckdb). Use `git init` + remote-add +
+	// fetch + checkout instead of `git clone` so any pre-existing
+	// non-tracked files in <repo>/.defrost/ (e.g. cache.duckdb) survive.
+	// `git clone` requires an empty target; init+fetch doesn't.
+	if errors.Is(gitDirErr, fs.ErrNotExist) ||
+		(errors.Is(workDirErr, fs.ErrNotExist)) {
+		remoteURL, urlErr := resolveTargetURL(b.opts)
+		if urlErr != nil {
+			return Snapshot{}, urlErr
+		}
+		if err := os.MkdirAll(workDir, 0o755); err != nil {
+			return Snapshot{}, fmt.Errorf("mkdir cache dir: %w", err)
+		}
+		if err := initWorktreeFromRemote(workDir, remoteURL, branch); err != nil {
 			return Snapshot{}, err
-		}
-		if err := removeAllPreservingParent(workDir); err != nil {
-			return Snapshot{}, fmt.Errorf("clear stale cache dir: %w", err)
-		}
-		if _, err := runGit("", "clone", "--quiet", "--depth=1", "--single-branch", "--branch", branch, remoteURL, workDir); err != nil {
-			return Snapshot{}, fmt.Errorf("clone data branch: %w", err)
 		}
 		return Snapshot{Dir: workDir, SHA: localHeadSHA(workDir)}, nil
 	}
-
-	// Warm path: a working tree already exists. Try a fetch+reset; if
-	// the remote tip isn't reachable (force-push detected via
-	// non-existent ref or shallow reject), fall back to a wipe-and-
-	// re-clone with Reset=true.
-	if reset, err := b.refreshWorktree(workDir, branch); err == nil {
-		return Snapshot{Dir: workDir, SHA: localHeadSHA(workDir), Reset: reset}, nil
+	if workDirErr != nil {
+		return Snapshot{}, workDirErr
+	}
+	if !workDirInfo.IsDir() {
+		return Snapshot{}, fmt.Errorf("%s exists but is not a directory; remove it and rerun (or run `defrost reset`)", workDir)
+	}
+	if gitDirErr != nil {
+		return Snapshot{}, fmt.Errorf("stat %s: %w", gitDir, gitDirErr)
+	}
+	if !gitDirInfo.IsDir() {
+		return Snapshot{}, fmt.Errorf("%s/.git is not a directory; run `defrost reset` to wipe and reclone", workDir)
 	}
 
-	// Reconcile by wiping and re-cloning. Anything that was on disk
-	// belonged to the old branch; the caller will see Reset=true and
-	// drop derived state.
-	if err := removeAllPreservingParent(workDir); err != nil {
-		return Snapshot{}, fmt.Errorf("wipe cache dir: %w", err)
+	// Warm path. SHA short-circuit first — when the local worktree
+	// already matches origin we skip the fetch entirely.
+	if localHeadSHA(workDir) == remoteSHA {
+		return Snapshot{Dir: workDir, SHA: remoteSHA}, nil
 	}
-	if _, err := runGit("", "clone", "--quiet", "--depth=1", "--single-branch", "--branch", branch, remoteURL, workDir); err != nil {
-		return Snapshot{}, fmt.Errorf("re-clone data branch: %w", err)
+
+	// SHAs differ → fetch + reset --hard. refreshWorktree returns
+	// Reset=true when the new remote tip wasn't a fast-forward of
+	// the previous local tip (e.g. `defrost drop history` ran
+	// upstream).
+	reset, err := b.refreshWorktree(workDir, branch)
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("refresh worktree at %s: %w (run `defrost reset` to wipe and reclone)", workDir, err)
 	}
-	return Snapshot{Dir: workDir, SHA: localHeadSHA(workDir), Reset: true}, nil
+	return Snapshot{Dir: workDir, SHA: localHeadSHA(workDir), Reset: reset}, nil
+}
+
+// initWorktreeFromRemote initializes a local git repo at workDir
+// (which may already contain non-tracked files like cache.duckdb)
+// and pulls the remote branch into it. Equivalent to `git clone`
+// but tolerates a non-empty target directory.
+func initWorktreeFromRemote(workDir, remoteURL, branch string) error {
+	if _, err := runGit(workDir, "init", "--quiet"); err != nil {
+		return fmt.Errorf("git init: %w", err)
+	}
+	if _, err := runGit(workDir, "remote", "add", "origin", remoteURL); err != nil {
+		return fmt.Errorf("git remote add: %w", err)
+	}
+	refspec := fmt.Sprintf("+refs/heads/%s:refs/remotes/origin/%s", branch, branch)
+	if _, err := runGit(workDir, "fetch", "--quiet", "--depth=1", "origin", refspec); err != nil {
+		return fmt.Errorf("git fetch: %w", err)
+	}
+	if _, err := runGit(workDir, "checkout", "-b", branch, "refs/remotes/origin/"+branch); err != nil {
+		return fmt.Errorf("git checkout: %w", err)
+	}
+	return nil
 }
 
 // refreshWorktree updates dir to the current remote tip. Returns
