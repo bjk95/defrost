@@ -63,30 +63,30 @@ jobs:
             echo '```'
           } | tee -a "$GITHUB_STEP_SUMMARY"
 
-      - name: Build defrost-ci
-        # CI workflows use defrost-ci (the slim binary): no DuckDB cgo,
-        # no embedded web bundle. Same exec/history/suppress/drop
-        # subcommands as the full binary; only serve differs (it's a
-        # stub that prints the install hint).
+      - name: Mod download
         shell: bash
         run: |
-          # Run the build and capture stdout+stderr. Tee everything to
-          # the step summary AND fail the step if the build fails so
-          # we don't silently fall through to a "command not found" on
-          # the next step.
           set -o pipefail
-          {
-            echo "## Build defrost-ci"
-            echo '```'
-          } | tee -a "$GITHUB_STEP_SUMMARY"
-          go build -v -o defrost ./cmd/defrost-ci 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "## Mod download" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          go mod download -x 2>&1 | tail -50 | tee -a "$GITHUB_STEP_SUMMARY"
           rc=${PIPESTATUS[0]}
-          {
-            echo
-            echo "exit: $rc"
-            ls -la defrost 2>&1 || echo "no defrost binary"
-            echo '```'
-          } | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "exit: $rc" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          exit "$rc"
+
+      - name: Build defrost-ci
+        shell: bash
+        run: |
+          set -o pipefail
+          echo "## Build defrost-ci" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          go build -v -o defrost ./cmd/defrost-ci 2>&1 | tail -50 | tee -a "$GITHUB_STEP_SUMMARY"
+          rc=${PIPESTATUS[0]}
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "exit: $rc" >> "$GITHUB_STEP_SUMMARY"
+          ls -la defrost >> "$GITHUB_STEP_SUMMARY" 2>&1 || echo "no defrost binary" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
           exit "$rc"
 
       - name: Configure git auth for defrost persist
