@@ -19,8 +19,12 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Build defrost
-        run: go build -o defrost .
+      - name: Build defrost-ci
+        # CI workflows use defrost-ci (the slim binary): no DuckDB cgo,
+        # no embedded web bundle. Same exec/history/suppress/drop
+        # subcommands as the full binary; only serve differs (it's a
+        # stub that prints the install hint).
+        run: go build -o defrost ./cmd/defrost-ci
 
       - name: Configure git auth for defrost persist
         run: |
@@ -51,8 +55,12 @@ jobs:
       - name: Install pytest
         run: pip install pytest
 
-      - name: Build defrost
-        run: go build -o defrost .
+      - name: Build defrost-ci
+        # CI workflows use defrost-ci (the slim binary): no DuckDB cgo,
+        # no embedded web bundle. Same exec/history/suppress/drop
+        # subcommands as the full binary; only serve differs (it's a
+        # stub that prints the install hint).
+        run: go build -o defrost ./cmd/defrost-ci
 
       - name: Run defrost against examples/python
         id: run
@@ -118,8 +126,12 @@ jobs:
         run: npm install
         working-directory: examples/javascript
 
-      - name: Build defrost
-        run: go build -o defrost .
+      - name: Build defrost-ci
+        # CI workflows use defrost-ci (the slim binary): no DuckDB cgo,
+        # no embedded web bundle. Same exec/history/suppress/drop
+        # subcommands as the full binary; only serve differs (it's a
+        # stub that prints the install hint).
+        run: go build -o defrost ./cmd/defrost-ci
 
       - name: Run defrost against examples/javascript
         id: run
@@ -184,8 +196,12 @@ jobs:
         run: npm install
         working-directory: examples/typescript
 
-      - name: Build defrost
-        run: go build -o defrost .
+      - name: Build defrost-ci
+        # CI workflows use defrost-ci (the slim binary): no DuckDB cgo,
+        # no embedded web bundle. Same exec/history/suppress/drop
+        # subcommands as the full binary; only serve differs (it's a
+        # stub that prints the install hint).
+        run: go build -o defrost ./cmd/defrost-ci
 
       - name: Run defrost against examples/typescript
         id: run
@@ -249,8 +265,12 @@ jobs:
       - name: Install promptfoo
         run: npm install -g promptfoo@latest
 
-      - name: Build defrost
-        run: go build -o defrost .
+      - name: Build defrost-ci
+        # CI workflows use defrost-ci (the slim binary): no DuckDB cgo,
+        # no embedded web bundle. Same exec/history/suppress/drop
+        # subcommands as the full binary; only serve differs (it's a
+        # stub that prints the install hint).
+        run: go build -o defrost ./cmd/defrost-ci
 
       - name: Configure git auth for defrost persist
         run: |
@@ -326,8 +346,12 @@ jobs:
       - name: Install inspect-ai
         run: pip install -r examples/inspect/requirements.txt
 
-      - name: Build defrost
-        run: go build -o defrost .
+      - name: Build defrost-ci
+        # CI workflows use defrost-ci (the slim binary): no DuckDB cgo,
+        # no embedded web bundle. Same exec/history/suppress/drop
+        # subcommands as the full binary; only serve differs (it's a
+        # stub that prints the install hint).
+        run: go build -o defrost ./cmd/defrost-ci
 
       - name: Configure git auth for defrost persist
         run: |
@@ -404,8 +428,12 @@ jobs:
         run: npm ci
         working-directory: examples/vitest-js
 
-      - name: Build defrost
-        run: go build -o defrost .
+      - name: Build defrost-ci
+        # CI workflows use defrost-ci (the slim binary): no DuckDB cgo,
+        # no embedded web bundle. Same exec/history/suppress/drop
+        # subcommands as the full binary; only serve differs (it's a
+        # stub that prints the install hint).
+        run: go build -o defrost ./cmd/defrost-ci
 
       - name: Run defrost against examples/vitest-js
         id: run
@@ -470,8 +498,12 @@ jobs:
         run: npm ci
         working-directory: examples/vitest-ts
 
-      - name: Build defrost
-        run: go build -o defrost .
+      - name: Build defrost-ci
+        # CI workflows use defrost-ci (the slim binary): no DuckDB cgo,
+        # no embedded web bundle. Same exec/history/suppress/drop
+        # subcommands as the full binary; only serve differs (it's a
+        # stub that prints the install hint).
+        run: go build -o defrost ./cmd/defrost-ci
 
       - name: Run defrost against examples/vitest-ts
         id: run
@@ -536,8 +568,12 @@ jobs:
         run: npm ci
         working-directory: web
 
-      - name: Build defrost
-        run: go build -o defrost .
+      - name: Build defrost-ci
+        # CI workflows use defrost-ci (the slim binary): no DuckDB cgo,
+        # no embedded web bundle. Same exec/history/suppress/drop
+        # subcommands as the full binary; only serve differs (it's a
+        # stub that prints the install hint).
+        run: go build -o defrost ./cmd/defrost-ci
 
       - name: Run defrost against web/ tests
         id: run

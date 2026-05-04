@@ -43,12 +43,17 @@ jobs:
 
       - name: Commit rebuilt dist if changed
         run: |
-          if git diff --quiet web/dist; then
+          # Vite's outDir is internal/serve/assets/dist (configured in
+          # web/vite.config.ts). The bundle is committed there so
+          # `go install github.com/bjk95/defrost/cmd/defrost@latest`
+          # works without a Node toolchain — the embed directive in
+          # internal/serve/assets/assets.go picks it up at build time.
+          if git diff --quiet internal/serve/assets/dist; then
             echo "No dist changes; nothing to commit."
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add web/dist
-          git commit -m "chore: rebuild web/dist [skip ci]"
+          git add internal/serve/assets/dist
+          git commit -m "chore: rebuild internal/serve/assets/dist [skip ci]"
           git push
