@@ -37,13 +37,15 @@ fi
 
 # Pull the trace_id from defrost's 'persisted:' summary. There may be
 # multiple persisted lines on a single CI run (if the test invokes
-# defrost more than once); take the last one.
-trace_id=$(grep -E '^defrost: persisted:' "$OUT" \
+# defrost more than once); take the last one. The line format is
+# emitted by cliout.Passf in internal/cli/exec.go and reads:
+#   ✓ persisted: trace_id=<hex>, spans=N, metric_points=N, log_records=N
+trace_id=$(grep -E '^✓ persisted:' "$OUT" \
   | tail -1 \
   | sed -nE 's/.*trace_id=([a-f0-9]+).*/\1/p')
 
 if [ -z "$trace_id" ]; then
-  echo "readback FAIL: no 'defrost: persisted: trace_id=<hex>' line in $OUT" >&2
+  echo "readback FAIL: no '✓ persisted: trace_id=<hex>' line in $OUT" >&2
   echo "  (this means persist failed or the binary is too old to emit trace_id)" >&2
   echo "  --- last 30 lines of $OUT ---" >&2
   tail -30 "$OUT" >&2 || true

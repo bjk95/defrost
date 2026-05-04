@@ -19,33 +19,83 @@ import (
 )
 
 func main() {
+	os.Exit(run())
+}
+
+func run() int {
+	startDir, _ := os.Getwd()
+	resolver, cfgWarnings, cfgErr := cli.LoadConfigResolver(startDir)
+	if cfgErr != nil {
+		fmt.Fprintln(os.Stderr, cfgErr)
+		return 2
+	}
+
 	var c cli.CLI
-	parsed := kong.Parse(&c)
+
+	helpFn := func(opts kong.HelpOptions, ctx *kong.Context) error {
+		p := cli.NewPrinter(&cli.CLI{
+			NoColor: hasArg("--no-color"),
+		})
+		return cli.MakeHelpPrinter(p)(opts, ctx)
+	}
+
+	parsed := kong.Parse(&c,
+		kong.Name("defrost-ci"),
+		kong.Description("Slim CI-focused defrost binary (no serve)."),
+		kong.UsageOnError(),
+		kong.Vars{"version": cli.VersionString()},
+		kong.Help(helpFn),
+		kong.Resolvers(resolver),
+		kong.Groups{
+			"core":       "CORE COMMANDS",
+			"inspection": "INSPECTION COMMANDS",
+			"management": "MANAGEMENT COMMANDS",
+		},
+	)
+
+	if msg, code := cli.ValidateGlobalFlags(&c); msg != "" {
+		fmt.Fprintln(os.Stderr, msg)
+		return code
+	}
+
+	out := cli.NewPrinter(&c)
+	for _, w := range cfgWarnings {
+		out.Warn(w)
+	}
+
+	root := c.Root()
 	cmd := parsed.Command()
 
 	switch {
 	case strings.HasPrefix(cmd, "exec"):
-		os.Exit(cli.HandleExec(c.Exec))
+		return cli.HandleExec(c.Exec, root, out)
 	case strings.HasPrefix(cmd, "history"):
-		os.Exit(cli.HandleHistory(c.History))
+		return cli.HandleHistory(c.History, root, out)
 	case strings.HasPrefix(cmd, "suppress add"):
-		os.Exit(cli.HandleSuppressAdd(c.Suppress.Add))
+		return cli.HandleSuppressAdd(c.Suppress.Add, root, out)
 	case strings.HasPrefix(cmd, "suppress remove"):
-		os.Exit(cli.HandleSuppressRemove(c.Suppress.Remove))
+		return cli.HandleSuppressRemove(c.Suppress.Remove, root, out)
 	case strings.HasPrefix(cmd, "suppress list"):
-		os.Exit(cli.HandleSuppressList(c.Suppress.List))
+		return cli.HandleSuppressList(c.Suppress.List, root, out)
 	case strings.HasPrefix(cmd, "drop history"):
-		os.Exit(cli.HandleDropHistory(c.Drop.History))
+		return cli.HandleDropHistory(c.Drop.History, root, out)
 	case strings.HasPrefix(cmd, "reset"):
-		os.Exit(cli.HandleReset(c.Reset))
+		return cli.HandleReset(c.Reset, root, out)
 	case strings.HasPrefix(cmd, "serve"):
-		fmt.Fprintln(os.Stderr,
-			"serve requires the full defrost binary. Reinstall with:")
-		fmt.Fprintln(os.Stderr,
-			"  go install github.com/bjk95/defrost/cmd/defrost@latest")
-		os.Exit(1)
+		out.Fail("serve requires the full defrost binary. Reinstall with:")
+		out.Fail("  go install github.com/bjk95/defrost/cmd/defrost@latest")
+		return 1
 	default:
-		fmt.Fprintln(os.Stderr, "unknown command:", cmd)
-		os.Exit(2)
+		out.Failf("unknown command: %s", cmd)
+		return 2
 	}
+}
+
+func hasArg(name string) bool {
+	for _, a := range os.Args[1:] {
+		if a == name {
+			return true
+		}
+	}
+	return false
 }

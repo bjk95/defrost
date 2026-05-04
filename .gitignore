@@ -28,3 +28,7 @@ docs/superpowers/
 # Python bytecode (e.g. examples/inspect/__pycache__)
 __pycache__/
 *.pyc
+
+# defrost: data branch worktree (test/eval history). Safe to remove
+# this entry if you uninstall defrost.
+/.defrost/

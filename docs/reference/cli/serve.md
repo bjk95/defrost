@@ -7,22 +7,24 @@ Serve a local web dashboard for browsing recorded test history.
 ## Synopsis
 
 ```text
-defrost serve [flags]
+defrost [global-flags] serve [flags]
 ```
 
 ```sh
 defrost serve                # http://127.0.0.1:6969
 defrost serve --port 8080
+defrost --repo-dir=/path/to/repo serve
 ```
+
+**Inherits global flags** `--repo-dir`, `--data-branch`, `--dev`,
+plus `--no-color`, `-v/--verbose`, `-q/--quiet`, `-V/--version`.
+See [Configuration](../configuration/).
 
 ## Flags
 
 | Flag | Type | Default | Description |
 |---|---|---|---|
 | `--port` | int | `6969` | Port to bind on `127.0.0.1`. |
-| `--repo-dir` | string | `.` | Path to the git repo. |
-| `--data-branch` | string | `_defrost` | Branch name to read from. |
-| `--dev`, `-d` | bool | `false` | Dev mode: read only from the local `<repo>/.defrost/` tree (no `git fetch`). |
 
 The server binds only to `127.0.0.1` — never to `0.0.0.0`. There is no
 flag to expose it on a public interface.

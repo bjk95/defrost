@@ -172,6 +172,24 @@ explanation and exits 0 without prompting.
 
 Serves the dashboard at `127.0.0.1:6969` (override with `--port`).
 
+## Configuration
+
+Defaults can be set in a per-repo `.defrost.toml` at the repo root:
+
+```toml
+data-branch = "_defrost"
+dev         = false
+
+[serve]
+port = 6969
+```
+
+Environment variables (`DEFROST_REPO_DIR`, `DEFROST_DATA_BRANCH`,
+`DEFROST_DEV`, `DEFROST_SERVE_PORT`) override the file. Command-line
+flags override env vars.
+
+Run `defrost --help` for the full list of global flags and subcommands.
+
 ## Storage
 
 Every run is committed to a `_defrost` branch (configurable with

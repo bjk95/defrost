@@ -104,12 +104,18 @@ directly from your code.
 
 ## Common flags
 
-All adapters share these `defrost exec` flags:
+`--no-persist` is `defrost exec`-specific: run, but don't write to the
+data branch. Useful for iterating locally.
 
-- `--no-persist` — run, but don't write to the data branch. Useful for
-  iterating locally.
-- `--dev` / `-d` — write to a local scratch dir instead of committing.
-- `--repo-dir <path>` — point at a different repo.
+The flags `--repo-dir`, `--data-branch`, and `--dev` are **global** and
+must appear before the subcommand:
 
-See the [`defrost exec` reference](../../reference/cli/exec/) for the
-full flag list and exit-code rules.
+```sh
+defrost --repo-dir=/path/to/repo exec go test ./...    # correct
+defrost exec --repo-dir=/path/to/repo go test ./...    # wrong
+```
+
+See [Configuration](../../reference/configuration/) for the full list of
+global flags, environment variables, and the `.defrost.toml` config file.
+See the [`defrost exec` reference](../../reference/cli/exec/) for
+exec-specific flags and exit-code rules.

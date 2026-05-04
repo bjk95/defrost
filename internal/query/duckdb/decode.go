@@ -20,7 +20,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"time"
 
 	"go.opentelemetry.io/collector/pdata/pcommon"
@@ -532,20 +531,12 @@ func statFile(path string) (pathStat, error) {
 // contains. Order matters only for predictable progress reporting.
 var signalDirs = []string{"traces", "metrics", "logs"}
 
-// listFiles is a small wrapper around persist.ListSignalFiles that
-// returns paths absolute under root.
+// listFiles is a small wrapper around persist.ListSignalFiles.
+// ListSignalFiles already returns paths joined under root (it
+// filepath.WalkDir's <root>/<signal> and the walker emits full paths),
+// so we return its result unchanged. Earlier we re-joined with root
+// here, which doubled the prefix and produced paths like
+// `.defrost/.defrost/traces/…` that no stat could find.
 func listFiles(root, signal string) ([]string, error) {
-	files, err := persist.ListSignalFiles(root, signal)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]string, len(files))
-	for i, p := range files {
-		if filepath.IsAbs(p) {
-			out[i] = p
-		} else {
-			out[i] = filepath.Join(root, p)
-		}
-	}
-	return out, nil
+	return persist.ListSignalFiles(root, signal)
 }

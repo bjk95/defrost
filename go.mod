@@ -3,9 +3,11 @@ module github.com/bjk95/defrost
 go 1.25.0
 
 require (
+	github.com/BurntSushi/toml v1.6.0
 	github.com/alecthomas/kong v1.15.0
 	github.com/klauspost/compress v1.18.5
 	github.com/marcboeker/go-duckdb/v2 v2.4.3
+	github.com/mattn/go-isatty v0.0.20
 	go.opentelemetry.io/collector/component/componenttest v0.151.0
 	go.opentelemetry.io/collector/config/configgrpc v0.151.0
 	go.opentelemetry.io/collector/config/configoptional v1.57.0
@@ -51,7 +53,6 @@ require (
 	github.com/marcboeker/go-duckdb/arrowmapping v0.0.21 // indirect
 	github.com/marcboeker/go-duckdb/mapping v0.0.21 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
-	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mitchellh/copystructure v1.2.0 // indirect
 	github.com/mitchellh/reflectwalk v1.0.2 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect

@@ -8,6 +8,10 @@ noise from abandoned experiments. Suppressions are preserved — drop
 only removes signal directories, leaving `suppressions.json`,
 `README.md`, and `.gitignore` intact in the orphan commit.
 
+**Inherits global flags** `--repo-dir`, `--data-branch`, `--dev`,
+plus `--no-color`, `-v/--verbose`, `-q/--quiet`, `-V/--version`.
+See [Configuration](../configuration/).
+
 ## `defrost drop history`
 
 Rewrite the data branch as a single orphan commit containing only the
@@ -15,7 +19,7 @@ preserved data, then force-push so old git objects can be garbage-collected
 by the remote.
 
 ```text
-defrost drop history [flags]
+defrost [global-flags] drop history [flags]
 ```
 
 | Flag | Type | Default | Description |
@@ -23,9 +27,6 @@ defrost drop history [flags]
 | `--traces-only` | bool | `false` | Drop only traces; keep metrics and logs. |
 | `--metrics-only` | bool | `false` | Drop only metrics; keep traces and logs. |
 | `--yes`, `-y` | bool | `false` | Skip the interactive confirmation prompt. |
-| `--repo-dir` | string | `.` | Path to the git repo. |
-| `--data-branch` | string | `_defrost` | Branch name to rewrite. |
-| `--dev`, `-d` | bool | `false` | Drop only the local `<repo-dir>/.defrost/` tree (no remote operations). |
 
 `--traces-only` and `--metrics-only` are mutually exclusive. With neither
 set, every signal is dropped.

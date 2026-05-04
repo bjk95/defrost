@@ -300,16 +300,6 @@ export const GroupHistoryStripVariants: Story = {
               {c.label} · default
             </span>
             <GroupHistoryStrip runs={runs} cells={c.cells} />
-            <span
-              style={{
-                fontFamily: "var(--font-mono)",
-                fontSize: 11,
-                color: "var(--fg-muted)",
-              }}
-            >
-              {c.label} · compact
-            </span>
-            <GroupHistoryStrip runs={runs} cells={c.cells} compact />
           </div>
         ))}
       </div>

@@ -2,7 +2,6 @@ package cli
 
 import (
 	"errors"
-	"fmt"
 	"os"
 	"sort"
 	"strings"
@@ -10,6 +9,7 @@ import (
 	"go.opentelemetry.io/collector/pdata/ptrace"
 	"go.opentelemetry.io/collector/pdata/ptrace/ptraceotlp"
 
+	"github.com/bjk95/defrost/internal/cliout"
 	"github.com/bjk95/defrost/internal/persist"
 )
 
@@ -21,21 +21,21 @@ import (
 // Reads raw bytes from the data branch on demand instead of going
 // through the DuckDB Querier so the slim `defrost-ci` binary (which
 // doesn't link DuckDB) can still serve `history`.
-func HandleHistory(c HistoryCmd) int {
+func HandleHistory(c HistoryCmd, root RootOpts, out *cliout.Printer) int {
 	pOpts := persist.Options{
-		RepoDir:    c.RepoDir,
-		DataBranch: c.DataBranch,
+		RepoDir:    root.RepoDir,
+		DataBranch: root.DataBranch,
 		AuthToken:  os.Getenv("GITHUB_TOKEN"),
-		Dev:        c.Dev,
+		Dev:        root.Dev,
 	}
 	be := persist.New(pOpts)
 	snap, err := be.CloneForRead()
 	if err != nil {
 		if errors.Is(err, persist.ErrNoOrigin) {
-			fmt.Fprintln(os.Stderr, "history: no 'origin' remote configured. Either add one (`git remote add origin ...`) or pass --dev to read from the local scratch dir.")
+			out.Fail("history: no 'origin' remote configured. Either add one (`git remote add origin ...`) or pass --dev to read from the local scratch dir.")
 			return 1
 		}
-		fmt.Fprintln(os.Stderr, "history:", err)
+		out.Failf("history: %v", err)
 		return 1
 	}
 	if snap.Dir == "" {
@@ -43,7 +43,7 @@ func HandleHistory(c HistoryCmd) int {
 	}
 	files, err := persist.ListSignalFiles(snap.Dir, "traces")
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "history:", err)
+		out.Failf("history: %v", err)
 		return 1
 	}
 	type entry struct {
@@ -54,12 +54,12 @@ func HandleHistory(c HistoryCmd) int {
 	for _, path := range files {
 		raw, err := persist.ReadSignalBytes(path)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "history: read", path, ":", err)
+			out.Warnf("history: read %s: %v", path, err)
 			continue
 		}
 		req := ptraceotlp.NewExportRequest()
 		if err := req.UnmarshalProto(raw); err != nil {
-			fmt.Fprintln(os.Stderr, "history: decode", path, ":", err)
+			out.Warnf("history: decode %s: %v", path, err)
 			continue
 		}
 		td := req.Traces()
@@ -76,7 +76,7 @@ func HandleHistory(c HistoryCmd) int {
 					}
 					line, err := encodeSingleSpan(r, ss.At(j), s)
 					if err != nil {
-						fmt.Fprintln(os.Stderr, "history: marshal:", err)
+						out.Warnf("history: marshal: %v", err)
 						continue
 					}
 					entries = append(entries, entry{startNs: uint64(s.StartTimestamp()), json: line})
@@ -86,7 +86,7 @@ func HandleHistory(c HistoryCmd) int {
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].startNs < entries[j].startNs })
 	for _, e := range entries {
-		fmt.Println(e.json)
+		out.Println(e.json)
 	}
 	return 0
 }

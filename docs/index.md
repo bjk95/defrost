@@ -2,6 +2,13 @@
 title: 'defrost'
 ---
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="../assets/logo-light-128.png">
+    <img alt="defrost" src="../assets/logo-128.png" width="96" height="96">
+  </picture>
+</p>
+
 Track AI evals, metrics, and tests with Git as the database.
 
 defrost wraps your existing test or eval command, captures results as

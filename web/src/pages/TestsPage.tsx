@@ -15,7 +15,10 @@ import {
   CountsBar,
   GroupHistoryStrip,
   HistoryStrip,
+  STRIP_CELL,
+  STRIP_GAP,
   StatusPill,
+  stripWidth,
 } from "@/components/Primitives";
 import { Icon } from "@/components/Icons";
 import { SearchInput, Segmented } from "@/components/Controls";
@@ -127,6 +130,22 @@ function TestsPageInner({
 
   const tree = useMemo(() => buildTestTree(filtered), [filtered]);
 
+  // Fixed pixel width for the run-status column. Computing it once at
+  // the page level (instead of letting each row's `auto` column size
+  // itself) is what keeps the colored squares right-aligned across
+  // every row. Grid columns sized "auto" are content-sized, and since
+  // each row is its own grid, content-sized columns end up at
+  // different x-positions per row.
+  const runStripWidth = stripWidth(visibleRuns.length);
+  const gridColumns = `minmax(0,1fr) 80px ${runStripWidth}px`;
+
+  // Zero right padding on every row so the run-status column's
+  // rightmost cell sits at the right edge of <main>'s content area
+  // (the visible "page right edge" the user sees, which is inside
+  // <main>'s 24px padding). The 8px row gutter we keep on
+  // left/top/bottom would otherwise leave a small gap there.
+  const ROW_PAD_RIGHT = 0;
+
   const totalStats = useMemo(() => {
     let pass = 0, fail = 0, skip = 0, total = 0;
     for (const t of filtered) {
@@ -203,7 +222,7 @@ function TestsPageInner({
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "minmax(0,1fr) 80px auto",
+          gridTemplateColumns: gridColumns,
           gap: 16,
           alignItems: "center",
           fontSize: 11,
@@ -212,6 +231,7 @@ function TestsPageInner({
           letterSpacing: 0.06,
           textTransform: "uppercase",
           paddingBottom: 8,
+          paddingRight: ROW_PAD_RIGHT,
           marginBottom: 4,
           borderBottom: "1px solid var(--border)",
         }}
@@ -243,6 +263,8 @@ function TestsPageInner({
           onToggle={toggle}
           onOpenTest={onOpenTest}
           suppressedSet={suppressedSet}
+          gridColumns={gridColumns}
+          padRight={ROW_PAD_RIGHT}
         />
       ))}
     </div>
@@ -259,6 +281,8 @@ function TreeNodeView({
   onToggle,
   onOpenTest,
   suppressedSet,
+  gridColumns,
+  padRight,
 }: {
   node: TreeNode;
   runs: RunSummary[];
@@ -266,6 +290,8 @@ function TreeNodeView({
   onToggle: (path: string) => void;
   onOpenTest: (testId: string) => void;
   suppressedSet: Set<string>;
+  gridColumns: string;
+  padRight: number;
 }) {
   if (node.kind === "leaf") {
     return (
@@ -276,6 +302,8 @@ function TreeNodeView({
         depth={node.depth}
         onClick={() => onOpenTest(node.test.test_id)}
         isSuppressed={suppressedSet.has(node.test.test_id)}
+        gridColumns={gridColumns}
+        padRight={padRight}
       />
     );
   }
@@ -289,6 +317,8 @@ function TreeNodeView({
         runs={runs}
         collapsed={isCollapsed}
         onToggle={() => onToggle(node.path)}
+        gridColumns={gridColumns}
+        padRight={padRight}
       />
       {!isCollapsed &&
         node.children.map((c) => (
@@ -300,6 +330,8 @@ function TreeNodeView({
             onToggle={onToggle}
             onOpenTest={onOpenTest}
             suppressedSet={suppressedSet}
+            gridColumns={gridColumns}
+            padRight={padRight}
           />
         ))}
     </div>
@@ -327,12 +359,16 @@ function BranchHeader({
   runs,
   collapsed,
   onToggle,
+  gridColumns,
+  padRight,
 }: {
   node: TreeBranch;
   stats: { pass: number; fail: number; skip: number; total: number };
   runs: RunSummary[];
   collapsed: boolean;
   onToggle: () => void;
+  gridColumns: string;
+  padRight: number;
 }) {
   const indent = ROW_BASE_INDENT + node.depth * ROW_INDENT_STEP;
   const isTop = node.depth === 0;
@@ -341,10 +377,10 @@ function BranchHeader({
       onClick={onToggle}
       style={{
         display: "grid",
-        gridTemplateColumns: "minmax(0,1fr) 80px auto",
+        gridTemplateColumns: gridColumns,
         gap: 16,
         alignItems: "center",
-        padding: `${isTop ? 10 : 6}px 8px ${isTop ? 10 : 6}px ${indent}px`,
+        padding: `${isTop ? 10 : 6}px ${padRight}px ${isTop ? 10 : 6}px ${indent}px`,
         background: isTop ? "var(--bg-subtle)" : "transparent",
         borderTop: isTop ? "1px solid var(--border)" : "none",
         borderBottom: isTop ? "1px solid var(--border)" : "1px dashed var(--border)",
@@ -399,7 +435,6 @@ function BranchHeader({
         <GroupHistoryStrip
           runs={runs}
           cells={collectCells(node)}
-          compact={!isTop}
         />
       </div>
     </div>
@@ -417,6 +452,8 @@ function TestRowView({
   depth,
   onClick,
   isSuppressed,
+  gridColumns,
+  padRight,
 }: {
   test: TestRow;
   leafName: string;
@@ -424,6 +461,8 @@ function TestRowView({
   depth: number;
   onClick: () => void;
   isSuppressed: boolean;
+  gridColumns: string;
+  padRight: number;
 }) {
   const [hover, setHover] = useState(false);
   const stats = testStats(test.cells);
@@ -435,10 +474,10 @@ function TestRowView({
       onMouseLeave={() => setHover(false)}
       style={{
         display: "grid",
-        gridTemplateColumns: "minmax(0,1fr) 80px auto",
+        gridTemplateColumns: gridColumns,
         gap: 16,
         alignItems: "center",
-        padding: `7px 8px 7px ${indent}px`,
+        padding: `7px ${padRight}px 7px ${indent}px`,
         cursor: "pointer",
         background: hover ? "var(--bg-subtle)" : "transparent",
         borderBottom: "1px solid var(--border)",
@@ -489,8 +528,8 @@ function TestRowView({
         <HistoryStrip
           row={test}
           runs={runs}
-          cellSize={11}
-          gap={3}
+          cellSize={STRIP_CELL}
+          gap={STRIP_GAP}
           onCellClick={() => onClick()}
         />
       </div>

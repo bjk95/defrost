@@ -110,20 +110,20 @@ jobs:
 
       - name: Assert result count matches expected
         run: |
-          # Parse the "defrost: results: P pass, F fail, S skip" summary
-          # line. Total = P + F + S. Expected 10 across the pytest example.
-          line=$(grep -E '^defrost: results:' out.txt | tail -1)
+          # Parse the "→ P passed   ✗ F failed   ⊘ S skipped" summary
+          # line. Total = P + F + S + Suppressed. Expected 10 across the pytest example.
+          line=$(grep -E '^→ [0-9]+ passed' out.txt | tail -1)
           if [ -z "$line" ]; then
-            echo "FAIL: no 'defrost: results:' line found"
+            echo "FAIL: no result-summary line ('→ N passed   ✗ N failed   ⊘ N skipped') found"
             cat out.txt
             exit 1
           fi
           echo "summary: $line"
-          counts=$(echo "$line" | sed -E 's/^defrost: results: ([0-9]+) pass, ([0-9]+) fail, ([0-9]+) skip$/\1 \2 \3/')
+          counts=$(echo "$line" | sed -E 's/^→ ([0-9]+) passed[[:space:]]+✗ ([0-9]+) failed[[:space:]]+⊘ ([0-9]+) skipped[[:space:]]+✱ ([0-9]+) suppressed.*/\1 \2 \3 \4/')
           set -- $counts
-          total=$(( $1 + $2 + $3 ))
+          total=$(( $1 + $2 + $3 + $4 ))
           if [ "$total" -ne 10 ]; then
-            echo "FAIL: expected 10 results total, got $total ($1 pass, $2 fail, $3 skip)"
+            echo "FAIL: expected 10 results total, got $total ($1 pass, $2 fail, $3 skip, $4 suppressed)"
             cat out.txt
             exit 1
           fi
@@ -191,18 +191,18 @@ jobs:
 
       - name: Assert result count matches expected
         run: |
-          line=$(grep -E '^defrost: results:' examples/javascript/out.txt | tail -1)
+          line=$(grep -E '^→ [0-9]+ passed' examples/javascript/out.txt | tail -1)
           if [ -z "$line" ]; then
-            echo "FAIL: no 'defrost: results:' line found"
+            echo "FAIL: no result-summary line ('→ N passed   ✗ N failed   ⊘ N skipped') found"
             cat examples/javascript/out.txt
             exit 1
           fi
           echo "summary: $line"
-          counts=$(echo "$line" | sed -E 's/^defrost: results: ([0-9]+) pass, ([0-9]+) fail, ([0-9]+) skip$/\1 \2 \3/')
+          counts=$(echo "$line" | sed -E 's/^→ ([0-9]+) passed[[:space:]]+✗ ([0-9]+) failed[[:space:]]+⊘ ([0-9]+) skipped[[:space:]]+✱ ([0-9]+) suppressed.*/\1 \2 \3 \4/')
           set -- $counts
-          total=$(( $1 + $2 + $3 ))
+          total=$(( $1 + $2 + $3 + $4 ))
           if [ "$total" -ne 12 ]; then
-            echo "FAIL: expected 12 results total, got $total ($1 pass, $2 fail, $3 skip)"
+            echo "FAIL: expected 12 results total, got $total ($1 pass, $2 fail, $3 skip, $4 suppressed)"
             cat examples/javascript/out.txt
             exit 1
           fi
@@ -261,18 +261,18 @@ jobs:
 
       - name: Assert result count matches expected
         run: |
-          line=$(grep -E '^defrost: results:' examples/typescript/out.txt | tail -1)
+          line=$(grep -E '^→ [0-9]+ passed' examples/typescript/out.txt | tail -1)
           if [ -z "$line" ]; then
-            echo "FAIL: no 'defrost: results:' line found"
+            echo "FAIL: no result-summary line ('→ N passed   ✗ N failed   ⊘ N skipped') found"
             cat examples/typescript/out.txt
             exit 1
           fi
           echo "summary: $line"
-          counts=$(echo "$line" | sed -E 's/^defrost: results: ([0-9]+) pass, ([0-9]+) fail, ([0-9]+) skip$/\1 \2 \3/')
+          counts=$(echo "$line" | sed -E 's/^→ ([0-9]+) passed[[:space:]]+✗ ([0-9]+) failed[[:space:]]+⊘ ([0-9]+) skipped[[:space:]]+✱ ([0-9]+) suppressed.*/\1 \2 \3 \4/')
           set -- $counts
-          total=$(( $1 + $2 + $3 ))
+          total=$(( $1 + $2 + $3 + $4 ))
           if [ "$total" -ne 12 ]; then
-            echo "FAIL: expected 12 results total, got $total ($1 pass, $2 fail, $3 skip)"
+            echo "FAIL: expected 12 results total, got $total ($1 pass, $2 fail, $3 skip, $4 suppressed)"
             cat examples/typescript/out.txt
             exit 1
           fi
@@ -348,18 +348,18 @@ jobs:
 
       - name: Assert result count matches expected
         run: |
-          line=$(grep -E '^defrost: results:' examples/promptfoo/out.txt | tail -1)
+          line=$(grep -E '^→ [0-9]+ passed' examples/promptfoo/out.txt | tail -1)
           if [ -z "$line" ]; then
-            echo "FAIL: no 'defrost: results:' line found"
+            echo "FAIL: no result-summary line ('→ N passed   ✗ N failed   ⊘ N skipped') found"
             cat examples/promptfoo/out.txt
             exit 1
           fi
           echo "summary: $line"
-          counts=$(echo "$line" | sed -E 's/^defrost: results: ([0-9]+) pass, ([0-9]+) fail, ([0-9]+) skip$/\1 \2 \3/')
+          counts=$(echo "$line" | sed -E 's/^→ ([0-9]+) passed[[:space:]]+✗ ([0-9]+) failed[[:space:]]+⊘ ([0-9]+) skipped[[:space:]]+✱ ([0-9]+) suppressed.*/\1 \2 \3 \4/')
           set -- $counts
-          total=$(( $1 + $2 + $3 ))
+          total=$(( $1 + $2 + $3 + $4 ))
           if [ "$total" -ne 30 ]; then
-            echo "FAIL: expected 30 results total, got $total ($1 pass, $2 fail, $3 skip)"
+            echo "FAIL: expected 30 results total, got $total ($1 pass, $2 fail, $3 skip, $4 suppressed)"
             cat examples/promptfoo/out.txt
             exit 1
           fi
@@ -430,20 +430,24 @@ jobs:
         run: |
           # Inspect AI exits 0 even when samples fail scoring, so the
           # regression-detection signal is the pass/fail breakdown rather
-          # than the exit code. Expected: 2 pass, 2 fail, 0 skip = 4 total.
+          # than the exit code. The two intentionally-failing samples
+          # (germany-fail, empty-fail) are added to the suppression list
+          # by the previous step, so defrost reclassifies them from
+          # "failed" into "suppressed" in the summary line.
+          # Expected: 2 pass, 0 fail, 0 skip, 2 suppressed = 4 total.
           # Strip leading whitespace defensively in case Rich progress output
           # leaks through despite --display plain.
-          line=$(grep -E 'defrost: results:' examples/inspect/out.txt | tail -1 | sed 's/^[[:space:]]*//')
+          line=$(grep -E '→ [0-9]+ passed' examples/inspect/out.txt | tail -1 | sed 's/^[[:space:]]*//')
           if [ -z "$line" ]; then
-            echo "FAIL: no 'defrost: results:' line found"
+            echo "FAIL: no result-summary line ('→ N passed   ✗ N failed   ⊘ N skipped   ✱ N suppressed') found"
             cat examples/inspect/out.txt
             exit 1
           fi
           echo "summary: $line"
-          counts=$(echo "$line" | sed -E 's/^defrost: results: ([0-9]+) pass, ([0-9]+) fail, ([0-9]+) skip$/\1 \2 \3/')
+          counts=$(echo "$line" | sed -E 's/^→ ([0-9]+) passed[[:space:]]+✗ ([0-9]+) failed[[:space:]]+⊘ ([0-9]+) skipped[[:space:]]+✱ ([0-9]+) suppressed.*/\1 \2 \3 \4/')
           set -- $counts
-          if [ "$1" -ne 2 ] || [ "$2" -ne 2 ] || [ "$3" -ne 0 ]; then
-            echo "FAIL: expected 2 pass / 2 fail / 0 skip, got $1/$2/$3"
+          if [ "$1" -ne 2 ] || [ "$2" -ne 0 ] || [ "$3" -ne 0 ] || [ "$4" -ne 2 ]; then
+            echo "FAIL: expected 2 pass / 0 fail / 0 skip / 2 suppressed, got $1/$2/$3/$4"
             cat examples/inspect/out.txt
             exit 1
           fi
@@ -502,18 +506,18 @@ jobs:
 
       - name: Assert result count matches expected
         run: |
-          line=$(grep -E '^defrost: results:' examples/vitest-js/out.txt | tail -1)
+          line=$(grep -E '^→ [0-9]+ passed' examples/vitest-js/out.txt | tail -1)
           if [ -z "$line" ]; then
-            echo "FAIL: no 'defrost: results:' line found"
+            echo "FAIL: no result-summary line ('→ N passed   ✗ N failed   ⊘ N skipped') found"
             cat examples/vitest-js/out.txt
             exit 1
           fi
           echo "summary: $line"
-          counts=$(echo "$line" | sed -E 's/^defrost: results: ([0-9]+) pass, ([0-9]+) fail, ([0-9]+) skip$/\1 \2 \3/')
+          counts=$(echo "$line" | sed -E 's/^→ ([0-9]+) passed[[:space:]]+✗ ([0-9]+) failed[[:space:]]+⊘ ([0-9]+) skipped[[:space:]]+✱ ([0-9]+) suppressed.*/\1 \2 \3 \4/')
           set -- $counts
-          total=$(( $1 + $2 + $3 ))
+          total=$(( $1 + $2 + $3 + $4 ))
           if [ "$total" -ne 12 ]; then
-            echo "FAIL: expected 12 results total, got $total ($1 pass, $2 fail, $3 skip)"
+            echo "FAIL: expected 12 results total, got $total ($1 pass, $2 fail, $3 skip, $4 suppressed)"
             cat examples/vitest-js/out.txt
             exit 1
           fi
@@ -572,18 +576,18 @@ jobs:
 
       - name: Assert result count matches expected
         run: |
-          line=$(grep -E '^defrost: results:' examples/vitest-ts/out.txt | tail -1)
+          line=$(grep -E '^→ [0-9]+ passed' examples/vitest-ts/out.txt | tail -1)
           if [ -z "$line" ]; then
-            echo "FAIL: no 'defrost: results:' line found"
+            echo "FAIL: no result-summary line ('→ N passed   ✗ N failed   ⊘ N skipped') found"
             cat examples/vitest-ts/out.txt
             exit 1
           fi
           echo "summary: $line"
-          counts=$(echo "$line" | sed -E 's/^defrost: results: ([0-9]+) pass, ([0-9]+) fail, ([0-9]+) skip$/\1 \2 \3/')
+          counts=$(echo "$line" | sed -E 's/^→ ([0-9]+) passed[[:space:]]+✗ ([0-9]+) failed[[:space:]]+⊘ ([0-9]+) skipped[[:space:]]+✱ ([0-9]+) suppressed.*/\1 \2 \3 \4/')
           set -- $counts
-          total=$(( $1 + $2 + $3 ))
+          total=$(( $1 + $2 + $3 + $4 ))
           if [ "$total" -ne 12 ]; then
-            echo "FAIL: expected 12 results total, got $total ($1 pass, $2 fail, $3 skip)"
+            echo "FAIL: expected 12 results total, got $total ($1 pass, $2 fail, $3 skip, $4 suppressed)"
             cat examples/vitest-ts/out.txt
             exit 1
           fi
@@ -642,16 +646,16 @@ jobs:
 
       - name: Assert >= 20 results (defrost actually parsed)
         run: |
-          line=$(grep -E '^defrost: results:' web/out.txt | tail -1)
+          line=$(grep -E '^→ [0-9]+ passed' web/out.txt | tail -1)
           if [ -z "$line" ]; then
-            echo "FAIL: no 'defrost: results:' line found"
+            echo "FAIL: no result-summary line ('→ N passed   ✗ N failed   ⊘ N skipped') found"
             cat web/out.txt
             exit 1
           fi
           echo "summary: $line"
-          counts=$(echo "$line" | sed -E 's/^defrost: results: ([0-9]+) pass, ([0-9]+) fail, ([0-9]+) skip$/\1 \2 \3/')
+          counts=$(echo "$line" | sed -E 's/^→ ([0-9]+) passed[[:space:]]+✗ ([0-9]+) failed[[:space:]]+⊘ ([0-9]+) skipped[[:space:]]+✱ ([0-9]+) suppressed.*/\1 \2 \3 \4/')
           set -- $counts
-          total=$(( $1 + $2 + $3 ))
+          total=$(( $1 + $2 + $3 + $4 ))
           if [ "$total" -lt 20 ]; then
             echo "FAIL: expected >= 20 results total, got $total"
             cat web/out.txt

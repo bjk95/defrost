@@ -87,6 +87,11 @@ export function RunCell({
       disabled={isNull}
       data-testid={status ? `run-cell-${status}` : "run-cell-empty"}
       style={{
+        // box-sizing: border-box so the dashed border on empty cells
+        // doesn't enlarge the outer width by 2px relative to filled
+        // cells — without it the strip's gap looks ragged because
+        // every solid→dashed transition shifts position by a pixel.
+        boxSizing: "border-box",
         width: size,
         height: size,
         padding: 0,
@@ -282,23 +287,23 @@ export function HistoryStrip({
   cellSize?: number;
   gap?: number;
 }) {
-  const ordered = [...runs].reverse();
+  // Render only runs where this test has data. Empty placeholder
+  // cells were removed to keep the strip right-aligned with no
+  // visual gaps — the strip's rightmost cell is always present, and
+  // shorter rows extend leftward from the right edge.
   const byRun = new Map(row.cells.map((c) => [c.run_id, c] as const));
+  const ordered = [...runs].reverse().filter((r) => byRun.has(r.run_id));
   return (
     <div style={{ display: "flex", gap, alignItems: "center" }}>
       {ordered.map((run) => {
-        const cell = byRun.get(run.run_id);
+        const cell = byRun.get(run.run_id)!;
         return (
           <RunCell
             key={run.run_id}
-            status={cell?.status}
-            onClick={cell && onCellClick ? () => onCellClick(run, cell) : undefined}
+            status={cell.status}
+            onClick={onCellClick ? () => onCellClick(run, cell) : undefined}
             selected={selectedRunId === run.run_id}
-            title={
-              cell
-                ? `${cell.status} · ${fmt.duration(cell.duration_ms)} · ${run.commit?.slice(0, 7) ?? ""} · ${fmt.relTime(run.ts)}`
-                : `not in run ${run.commit?.slice(0, 7) ?? ""}`
-            }
+            title={`${cell.status} · ${fmt.duration(cell.duration_ms)} · ${run.commit?.slice(0, 7) ?? ""} · ${fmt.relTime(run.ts)}`}
             size={cellSize}
           />
         );
@@ -307,15 +312,38 @@ export function HistoryStrip({
   );
 }
 
-// Group strip — one square per run, color = worst status across the group's tests.
+// STRIP_CELL and STRIP_GAP are the shared dimensions for every history
+// square across the tests view — leaves, inner branches, and top
+// branches all render at the same size so the run-status column
+// right-aligns consistently across rows. Use stripWidth() to compute
+// the total column width for a given run count so grid layouts stay
+// in lock-step.
+//
+// Both leaf RunCell and group cells set box-sizing: border-box so the
+// 1px dashed border on empty cells doesn't enlarge the outer width
+// relative to filled cells. Without that, the gap looked ragged
+// because every solid→dashed transition shifted position by a pixel.
+export const STRIP_CELL = 11;
+export const STRIP_GAP = 2;
+
+// stripWidth returns the px width of a history strip rendering runCount
+// squares. Use this as the fixed grid-column width on the run-status
+// column so every row's right edge aligns regardless of how many cells
+// are filled vs. dashed.
+export function stripWidth(runCount: number): number {
+  if (runCount <= 0) return 0;
+  return runCount * (STRIP_CELL + STRIP_GAP) - STRIP_GAP;
+}
+
+// Group strip — one square per run, color = worst status across the
+// group's tests. Cell size and gap match HistoryStrip so the
+// right-edge alignment holds across leaves and branches.
 export function GroupHistoryStrip({
   runs,
   cells,
-  compact,
 }: {
   runs: RunSummary[];
   cells: Cell[];
-  compact?: boolean;
 }) {
   const byRun = new Map<string, string>();
   for (const c of cells) {
@@ -327,20 +355,22 @@ export function GroupHistoryStrip({
     else next = "skip";
     byRun.set(c.run_id, next!);
   }
-  const ordered = [...runs].reverse();
+  // Render only runs where this branch has data — same right-align
+  // policy as HistoryStrip; no placeholder cells.
+  const ordered = [...runs].reverse().filter((r) => byRun.has(r.run_id));
   return (
-    <div style={{ display: "flex", gap: 3 }}>
+    <div style={{ display: "flex", gap: STRIP_GAP }}>
       {ordered.map((r) => {
-        const status = byRun.get(r.run_id);
+        const status = byRun.get(r.run_id)!;
         return (
           <div
             key={r.run_id}
             style={{
-              width: compact ? 9 : 11,
-              height: compact ? 9 : 11,
+              boxSizing: "border-box",
+              width: STRIP_CELL,
+              height: STRIP_CELL,
               borderRadius: 2,
-              background: status ? statusColor(status) : "transparent",
-              border: status ? "none" : "1px dashed var(--border)",
+              background: statusColor(status),
               opacity: status === "skip" ? 0.6 : 1,
             }}
           />
