@@ -15,7 +15,10 @@ import {
   CountsBar,
   GroupHistoryStrip,
   HistoryStrip,
+  STRIP_CELL,
+  STRIP_GAP,
   StatusPill,
+  stripWidth,
 } from "@/components/Primitives";
 import { Icon } from "@/components/Icons";
 import { SearchInput, Segmented } from "@/components/Controls";
@@ -127,6 +130,15 @@ function TestsPageInner({
 
   const tree = useMemo(() => buildTestTree(filtered), [filtered]);
 
+  // Fixed pixel width for the run-status column. Computing it once at
+  // the page level (instead of letting each row's `auto` column size
+  // itself) is what keeps the colored squares right-aligned across
+  // every row. Grid columns sized "auto" are content-sized, and since
+  // each row is its own grid, content-sized columns end up at
+  // different x-positions per row.
+  const runStripWidth = stripWidth(visibleRuns.length);
+  const gridColumns = `minmax(0,1fr) 80px ${runStripWidth}px`;
+
   const totalStats = useMemo(() => {
     let pass = 0, fail = 0, skip = 0, total = 0;
     for (const t of filtered) {
@@ -203,7 +215,7 @@ function TestsPageInner({
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "minmax(0,1fr) 80px auto",
+          gridTemplateColumns: gridColumns,
           gap: 16,
           alignItems: "center",
           fontSize: 11,
@@ -243,6 +255,7 @@ function TestsPageInner({
           onToggle={toggle}
           onOpenTest={onOpenTest}
           suppressedSet={suppressedSet}
+          gridColumns={gridColumns}
         />
       ))}
     </div>
@@ -259,6 +272,7 @@ function TreeNodeView({
   onToggle,
   onOpenTest,
   suppressedSet,
+  gridColumns,
 }: {
   node: TreeNode;
   runs: RunSummary[];
@@ -266,6 +280,7 @@ function TreeNodeView({
   onToggle: (path: string) => void;
   onOpenTest: (testId: string) => void;
   suppressedSet: Set<string>;
+  gridColumns: string;
 }) {
   if (node.kind === "leaf") {
     return (
@@ -276,6 +291,7 @@ function TreeNodeView({
         depth={node.depth}
         onClick={() => onOpenTest(node.test.test_id)}
         isSuppressed={suppressedSet.has(node.test.test_id)}
+        gridColumns={gridColumns}
       />
     );
   }
@@ -289,6 +305,7 @@ function TreeNodeView({
         runs={runs}
         collapsed={isCollapsed}
         onToggle={() => onToggle(node.path)}
+        gridColumns={gridColumns}
       />
       {!isCollapsed &&
         node.children.map((c) => (
@@ -300,6 +317,7 @@ function TreeNodeView({
             onToggle={onToggle}
             onOpenTest={onOpenTest}
             suppressedSet={suppressedSet}
+            gridColumns={gridColumns}
           />
         ))}
     </div>
@@ -327,12 +345,14 @@ function BranchHeader({
   runs,
   collapsed,
   onToggle,
+  gridColumns,
 }: {
   node: TreeBranch;
   stats: { pass: number; fail: number; skip: number; total: number };
   runs: RunSummary[];
   collapsed: boolean;
   onToggle: () => void;
+  gridColumns: string;
 }) {
   const indent = ROW_BASE_INDENT + node.depth * ROW_INDENT_STEP;
   const isTop = node.depth === 0;
@@ -341,7 +361,7 @@ function BranchHeader({
       onClick={onToggle}
       style={{
         display: "grid",
-        gridTemplateColumns: "minmax(0,1fr) 80px auto",
+        gridTemplateColumns: gridColumns,
         gap: 16,
         alignItems: "center",
         padding: `${isTop ? 10 : 6}px 8px ${isTop ? 10 : 6}px ${indent}px`,
@@ -399,7 +419,6 @@ function BranchHeader({
         <GroupHistoryStrip
           runs={runs}
           cells={collectCells(node)}
-          compact={!isTop}
         />
       </div>
     </div>
@@ -417,6 +436,7 @@ function TestRowView({
   depth,
   onClick,
   isSuppressed,
+  gridColumns,
 }: {
   test: TestRow;
   leafName: string;
@@ -424,6 +444,7 @@ function TestRowView({
   depth: number;
   onClick: () => void;
   isSuppressed: boolean;
+  gridColumns: string;
 }) {
   const [hover, setHover] = useState(false);
   const stats = testStats(test.cells);
@@ -435,7 +456,7 @@ function TestRowView({
       onMouseLeave={() => setHover(false)}
       style={{
         display: "grid",
-        gridTemplateColumns: "minmax(0,1fr) 80px auto",
+        gridTemplateColumns: gridColumns,
         gap: 16,
         alignItems: "center",
         padding: `7px 8px 7px ${indent}px`,
@@ -489,8 +510,8 @@ function TestRowView({
         <HistoryStrip
           row={test}
           runs={runs}
-          cellSize={11}
-          gap={3}
+          cellSize={STRIP_CELL}
+          gap={STRIP_GAP}
           onCellClick={() => onClick()}
         />
       </div>

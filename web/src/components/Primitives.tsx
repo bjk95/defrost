@@ -307,15 +307,33 @@ export function HistoryStrip({
   );
 }
 
-// Group strip — one square per run, color = worst status across the group's tests.
+// STRIP_CELL and STRIP_GAP are the shared dimensions for every history
+// square across the tests view — leaves, inner branches, and top
+// branches all render at the same size so the run-status column
+// right-aligns consistently across rows. Use stripWidth() to compute
+// the total column width for a given run count so grid layouts stay
+// in lock-step.
+export const STRIP_CELL = 11;
+export const STRIP_GAP = 3;
+
+// stripWidth returns the px width of a history strip rendering runCount
+// squares. Use this as the fixed grid-column width on the run-status
+// column so every row's right edge aligns regardless of how many cells
+// are filled vs. dashed.
+export function stripWidth(runCount: number): number {
+  if (runCount <= 0) return 0;
+  return runCount * (STRIP_CELL + STRIP_GAP) - STRIP_GAP;
+}
+
+// Group strip — one square per run, color = worst status across the
+// group's tests. Cell size and gap match HistoryStrip so the
+// right-edge alignment holds across leaves and branches.
 export function GroupHistoryStrip({
   runs,
   cells,
-  compact,
 }: {
   runs: RunSummary[];
   cells: Cell[];
-  compact?: boolean;
 }) {
   const byRun = new Map<string, string>();
   for (const c of cells) {
@@ -329,15 +347,15 @@ export function GroupHistoryStrip({
   }
   const ordered = [...runs].reverse();
   return (
-    <div style={{ display: "flex", gap: 3 }}>
+    <div style={{ display: "flex", gap: STRIP_GAP }}>
       {ordered.map((r) => {
         const status = byRun.get(r.run_id);
         return (
           <div
             key={r.run_id}
             style={{
-              width: compact ? 9 : 11,
-              height: compact ? 9 : 11,
+              width: STRIP_CELL,
+              height: STRIP_CELL,
               borderRadius: 2,
               background: status ? statusColor(status) : "transparent",
               border: status ? "none" : "1px dashed var(--border)",
