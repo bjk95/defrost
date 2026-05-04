@@ -515,9 +515,9 @@ func SharedZstdDecoder() (*zstd.Decoder, error) {
 }
 
 // writeSeed writes the README and data-branch .gitignore at branch
-// creation time. The .gitignore keeps per-machine artefacts
-// (cache.duckdb, pending/) out of commits while letting them share
-// the worktree at <repo>/.defrost/.
+// creation time. The .gitignore keeps the per-machine DuckDB cache
+// out of commits while letting it share the worktree at
+// <repo>/.defrost/.
 func writeSeed(workDir string) error {
 	if err := os.WriteFile(filepath.Join(workDir, "README.md"), []byte(readme), 0o644); err != nil {
 		return err

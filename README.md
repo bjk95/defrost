@@ -180,14 +180,13 @@ your `.gitignore` on first run):
 ```
 <your-repo>/.defrost/                      ← clone of _defrost
 ├── .git/                                  worktree's git directory
-├── .gitignore                             committed; ignores cache.duckdb*, pending/
+├── .gitignore                             committed; ignores cache.duckdb
 ├── README.md                              committed
 ├── traces/<YYYY>/<MM>/<DD>/*.otlp.pb.zst  committed
 ├── metrics/<YYYY>/<MM>/<DD>/*.otlp.pb.zst committed
 ├── logs/<YYYY>/<MM>/<DD>/*.otlp.pb.zst    committed
 ├── suppressions.json                      committed
-├── cache.duckdb                           local-only, gitignored
-└── pending/                               local-only, gitignored
+└── cache.duckdb                           local-only, gitignored
 ```
 
 The persistent worktree means `defrost serve` does a single `git fetch`

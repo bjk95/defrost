@@ -42,25 +42,24 @@ type Snapshot struct {
 // Layout under <repoDir>/.defrost/ (i.e. the data branch's worktree):
 //
 //	.git/              worktree's git directory (clone of _defrost)
-//	.gitignore         committed; ignores cache.duckdb, pending/
+//	.gitignore         committed; ignores cache.duckdb
 //	README.md          committed
 //	traces/<YYYY>/<MM>/<DD>/<trace-id>.otlp.pb.zst   committed
 //	metrics/<YYYY>/<MM>/<DD>/<trace-id>.otlp.pb.zst  committed
 //	logs/<YYYY>/<MM>/<DD>/<trace-id>.otlp.pb.zst     committed
 //	suppressions.json  committed
 //	cache.duckdb       local-only, gitignored on the data branch
-//	pending/           local-only, holds runs that failed to push
 const LocalDir = ".defrost"
 
 // dataBranchGitignore is the .gitignore committed at the data branch
-// root. It excludes the local-only artefacts that share the worktree
-// with the committed data files.
-const dataBranchGitignore = `# .gitignore on the _defrost branch — keeps per-machine artefacts
-# out of commits while letting them share the worktree at <repo>/.defrost/.
+// root. It excludes the local-only DuckDB cache files that share the
+// worktree with the committed data files.
+const dataBranchGitignore = `# .gitignore on the _defrost branch — keeps the per-machine DuckDB
+# read cache out of commits while letting it share the worktree at
+# <repo>/.defrost/.
 /cache.duckdb
 /cache.duckdb.wal
 /cache.duckdb.tmp
-/pending/
 `
 
 // userRepoIgnoreLine is the line we add to the user's main-repo
@@ -103,12 +102,6 @@ func LocalSuppressionsPath(opts Options) string {
 // .gitignore.
 func LocalCacheDBPath(opts Options) string {
 	return filepath.Join(LocalRoot(opts), "cache.duckdb")
-}
-
-// LocalPendingDir holds OTLP files for runs that failed to push.
-// Local-only; on the next successful push attempt these get drained.
-func LocalPendingDir(opts Options) string {
-	return filepath.Join(LocalRoot(opts), "pending")
 }
 
 // EnsureUserRepoIgnoresDefrost appends "/.defrost/" to <repoDir>/.gitignore

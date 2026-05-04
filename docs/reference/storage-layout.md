@@ -12,14 +12,13 @@ branch IS the storage, and `<repo>/.defrost/` is its on-disk view.
 ```text
 <your-repo>/.defrost/
 ├── .git/                worktree's git directory (clone of _defrost)
-├── .gitignore           committed; ignores cache.duckdb*, pending/
+├── .gitignore           committed; ignores cache.duckdb
 ├── README.md            committed
 ├── traces/<YYYY>/<MM>/<DD>/<trace-id>.otlp.pb.zst    committed
 ├── metrics/<YYYY>/<MM>/<DD>/<trace-id>.otlp.pb.zst   committed
 ├── logs/<YYYY>/<MM>/<DD>/<trace-id>.otlp.pb.zst      committed
 ├── suppressions.json    committed
-├── cache.duckdb         local-only, gitignored on the data branch
-└── pending/             local-only, holds runs that failed to push
+└── cache.duckdb         local-only, gitignored on the data branch
 ```
 
 Same model as `.git/` itself: a defrost-managed directory inside the
@@ -27,10 +26,9 @@ user's repo. The user's main-repo `.gitignore` adds `/.defrost/` to
 keep the worktree out of code commits — defrost auto-adds that line on
 first run if it isn't already there.
 
-The `.gitignore` committed at the data branch root keeps per-machine
-artefacts (`cache.duckdb`, `cache.duckdb.wal`, `cache.duckdb.tmp`,
-`pending/`) out of pushes while letting them share the worktree
-directory.
+The `.gitignore` committed at the data branch root keeps the local
+DuckDB cache (`cache.duckdb`, `cache.duckdb.wal`, `cache.duckdb.tmp`)
+out of pushes while letting it share the worktree directory.
 
 ## Run files
 
@@ -80,8 +78,8 @@ The first `defrost exec` against a fresh repo creates the data branch
 as an orphan branch (no parent). The seed commit contains:
 
 - `README.md` — short pointer back to defrost.
-- `.gitignore` — excludes `cache.duckdb*` and `pending/` so per-
-  machine artefacts share the worktree without being committed.
+- `.gitignore` — excludes `cache.duckdb*` so the per-machine DuckDB
+  cache shares the worktree without being committed.
 
 ## `suppressions.json`
 

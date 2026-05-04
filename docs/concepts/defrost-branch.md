@@ -11,8 +11,8 @@ inspect it by hand.
 1. **Created on first use.** The first `defrost exec` against a repo
    creates the branch as an **orphan** branch (no shared history with
    `main`). The seed commit contains a `README.md` pointing back to
-   defrost and a `.gitignore` that keeps per-machine artefacts
-   (`cache.duckdb`, `pending/`) out of subsequent commits.
+   defrost and a `.gitignore` that keeps the per-machine DuckDB cache
+   (`cache.duckdb`) out of subsequent commits.
 2. **Append-only by default.** Every recorded run appends one commit
    carrying one trace file (and, if the run emitted any, one metrics
    file and one logs file). Suppression changes append one commit
