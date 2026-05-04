@@ -35,6 +35,15 @@ if [ ${#SIGNALS[@]} -eq 0 ]; then
   exit 2
 fi
 
+# Dump the relevant defrost output up front so failures are
+# actionable from the run summary alone (we don't always have access
+# to the full job log).
+dump_defrost_output() {
+  echo "  --- defrost output (last 30 lines of $OUT) ---" >&2
+  tail -30 "$OUT" >&2 || true
+  echo "  --- end output ---" >&2
+}
+
 # Pull the trace_id from defrost's 'persisted:' summary. There may be
 # multiple persisted lines on a single CI run (if the test invokes
 # defrost more than once); take the last one.
@@ -44,9 +53,10 @@ trace_id=$(grep -E '^defrost: persisted:' "$OUT" \
 
 if [ -z "$trace_id" ]; then
   echo "readback FAIL: no 'defrost: persisted: trace_id=<hex>' line in $OUT" >&2
-  echo "  (this means persist failed or the binary is too old to emit trace_id)" >&2
-  echo "  --- last 30 lines of $OUT ---" >&2
-  tail -30 "$OUT" >&2 || true
+  echo "  Most likely: persist failed (warn-not-fail path) — look for ⚠️" >&2
+  echo "  in the output below. Less likely: defrost binary is too old to" >&2
+  echo "  emit trace_id (rebuild from current branch)." >&2
+  dump_defrost_output
   exit 1
 fi
 echo "readback: trace_id=$trace_id, branch=$BRANCH"
@@ -83,4 +93,16 @@ for signal in "${SIGNALS[@]}"; do
   echo "readback OK:   $matches  ($size bytes)"
 done
 
+if [ "$rc" -ne 0 ]; then
+  # Diagnostic dump: what's actually on the branch right now?
+  echo "  --- origin/${BRANCH} contents (top-level) ---" >&2
+  git ls-tree --name-only "origin/${BRANCH}" >&2 || true
+  echo "  --- recent commits on origin/${BRANCH} ---" >&2
+  git log --oneline -5 "origin/${BRANCH}" >&2 || true
+  echo "  --- files matching the trace_id anywhere in origin/${BRANCH} ---" >&2
+  echo "$all_paths" | grep "${trace_id}" >&2 || echo "  (no matches anywhere — file wasn't pushed)" >&2
+  dump_defrost_output
+fi
+
 exit "$rc"
+
