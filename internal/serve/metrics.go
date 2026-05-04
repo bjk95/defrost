@@ -48,14 +48,6 @@ func buildMetricsResponse(points []query.MetricPoint, runs []query.Run) []metric
 	traceToRun := make(map[string]string, len(runs))
 	tsRuns := make([]runIdx, 0, len(runs))
 	for _, r := range runs {
-		// Index by the run's root-span trace id so an exemplar
-		// trace_id on a metric data point can be resolved to its
-		// owning run in O(1). Without this, every point falls back
-		// to the time-window heuristic, which mis-attributes points
-		// when runs overlap (matrix CI, parallel pushes, …).
-		if r.TraceID != "" {
-			traceToRun[r.TraceID] = r.RunID
-		}
 		tsRuns = append(tsRuns, runIdx{runID: r.RunID, ts: r.Timestamp})
 	}
 	sort.Slice(tsRuns, func(i, j int) bool { return tsRuns[i].ts.Before(tsRuns[j].ts) })

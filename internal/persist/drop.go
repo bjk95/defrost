@@ -175,19 +175,7 @@ func (b *fileBackend) DropHistory(sel DropSelector, confirm func(DropPlan) bool)
 		return nil
 	}
 
-	if err := dropSignalFiles(b.dir, sel); err != nil {
-		return err
-	}
-	// Tell the next CloneForRead that derived state (DuckDB rows,
-	// hydration_state) for the dropped files is now stale. Without
-	// this, `defrost serve` would keep rendering runs whose underlying
-	// .otlp.pb.zst files we just deleted — Hydrate's incremental walk
-	// only INSERTs new files; row removal happens via the Reset=true
-	// path. See fileBackend.CloneForRead.
-	if err := os.WriteFile(filepath.Join(b.dir, dropFileBackendSentinel), []byte("1"), 0o644); err != nil {
-		return fmt.Errorf("write drop sentinel: %w", err)
-	}
-	return nil
+	return dropSignalFiles(b.dir, sel)
 }
 
 func buildDropPlan(dir string, sel DropSelector) DropPlan {

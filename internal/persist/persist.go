@@ -501,16 +501,7 @@ func (b *fileBackend) InsertNewRun(run Run) error {
 
 // CloneForRead in dev mode returns the scratch dir directly. SHA is
 // "" because there's no commit identity; Reset is always false because
-// the dev backend never gets force-reset (drop history just deletes
-// CloneForRead in dev mode returns the scratch dir directly. SHA is
-// "" because there's no commit identity. Reset is true on the first
-// call after a `defrost drop history --dev`: dropSignalFiles deletes
-// signal files in place, so the Querier's hydration_state and rows
-// for those files would otherwise survive the drop and the dashboard
-// would keep showing them. dropFileBackendSentinel is a one-shot
-// marker — DropHistory writes it, the next CloneForRead reads-and-
-// deletes it, and the Querier triggers wipeDerivedState off the
-// resulting Reset=true.
+// the dev backend never gets force-reset.
 func (b *fileBackend) CloneForRead() (Snapshot, error) {
 	if _, err := os.Stat(b.dir); err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -518,20 +509,8 @@ func (b *fileBackend) CloneForRead() (Snapshot, error) {
 		}
 		return Snapshot{}, err
 	}
-	reset := false
-	sentinel := filepath.Join(b.dir, dropFileBackendSentinel)
-	if _, err := os.Stat(sentinel); err == nil {
-		reset = true
-		_ = os.Remove(sentinel)
-	}
-	return Snapshot{Dir: b.dir, Reset: reset}, nil
+	return Snapshot{Dir: b.dir}, nil
 }
-
-// dropFileBackendSentinel is the marker file fileBackend.DropHistory
-// touches to tell the next CloneForRead "you need to wipe derived
-// state." Lives at the worktree root; the data branch's .gitignore
-// also lists it so a stray cross-mode switch doesn't commit it.
-const dropFileBackendSentinel = ".defrost-dropped"
 
 // hasAny reports whether the run has at least one signal to write.
 func (r Run) hasAny() bool {

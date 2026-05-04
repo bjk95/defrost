@@ -135,20 +135,7 @@ jobs:
         # at the source (the file simply wouldn't exist at the
         # expected path), and it's signal-agnostic: every example job
         # uses this same script with the signals it expects.
-        #
-        # Output is also tee'd to the run summary so failures are
-        # diagnostic without having to download the job log artifact.
-        run: |
-          {
-            echo '## Readback (pytest)'
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-          set -o pipefail
-          .github/scripts/readback.sh out.txt _defrost traces metrics logs 2>&1 \
-            | tee -a "$GITHUB_STEP_SUMMARY"
-          rc=${PIPESTATUS[0]}
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          exit "$rc"
+        run: .github/scripts/readback.sh out.txt _defrost traces metrics logs
 
       - name: Upload defrost output for debugging
         if: failure()

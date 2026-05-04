@@ -40,24 +40,10 @@ type dropRequest struct {
 	BeforeUTC   string `json:"before_utc,omitempty"`
 }
 
-// parseDropSelector reads the per-signal selector from URL query
-// params for /api/drop/plan. Each `drop_<signal>` is interpreted as
-// false when absent, true only when explicitly set to "true".
-//
-// Why default-false: the UI sends explicit checkbox state for the
-// signals the user chose, omitting the others. If we defaulted absent
-// to true, /api/drop/plan would advertise "this will drop logs" while
-// the UI's subsequent /api/drop POST (which decodes a JSON body and
-// gets Go's zero-valued false) would actually leave logs alone — a
-// plan-vs-execute mismatch right before a destructive operation.
-//
-// The CLI doesn't go through this code path; `defrost drop history`
-// builds its own selector from --traces-only / --metrics-only flags
-// before calling persist.Backend.DropHistory directly.
 func parseDropSelector(q url.Values) (persist.DropSelector, error) {
-	traces := q.Get("drop_traces") == "true"
-	metrics := q.Get("drop_metrics") == "true"
-	logs := q.Get("drop_logs") == "true"
+	traces := q.Get("drop_traces") != "false"
+	metrics := q.Get("drop_metrics") != "false"
+	logs := q.Get("drop_logs") != "false"
 	if !traces && !metrics && !logs {
 		return persist.DropSelector{}, errSelectorEmpty
 	}
