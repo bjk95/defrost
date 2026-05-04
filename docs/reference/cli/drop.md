@@ -4,9 +4,9 @@ title: '`defrost drop`'
 
 Destructively drop persisted traces, metrics, and/or logs. Used to
 garbage-collect the data branch when it grows too large or accumulates
-noise from abandoned experiments. Suppressions are unaffected — they
-live in your working tree at `<repo>/.defrost/suppressions.json`, not
-on the data branch.
+noise from abandoned experiments. Suppressions are preserved — drop
+only removes signal directories, leaving `suppressions.json`,
+`README.md`, and `.gitignore` intact in the orphan commit.
 
 ## `defrost drop history`
 
@@ -25,7 +25,7 @@ defrost drop history [flags]
 | `--yes`, `-y` | bool | `false` | Skip the interactive confirmation prompt. |
 | `--repo-dir` | string | `.` | Path to the git repo. |
 | `--data-branch` | string | `_defrost` | Branch name to rewrite. |
-| `--dev`, `-d` | bool | `false` | Drop only the local `<repo-dir>/.defrost/data/` tree (no remote operations). |
+| `--dev`, `-d` | bool | `false` | Drop only the local `<repo-dir>/.defrost/` tree (no remote operations). |
 
 `--traces-only` and `--metrics-only` are mutually exclusive. With neither
 set, every signal is dropped.
@@ -36,8 +36,8 @@ set, every signal is dropped.
    "drop" sets according to the flags.
 2. Prints a one-line summary of what will be removed and prompts for
    confirmation (type `drop` to proceed) unless `--yes` is set. The
-   prompt also reports the suppression count from your working tree
-   so you can confirm those are unaffected.
+   prompt also reports the count of preserved suppressions so you
+   can confirm they survive the rewrite.
 3. Creates an **orphan commit** containing only the keep set. This
    commit has no parent, so the previous history is no longer reachable.
 4. Force-pushes the new commit to the data branch on the remote with
@@ -46,10 +46,10 @@ set, every signal is dropped.
    and we abort cleanly rather than silently destroying their data.
 
 After a successful drop, the next `defrost serve` notices the new
-remote tip via `ls-remote`, force-resets the local persistent worktree
-at `<repo>/.defrost/data/`, drops every materialised row from
-`cache.duckdb`, and re-hydrates against the new history. No manual
-cache invalidation needed.
+remote tip via `ls-remote`, force-resets the persistent worktree at
+`<repo>/.defrost/`, drops every materialised row from `cache.duckdb`,
+and re-hydrates against the new history. No manual cache
+invalidation needed.
 
 ## Exit codes
 

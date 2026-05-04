@@ -22,7 +22,7 @@ defrost serve --port 8080
 | `--port` | int | `6969` | Port to bind on `127.0.0.1`. |
 | `--repo-dir` | string | `.` | Path to the git repo. |
 | `--data-branch` | string | `_defrost` | Branch name to read from. |
-| `--dev`, `-d` | bool | `false` | Dev mode: read only from the local `<repo>/.defrost/data/` tree (no `git fetch`). |
+| `--dev`, `-d` | bool | `false` | Dev mode: read only from the local `<repo>/.defrost/` tree (no `git fetch`). |
 
 The server binds only to `127.0.0.1` — never to `0.0.0.0`. There is no
 flag to expose it on a public interface.
@@ -35,7 +35,7 @@ This subcommand is only available on the full `defrost` binary.
 
 Reads happen against an embedded DuckDB instance at
 `<repo>/.defrost/cache.duckdb`, hydrated from canonical OTLP files in
-`<repo>/.defrost/data/` (a persistent worktree of the data branch).
+`<repo>/.defrost/` (a persistent worktree of the data branch).
 
 Steady-state cost of refreshing the dashboard is one `git ls-remote`
 per request:

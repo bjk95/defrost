@@ -35,7 +35,7 @@ func TestFileBackend_InsertNewRun_RoundTrip(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("InsertNewRun: %v", err)
 	}
-	files, err := ListSignalFiles(LocalDataDir(Options{RepoDir: dir, Dev: true}), "traces")
+	files, err := ListSignalFiles(LocalRoot(Options{RepoDir: dir, Dev: true}), "traces")
 	if err != nil {
 		t.Fatalf("ListSignalFiles: %v", err)
 	}
@@ -61,7 +61,7 @@ func TestFileBackend_InsertNewRun_SkipsEmpty(t *testing.T) {
 	if err := be.InsertNewRun(Run{}); err != nil {
 		t.Fatalf("InsertNewRun(empty): %v", err)
 	}
-	if _, err := os.Stat(LocalDataDir(Options{RepoDir: dir, Dev: true})); !os.IsNotExist(err) {
+	if _, err := os.Stat(LocalRoot(Options{RepoDir: dir, Dev: true})); !os.IsNotExist(err) {
 		t.Errorf("expected data dir absent for empty run, got err=%v", err)
 	}
 }

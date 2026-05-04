@@ -111,7 +111,7 @@ func (b *gitBackend) DropHistory(sel DropSelector, confirm func(DropPlan) bool) 
 		return fmt.Errorf("rev-parse HEAD: %w", err)
 	}
 
-	plan := buildDropPlan(workDir, sel, b.opts)
+	plan := buildDropPlan(workDir, sel)
 	plan.Branch = branch
 	plan.OriginURL = remoteURL
 
@@ -163,7 +163,7 @@ func (b *fileBackend) DropHistory(sel DropSelector, confirm func(DropPlan) bool)
 		return errors.New("drop: nothing selected (need DropTraces, DropMetrics, or DropLogs)")
 	}
 
-	plan := buildDropPlan(b.dir, sel, b.opts)
+	plan := buildDropPlan(b.dir, sel)
 	plan.Dev = true
 	if plan.Nothing() {
 		if confirm != nil {
@@ -178,7 +178,7 @@ func (b *fileBackend) DropHistory(sel DropSelector, confirm func(DropPlan) bool)
 	return dropSignalFiles(b.dir, sel)
 }
 
-func buildDropPlan(dir string, sel DropSelector, opts Options) DropPlan {
+func buildDropPlan(dir string, sel DropSelector) DropPlan {
 	plan := DropPlan{Sel: sel}
 	// The cutoff only narrows files for signals we're actually dropping.
 	// A "preserved" signal in a mixed-scope drop reports its TOTAL file
@@ -199,12 +199,12 @@ func buildDropPlan(dir string, sel DropSelector, opts Options) DropPlan {
 	plan.MetricFiles, plan.MetricBytes = inventorySignalDir(filepath.Join(dir, "metrics"), metricCutoff)
 	plan.LogFiles, plan.LogBytes = inventorySignalDir(filepath.Join(dir, "logs"), logCutoff)
 	plan.OldestRunUTC, plan.NewestRunUTC = dateRangeFromPartitions(dir)
-	// Suppressions live in the user's working tree at
-	// <repoDir>/.defrost/suppressions.json, NOT on the data branch.
-	// Drop never touches them — we report the count so the
-	// confirmation UI can say "drop will not affect your N
-	// suppressions."
-	if ids, err := readSuppressions(opts); err == nil {
+	// Suppressions sit at the data branch root next to traces/, metrics/,
+	// and logs/. dropSignalFiles only removes signal directories, so
+	// suppressions.json survives the orphan commit by default. We report
+	// the count so the confirmation prompt can say "preserved: N
+	// suppressions" without surprising the user.
+	if ids, err := readSuppressionsFromDir(dir); err == nil {
 		plan.SuppressionsN = len(ids)
 	}
 	return plan

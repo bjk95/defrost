@@ -117,18 +117,36 @@ func execWith(a runner.Adapter, c ExecCmd) int {
 		_, _, _ = drainSink(sink, nil)
 
 		if err := persistRun(pOpts, run, results, adapterMetrics, plog.NewLogs()); err != nil {
-			fmt.Fprintln(os.Stderr, "persist: failed:", err)
 			persistFailed = true
+			logPersistFailure(err)
 		}
 	}
-	if persistFailed && code == 0 {
-		code = 1
-	}
 
-	if code != 0 && !persistFailed {
-		code = maybeRewriteExitCode(code, results, pOpts)
-	}
+	// Persist failure does NOT affect the exit code — the run already
+	// happened, the test command's signal is what matters. The user's
+	// terminal got a clear warning above; suppression rewriting still
+	// applies. See docs/guides/troubleshooting/persist-failed.md.
+	code = maybeRewriteExitCode(code, results, pOpts)
 	return code
+}
+
+// persistFailuresDocURL is printed in the warning banner so users can
+// click straight through to the troubleshooting page. Update both
+// here and the page itself if the canonical URL changes.
+const persistFailuresDocURL = "https://bjk95.github.io/defrost/guides/troubleshooting/persist-failed/"
+
+// logPersistFailure prints a visible, terminal-clickable warning to
+// stderr when defrost couldn't push a run to origin. The exit code is
+// unchanged (the test command's result wins). The link points at the
+// docs page that walks through likely causes (auth, network, branch
+// protection) and how to recover the missing run.
+func logPersistFailure(err error) {
+	fmt.Fprintln(os.Stderr)
+	fmt.Fprintln(os.Stderr, "⚠️  defrost: persist failed — this run was NOT pushed to origin.")
+	fmt.Fprintln(os.Stderr, "   The test command's exit code is preserved.")
+	fmt.Fprintln(os.Stderr, "   Cause:", err)
+	fmt.Fprintln(os.Stderr, "   What to do:", persistFailuresDocURL)
+	fmt.Fprintln(os.Stderr)
 }
 
 // drainSink returns the sink's accumulated pdata. Callers MUST have

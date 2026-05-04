@@ -123,7 +123,7 @@ defrost drop history --metrics-only
 # Skip the prompt (CI / scripts).
 defrost drop history --yes
 
-# Wipe just the local <repo>/.defrost/data/ tree (no remote operations).
+# Wipe just the local <repo>/.defrost/ tree (no remote operations).
 defrost drop history --dev
 ```
 
@@ -135,22 +135,20 @@ About to drop history on branch _defrost (origin: git@github.com:you/repo.git):
   metrics: 142 files,  4.2 MB  (2024-09-12 → 2026-04-29)
 
 This rewrites the branch via orphan commit + force-push and is irreversible.
-Drop will not affect your 37 suppressions (they live in
-<repo>/.defrost/suppressions.json, not on the data branch).
+Preserved: 37 suppressions, README.md.
 
 Type "drop" to confirm:
 ```
 
-**What's preserved.** Suppressions (committed in your working tree at
-`<repo>/.defrost/suppressions.json`, untouched by drop), the data-branch
-`README.md`, and whichever signal you didn't drop (e.g. metrics, when you
-used `--traces-only`).
+**What's preserved.** `suppressions.json`, `README.md`, the data-
+branch `.gitignore`, and whichever signal you didn't drop (e.g.
+metrics, when you used `--traces-only`).
 
 **How space gets reclaimed.** Defrost replaces the data branch with a
 single new commit containing only the kept files. Old commits become
 unreachable and the remote (GitHub, GitLab, …) garbage-collects them over
 time. The next `defrost serve` notices the force-push (via a cheap
-`ls-remote` against the persistent worktree at `<repo>/.defrost/data/`),
+`ls-remote` against the persistent worktree at `<repo>/.defrost/`),
 wipes its local DuckDB cache, and re-hydrates against the new history.
 
 **Concurrency.** If someone else's `defrost exec` lands between the
@@ -174,30 +172,50 @@ repo to share it. Concurrent runs from different machines never conflict
 because each writer owns a unique filename (one file per run, named by its
 OTel `trace_id`).
 
-Defrost also keeps a local home in your working tree at `<repo>/.defrost/`:
+Defrost keeps a local worktree of the data branch at
+`<repo>/.defrost/` — same model as `.git/`, defrost-managed and
+excluded from your main repo's commits (the entry is auto-added to
+your `.gitignore` on first run):
 
 ```
-<your-repo>/.defrost/
-├── .gitignore           auto-generated; ignores data/ and cache.duckdb
-├── data/                persistent worktree of the data branch (gitignored)
-├── cache.duckdb         DuckDB read cache (gitignored)
-└── suppressions.json    committed: shared list of suppressed test IDs
+<your-repo>/.defrost/                      ← clone of _defrost
+├── .git/                                  worktree's git directory
+├── .gitignore                             committed; ignores cache.duckdb*, pending/
+├── README.md                              committed
+├── traces/<YYYY>/<MM>/<DD>/*.otlp.pb.zst  committed
+├── metrics/<YYYY>/<MM>/<DD>/*.otlp.pb.zst committed
+├── logs/<YYYY>/<MM>/<DD>/*.otlp.pb.zst    committed
+├── suppressions.json                      committed
+├── cache.duckdb                           local-only, gitignored
+└── pending/                               local-only, gitignored
 ```
 
 The persistent worktree means `defrost serve` does a single `git fetch`
 on subsequent loads instead of re-cloning, and a `git ls-remote` short-
-circuit skips even that when no new commits exist. Suppressions are in
-the working tree (committed) so `defrost suppress add` produces a
-reviewable diff in your normal PR workflow.
+circuit skips even that when no new commits exist.
 
 To experiment without pushing to origin, pass `--no-persist` (don't store
-anything) or `--dev` (write locally to `.defrost/data/` only — same path
-as prod mode, just no push).
+anything) or `--dev` (write locally to `.defrost/` only — same paths as
+prod mode, just no push).
+
+If a push fails, defrost prints a clear warning with a link to
+[troubleshooting](https://bjk95.github.io/defrost/guides/troubleshooting/persist-failed/)
+and **does not** fail the test run — the test command's exit code is
+preserved.
 
 When the branch grows large enough to matter, use
 [`defrost drop history`](#defrost-drop-history) to rewrite it and reclaim
-space. Suppressions are preserved (they live in your working tree, not
-on the data branch).
+space. Suppressions, README, and the data-branch `.gitignore` are
+preserved.
+
+### When to graduate from git
+
+The git-as-storage model is sized for projects with up to a couple of
+gigabytes of run history. Past that, push frequency, fetch cost, and
+dashboard load all start hitting the limits of the git protocol. For
+this stage, defrost is the right tool. Beyond that, plan to graduate
+to a hosted offering — but that's a problem you only encounter once
+defrost has been working for you for a while.
 
 ### Under the hood
 

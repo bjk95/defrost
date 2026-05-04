@@ -31,7 +31,7 @@ defrost exec -- pytest -k "evals" --maxfail=1
 | `--repo-dir` | string | `.` | Path to the git repo to persist into. |
 | `--data-branch` | string | `_defrost` | Branch name where results are stored. |
 | `--no-persist` | bool | `false` | Run tests without persisting results. The OTel receiver still runs (so child SDKs do not error) but nothing is committed. |
-| `--dev`, `-d` | bool | `false` | Dev mode: write results locally only — files still land at `<repo-dir>/.defrost/data/` (same path as prod mode), but no push to origin. For developing defrost itself. |
+| `--dev`, `-d` | bool | `false` | Dev mode: write results locally only — files still land at `<repo-dir>/.defrost/` (same path as prod mode), but no push to origin. For developing defrost itself. |
 
 ## What it does
 

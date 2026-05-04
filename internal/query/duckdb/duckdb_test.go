@@ -45,11 +45,7 @@ func TestHydrate_ShortCircuitWhenSHAUnchanged(t *testing.T) {
 	// Mutate the worktree dir mtime so any signal of "did we walk?"
 	// is detectable. Then call Hydrate again — the SHA short-circuit
 	// should fire and the worktree should NOT be touched.
-	dataDir, err := persist.CacheRoot(persist.Options{RepoDir: cwd})
-	if err != nil {
-		t.Fatalf("CacheRoot: %v", err)
-	}
-	worktree := filepath.Join(dataDir, "data")
+	worktree := persist.LocalRoot(persist.Options{RepoDir: cwd})
 	statBefore, err := os.Stat(worktree)
 	if err != nil {
 		t.Fatalf("stat worktree: %v", err)

@@ -2,56 +2,35 @@
 title: 'Storage layout'
 ---
 
-defrost stores state in two places: a remote **data branch** in your
-repo (default name `_defrost`) for the run history, and a local
-**`<repo>/.defrost/`** tree in your working copy for committed config
-plus the read-side cache.
+defrost stores everything on a dedicated git branch (default
+`_defrost`). Locally, that branch's worktree lives at
+`<repo>/.defrost/`. There's no separate database, no SaaS — the data
+branch IS the storage, and `<repo>/.defrost/` is its on-disk view.
 
-## `<repo>/.defrost/` (in your working tree)
-
-Created on first defrost invocation:
+## `<repo>/.defrost/` (the data branch worktree)
 
 ```text
 <your-repo>/.defrost/
-├── .gitignore           # auto-generated; ignores data/ and cache.duckdb
-├── data/                # persistent worktree of the data branch (gitignored)
-├── cache.duckdb         # DuckDB read cache (gitignored)
-└── suppressions.json    # committed: shared list of suppressed test IDs
+├── .git/                worktree's git directory (clone of _defrost)
+├── .gitignore           committed; ignores cache.duckdb*, pending/
+├── README.md            committed
+├── traces/<YYYY>/<MM>/<DD>/<trace-id>.otlp.pb.zst    committed
+├── metrics/<YYYY>/<MM>/<DD>/<trace-id>.otlp.pb.zst   committed
+├── logs/<YYYY>/<MM>/<DD>/<trace-id>.otlp.pb.zst      committed
+├── suppressions.json    committed
+├── cache.duckdb         local-only, gitignored on the data branch
+└── pending/             local-only, holds runs that failed to push
 ```
 
-- `.gitignore` — auto-written on first init, idempotent (only created
-  when missing, so user additions are preserved). Contents:
+Same model as `.git/` itself: a defrost-managed directory inside the
+user's repo. The user's main-repo `.gitignore` adds `/.defrost/` to
+keep the worktree out of code commits — defrost auto-adds that line on
+first run if it isn't already there.
 
-  ```gitignore
-  /data
-  /cache.duckdb
-  /cache.duckdb.wal
-  ```
-
-- `data/` — In normal mode it's a clone of the `_defrost` branch.
-  Subsequent `defrost serve` calls fetch incrementally rather than
-  re-cloning. In `--dev` mode it's a plain directory of OTLP files
-  (no `.git` inside; no remote operations). Same path in both modes.
-
-- `cache.duckdb` — DuckDB file populated incrementally from `data/`.
-  Holds materialised tables (`traces`, `metrics`, `logs`,
-  `hydration_state`, `cache_meta`) the dashboard queries against.
-  `cache_meta.last_sha` is the SHA we hydrated against; it's compared
-  against `git ls-remote` on the next read so unchanged remotes don't
-  trigger any work.
-
-- `suppressions.json` — committed, version-controlled with the rest of
-  your code. See [the suppression concept page](../../concepts/suppression/)
-  for why this lives here rather than on the data branch.
-
-## Data branch initialisation
-
-The first `defrost exec` against a fresh repo creates the data branch
-as an orphan branch (no parent). The seed commit contains a short
-`README.md` pointing back to defrost. There is no `.gitattributes` —
-the per-run write path produces unique filenames (one file per run,
-named by trace_id), so concurrent writers never contend on shared
-paths.
+The `.gitignore` committed at the data branch root keeps per-machine
+artefacts (`cache.duckdb`, `cache.duckdb.wal`, `cache.duckdb.tmp`,
+`pending/`) out of pushes while letting them share the worktree
+directory.
 
 ## Run files
 
@@ -72,9 +51,9 @@ logs/<YYYY>/<MM>/<DD>/<trace-id>.otlp.pb.zst
 - `<file>.otlp.pb.zst` is a [zstd](https://facebook.github.io/zstd/)-compressed
   canonical OTLP protobuf message, produced by upstream
   `pdata.{ptraceotlp,pmetricotlp,plogotlp}.MarshalProto` — the same
-  serializers an OTel Collector exporter would use. That means
-  downstream readers (the local DuckDB hydrator, future hosted
-  ClickHouse) decode without translation:
+  serializers an OTel Collector exporter would use. Downstream
+  readers (the local DuckDB hydrator, future hosted ClickHouse)
+  decode without translation:
   - `traces/...`: one `ExportTraceServiceRequest` containing the
     `defrost.run` root span and one child span per test result.
   - `metrics/...`: one `ExportMetricsServiceRequest` containing every
@@ -88,10 +67,26 @@ Files are written atomically: defrost writes to `<path>.tmp`, fsyncs,
 renames onto the final path, and fsyncs the parent directory. A crash
 mid-write leaves at most a stray `.tmp` file, never a partial result.
 
+Concurrent writers from parallel CI jobs never collide — each run
+produces a unique filename keyed by trace_id. If a push hits a
+non-fast-forward race, defrost fetches, rebases, and retries (up to 5
+attempts). After that the run is dropped with a visible warning;
+`defrost exec` does **not** fail the build over a persist failure.
+See [troubleshooting persist failures](../../guides/troubleshooting/persist-failed/).
+
+## Branch initialisation
+
+The first `defrost exec` against a fresh repo creates the data branch
+as an orphan branch (no parent). The seed commit contains:
+
+- `README.md` — short pointer back to defrost.
+- `.gitignore` — excludes `cache.duckdb*` and `pending/` so per-
+  machine artefacts share the worktree without being committed.
+
 ## `suppressions.json`
 
-Stored in the working tree at `<repo>/.defrost/suppressions.json`,
-**not** on the data branch:
+Sits at the data branch root, alongside `traces/`, `metrics/`, and
+`logs/`:
 
 ```json
 {
@@ -104,11 +99,11 @@ Stored in the working tree at `<repo>/.defrost/suppressions.json`,
 ```
 
 - `test_ids` is sorted alphabetically and de-duplicated on every write.
-- `schema` is the file format version. Future schema bumps will be
-  documented here.
-- The user is responsible for `git add` + `git commit` after running
-  `defrost suppress add | remove`. We deliberately don't auto-commit so
-  suppression changes are reviewable in PRs.
+- `schema` is the file format version.
+- `defrost suppress add | remove` writes via a temp clone, commits
+  with the `defrost[bot]` identity, pushes with conflict-resolution
+  (fetch + replay-mutation on non-FF). Same conflict model as run
+  writes.
 
 ## Run-span resource attributes
 
@@ -129,18 +124,25 @@ identifying the run:
 
 `defrost drop history` rewrites the data branch as a single orphan
 commit containing the keep set (whichever of `traces/` / `metrics/` /
-`logs/` was not dropped) and force-pushes with a `--force-with-lease`
-on the cloned tip so a concurrent writer's push isn't silently
-clobbered.
+`logs/` was not dropped, plus `suppressions.json`, `README.md`, and
+`.gitignore`) and force-pushes with `--force-with-lease` against the
+SHA we cloned. If a concurrent writer pushed between our clone and
+our push, the lease check fails and we abort cleanly rather than
+silently destroying their data.
 
 Old git objects on the remote become unreachable and are eventually
 garbage-collected — the data is gone, not just hidden.
 
-The local cache (`<repo>/.defrost/data/` and `cache.duckdb`) doesn't
-need to be invalidated by drop directly. The next `defrost serve` run
-detects the rewritten remote via `ls-remote` (the new SHA isn't a
-fast-forward from `cache_meta.last_sha`), force-resets the persistent
-worktree, drops every materialised row + `hydration_state` entry, and
-re-hydrates against the new history.
+After a successful drop, the next `defrost serve` notices the new
+remote tip via `ls-remote`, force-resets the persistent worktree at
+`<repo>/.defrost/`, drops every materialised row from `cache.duckdb`,
+and re-hydrates against the new history.
 
-`suppressions.json` is in your working tree, so drop never touches it.
+## Scale guidance
+
+The git-as-storage model is sized for projects with up to a few
+gigabytes of run history. Beyond that, push frequency, fetch cost,
+and dashboard load times all start to feel the limits of the git
+protocol. The mitigations are mostly mechanical (compaction,
+windowed fetch) — see the project roadmap. For now, treat ~1–2 GB
+of accumulated history as the comfort zone.

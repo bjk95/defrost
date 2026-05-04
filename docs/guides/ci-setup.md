@@ -80,12 +80,12 @@ strategy:
 …all push without colliding. If a push hits a non-fast-forward race,
 defrost fetches the new tip, rebases, and retries (up to 5 attempts).
 
-Suppressions live in your working tree at `<repo>/.defrost/suppressions.json`,
-not on the data branch. Concurrent `defrost suppress add` calls from
-parallel CI jobs would write to the same local file in different
-checkouts — which is a normal source-control merge conflict, resolved
-in your usual PR review. We'd recommend not running `defrost suppress`
-from CI at all; do it locally and commit the diff.
+Suppressions live on the data branch as `suppressions.json` at the
+branch root. Concurrent `defrost suppress add` calls push to the same
+file with the same fetch + replay-on-non-FF logic that handles
+concurrent run writes. Running `defrost suppress` from CI is fine,
+though most teams find it more natural to run it locally and let
+defrost push the change through.
 
 ## What about pull requests from forks?
 

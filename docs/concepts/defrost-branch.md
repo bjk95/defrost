@@ -10,28 +10,27 @@ inspect it by hand.
 
 1. **Created on first use.** The first `defrost exec` against a repo
    creates the branch as an **orphan** branch (no shared history with
-   `main`). The seed commit contains a small `README.md` pointing back
-   to defrost.
+   `main`). The seed commit contains a `README.md` pointing back to
+   defrost and a `.gitignore` that keeps per-machine artefacts
+   (`cache.duckdb`, `pending/`) out of subsequent commits.
 2. **Append-only by default.** Every recorded run appends one commit
    carrying one trace file (and, if the run emitted any, one metrics
-   file and one logs file). The data branch grows monotonically.
+   file and one logs file). Suppression changes append one commit
+   each. The data branch grows monotonically.
 3. **Force-rewritten only by `defrost drop history`.** That command
    creates a new orphan commit containing only the keep set and
    force-pushes it. Old objects become unreachable and are
    garbage-collected by the remote.
 
-Suppressions are **not** on the data branch — they live in your
-working tree at `<repo>/.defrost/suppressions.json` and travel with
-your normal source-controlled commits. That keeps suppression changes
-reviewable in PRs.
-
 ## What's in it
 
 ```text
+.gitignore
 README.md
 traces/<YYYY>/<MM>/<DD>/<trace-id>.otlp.pb.zst
 metrics/<YYYY>/<MM>/<DD>/<trace-id>.otlp.pb.zst
 logs/<YYYY>/<MM>/<DD>/<trace-id>.otlp.pb.zst
+suppressions.json
 ```
 
 See [storage layout](../../reference/storage-layout/) for the exact
@@ -40,20 +39,20 @@ file format and naming rules.
 ## Inspecting the branch by hand
 
 The data branch is just git, so anything that works on git works on
-it. The fastest path is the persistent worktree defrost already keeps
-at `<repo>/.defrost/data/`:
+it. The fastest path is the persistent worktree defrost keeps at
+`<repo>/.defrost/`:
 
 ```sh
-# defrost serve already keeps a checkout here — peek at it.
-cd .defrost/data
+# defrost serve keeps the worktree fresh — peek at it directly.
+cd .defrost
 git log --oneline | head
 ls traces/ metrics/ logs/
 
 # Or decode a single test's history via defrost itself:
 defrost history "tests/test_basics.py::test_pass" | head -1 | jq
 
-# Suppressions live in the working tree, not on the data branch.
-git blame .defrost/suppressions.json
+# See who suppressed what.
+git blame suppressions.json
 ```
 
 ## Why a separate branch instead of a separate repo

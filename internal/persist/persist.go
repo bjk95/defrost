@@ -137,7 +137,7 @@ type Backend interface {
 // <repoDir>/.defrost/.
 func New(opts Options) Backend {
 	if opts.Dev {
-		return &fileBackend{opts: opts, dir: LocalDataDir(opts)}
+		return &fileBackend{opts: opts, dir: LocalRoot(opts)}
 	}
 	return &gitBackend{opts: opts}
 }
@@ -298,7 +298,7 @@ func (b *gitBackend) InsertNewRun(run Run) error {
 			return err
 		}
 	}
-	if err := writeRunFiles(workDir, run); err != nil {
+	if err := writeRunFiles(filepath.Join(workDir, "data"), run); err != nil {
 		return err
 	}
 	msg := run.CommitMessage
@@ -335,12 +335,16 @@ func (b *gitBackend) CloneForRead() (Snapshot, error) {
 		return Snapshot{}, nil
 	}
 
-	if err := EnsureLocalDir(b.opts); err != nil {
-		return Snapshot{}, err
-	}
+	// Make sure the user's main repo .gitignore knows about
+	// .defrost/ before we materialise the worktree there. Best-effort —
+	// failures don't prevent reads.
+	_ = EnsureUserRepoIgnoresDefrost(b.opts)
 	workDir, err := b.dataCacheDir()
 	if err != nil {
 		return Snapshot{}, err
+	}
+	if err := os.MkdirAll(filepath.Dir(workDir), 0o755); err != nil {
+		return Snapshot{}, fmt.Errorf("mkdir cache parent: %w", err)
 	}
 
 	// Cold path: no working tree yet. Full shallow clone into the
@@ -428,9 +432,8 @@ func (b *fileBackend) InsertNewRun(run Run) error {
 	if !run.hasAny() {
 		return nil
 	}
-	if err := EnsureLocalDir(b.opts); err != nil {
-		return err
-	}
+	// Best-effort: keep .defrost/ out of the user's main repo commits.
+	_ = EnsureUserRepoIgnoresDefrost(b.opts)
 	if err := os.MkdirAll(b.dir, 0o755); err != nil {
 		return err
 	}
@@ -511,40 +514,48 @@ func SharedZstdDecoder() (*zstd.Decoder, error) {
 	return zstdDecoder, zstdDecoderErr
 }
 
-// writeSeed writes the README at branch creation time.
+// writeSeed writes the README and data-branch .gitignore at branch
+// creation time. The .gitignore keeps per-machine artefacts
+// (cache.duckdb, pending/) out of commits while letting them share
+// the worktree at <repo>/.defrost/.
 func writeSeed(workDir string) error {
-	return os.WriteFile(filepath.Join(workDir, "README.md"), []byte(readme), 0o644)
+	if err := os.WriteFile(filepath.Join(workDir, "README.md"), []byte(readme), 0o644); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(workDir, ".gitignore"), []byte(dataBranchGitignore), 0o644)
 }
 
-// writeRunFiles is the single entry point used by both backends. It
-// writes at most one zstd-compressed canonical OTLP/protobuf file
-// under each signal's directory, partitioned by run-start UTC date.
-func writeRunFiles(workDir string, run Run) error {
+// writeRunFiles is the single entry point used by both backends.
+// dataDir is the data/ subdirectory under the worktree root —
+// <worktree>/data — where signals are partitioned. Writes at most one
+// zstd-compressed canonical OTLP/protobuf file per signal,
+// partitioned by run-start UTC date.
+func writeRunFiles(dataDir string, run Run) error {
 	if len(run.TraceBytes) > 0 {
-		if err := writeSignalFile(workDir, "traces", run.TraceID, run.RunStartUTC, run.TraceBytes); err != nil {
+		if err := writeSignalFile(dataDir, "traces", run.TraceID, run.RunStartUTC, run.TraceBytes); err != nil {
 			return fmt.Errorf("write traces: %w", err)
 		}
 	}
 	if len(run.MetricsBytes) > 0 {
-		if err := writeSignalFile(workDir, "metrics", run.TraceID, run.RunStartUTC, run.MetricsBytes); err != nil {
+		if err := writeSignalFile(dataDir, "metrics", run.TraceID, run.RunStartUTC, run.MetricsBytes); err != nil {
 			return fmt.Errorf("write metrics: %w", err)
 		}
 	}
 	if len(run.LogsBytes) > 0 {
-		if err := writeSignalFile(workDir, "logs", run.TraceID, run.RunStartUTC, run.LogsBytes); err != nil {
+		if err := writeSignalFile(dataDir, "logs", run.TraceID, run.RunStartUTC, run.LogsBytes); err != nil {
 			return fmt.Errorf("write logs: %w", err)
 		}
 	}
 	return nil
 }
 
-func writeSignalFile(workDir, signal string, traceID [16]byte, runStart time.Time, raw []byte) error {
+func writeSignalFile(dataDir, signal string, traceID [16]byte, runStart time.Time, raw []byte) error {
 	enc, err := sharedZstdEncoder()
 	if err != nil {
 		return fmt.Errorf("zstd encoder: %w", err)
 	}
 	compressed := enc.EncodeAll(raw, nil)
-	return writeFileAtomic(SignalPath(workDir, signal, traceID, runStart), compressed)
+	return writeFileAtomic(SignalPath(dataDir, signal, traceID, runStart), compressed)
 }
 
 // SignalPath returns the date-partitioned absolute path for one run's
@@ -759,6 +770,17 @@ func configureBotIdentity(workDir string) error {
 	}
 	if _, err := runGit(workDir, "config", "user.email", botEmail); err != nil {
 		return fmt.Errorf("config user.email: %w", err)
+	}
+	// Disable signing in the temp workdir. The defrost[bot] identity
+	// isn't a signing key, and inheriting a global commit.gpgsign=true
+	// (or gpg.format=ssh / etc.) would cause every commit to fail —
+	// not just in test environments but in production setups where the
+	// user signs their own commits.
+	if _, err := runGit(workDir, "config", "commit.gpgsign", "false"); err != nil {
+		return fmt.Errorf("config commit.gpgsign: %w", err)
+	}
+	if _, err := runGit(workDir, "config", "tag.gpgsign", "false"); err != nil {
+		return fmt.Errorf("config tag.gpgsign: %w", err)
 	}
 	return nil
 }

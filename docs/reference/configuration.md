@@ -14,7 +14,7 @@ Every defrost command accepts the same set of repo-targeting flags:
 |---|---|---|
 | `--repo-dir` | `.` | Path to the git repo defrost reads from / writes to. The local `.defrost/` tree is rooted here. |
 | `--data-branch` | `_defrost` | Branch name where results live. Override only if you have a naming collision; the dashboard, history, suppress, and drop commands all share this default. |
-| `--dev`, `-d` | `false` | Local-only mode: write OTLP files to `<repo-dir>/.defrost/data/` (same path as prod mode) but skip the push to origin's data branch. Reads also come from the local tree. Intended for developing defrost itself, not for production use. |
+| `--dev`, `-d` | `false` | Local-only mode: write OTLP files to `<repo-dir>/.defrost/` (same path as prod mode) but skip the push to origin's data branch. Reads also come from the local tree. Intended for developing defrost itself, not for production use. |
 
 `--no-persist` is `defrost exec`-only and runs the OTel receiver without
 recording anything.

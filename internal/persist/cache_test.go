@@ -36,7 +36,7 @@ func TestGitBackend_CloneForRead_PersistentWorktree(t *testing.T) {
 	if snap1.Dir == "" {
 		t.Fatal("expected snap1.Dir to be set, got empty")
 	}
-	expectedDir := filepath.Join(cwd, ".defrost", "data")
+	expectedDir := filepath.Join(cwd, ".defrost")
 	if snap1.Dir != expectedDir {
 		t.Errorf("snap1.Dir = %q; expected exactly %q", snap1.Dir, expectedDir)
 	}

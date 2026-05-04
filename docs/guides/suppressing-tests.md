@@ -62,43 +62,27 @@ Two cases where the rewrite does **not** apply:
 
 ## Audit trail
 
-`suppressions.json` lives in your working tree at
-`<repo>/.defrost/suppressions.json` and is committed alongside your
-source code. That means every suppression change is a reviewable diff
-in your normal PR workflow — no separate audit trail to consult.
+`suppressions.json` lives at the root of the `_defrost` data branch.
+`git log` and `git blame` against that branch tell you who suppressed
+what and when:
 
 ```sh
-git log --follow .defrost/suppressions.json
-git blame .defrost/suppressions.json
+# Inspect via the persistent worktree defrost keeps in sync.
+git -C .defrost log --follow suppressions.json
+git -C .defrost blame suppressions.json
 ```
 
-Use this for periodic reviews — long-lived suppressions usually mean a
-test that should be either fixed or deleted.
-
-### Why a working-tree file (not the data branch)?
-
-Earlier versions stored `suppressions.json` on the `_defrost` data
-branch. Two problems with that:
-
-1. **Reviews skipped them.** `defrost suppress add` would commit-and-
-   push to the data branch silently, bypassing the team's PR review
-   process.
-2. **Reads were expensive.** Every `defrost exec` cloned the data
-   branch just to check whether each failing test was suppressed.
-
-Putting the file in the working tree fixes both: changes show up as
-diffs in PRs, and reads are a local file open.
+Use this for periodic reviews — long-lived suppressions usually mean
+a test that should be either fixed or deleted.
 
 ## Doing it from CI scripts
 
 The dashboard exposes the same operations as HTTP endpoints (used by
 the SPA). If you have programmatic suppression management — e.g. a
-bot that opens a PR adding suppressions when a flake threshold is
-crossed — you can either shell out to `defrost suppress add` or use
-the [Serve HTTP API](../../reference/serve-api/#suppressions) directly.
+bot that suppresses flaky tests when a threshold is crossed — you
+can either shell out to `defrost suppress add` or use the
+[Serve HTTP API](../../reference/serve-api/#suppressions) directly.
 
-When called from CI, both paths write to the runner's checked-out
-`<repo>/.defrost/suppressions.json` — that's a local file in the CI
-job's workspace, **not** an automatic push. To make the change
-durable, the bot needs to commit and push that diff back to the
-source branch (typically as a PR).
+Both paths push to `_defrost` immediately (no manual commit needed).
+A `defrost suppress add` from CI updates the shared list for every
+subsequent `defrost exec` invocation across the team.
