@@ -19,8 +19,12 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Build defrost
-        run: go build -o defrost .
+      - name: Build defrost-ci
+        # CI workflows use defrost-ci (the slim binary): no DuckDB cgo,
+        # no embedded web bundle. Same exec/history/suppress/drop
+        # subcommands as the full binary; only serve differs (it's a
+        # stub that prints the install hint).
+        run: go build -o defrost ./cmd/defrost-ci
 
       - name: Configure git auth for defrost persist
         run: |
@@ -29,7 +33,13 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Run defrost against go unit tests
-        run: ./defrost exec go test ./...
+        # ./internal/... rather than ./... so the dogfood step doesn't
+        # try to compile cmd/defrost (which pulls in DuckDB cgo and a
+        # ~80MB prebuilt static lib via go-duckdb v2). cmd/* packages
+        # have no tests of their own; the explicit `go build -o
+        # defrost-ci ./cmd/defrost-ci` step above already verifies the
+        # CI binary compiles.
+        run: ./defrost exec go test ./internal/...
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -48,11 +58,37 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install pytest
-        run: pip install pytest
+      - name: Install pytest and OTel logging deps
+        # opentelemetry-* packages are only consumed by the example's
+        # conftest.py when defrost has set OTEL_EXPORTER_OTLP_ENDPOINT
+        # in the env, so the example still runs cleanly under plain
+        # `pytest` (the OTel setup short-circuits when the env var
+        # is absent).
+        run: |
+          pip install pytest
+          pip install \
+            opentelemetry-api \
+            opentelemetry-sdk \
+            opentelemetry-exporter-otlp-proto-http
 
-      - name: Build defrost
-        run: go build -o defrost .
+      - name: Build defrost-ci
+        # CI workflows use defrost-ci (the slim binary): no DuckDB cgo,
+        # no embedded web bundle. Same exec/history/suppress/drop
+        # subcommands as the full binary; only serve differs (it's a
+        # stub that prints the install hint).
+        run: go build -o defrost ./cmd/defrost-ci
+
+      - name: Configure git auth for defrost persist
+        # actions/checkout@v4 wires auth into the checked-out repo,
+        # but defrost clones into its own temp dir to push the data
+        # branch — that fresh clone has no auth unless we set a global
+        # url.<base>.insteadOf rule. Without this, persist silently
+        # fails (the warn-not-fail path), and no run files land on
+        # origin/_defrost.
+        run: |
+          git config --global url."https://x-access-token:${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Run defrost against examples/python
         id: run
@@ -92,6 +128,15 @@ jobs:
             exit 1
           fi
 
+      - name: Readback — verify all three signals landed on origin/_defrost
+        # Replaces the older "grep stderr counts" check with a real
+        # readback against the data branch. This is what would have
+        # caught the recent gitBackend-writing-under-data/ regression
+        # at the source (the file simply wouldn't exist at the
+        # expected path), and it's signal-agnostic: every example job
+        # uses this same script with the signals it expects.
+        run: .github/scripts/readback.sh out.txt _defrost traces metrics logs
+
       - name: Upload defrost output for debugging
         if: failure()
         uses: actions/upload-artifact@v4
@@ -118,8 +163,12 @@ jobs:
         run: npm install
         working-directory: examples/javascript
 
-      - name: Build defrost
-        run: go build -o defrost .
+      - name: Build defrost-ci
+        # CI workflows use defrost-ci (the slim binary): no DuckDB cgo,
+        # no embedded web bundle. Same exec/history/suppress/drop
+        # subcommands as the full binary; only serve differs (it's a
+        # stub that prints the install hint).
+        run: go build -o defrost ./cmd/defrost-ci
 
       - name: Run defrost against examples/javascript
         id: run
@@ -184,8 +233,12 @@ jobs:
         run: npm install
         working-directory: examples/typescript
 
-      - name: Build defrost
-        run: go build -o defrost .
+      - name: Build defrost-ci
+        # CI workflows use defrost-ci (the slim binary): no DuckDB cgo,
+        # no embedded web bundle. Same exec/history/suppress/drop
+        # subcommands as the full binary; only serve differs (it's a
+        # stub that prints the install hint).
+        run: go build -o defrost ./cmd/defrost-ci
 
       - name: Run defrost against examples/typescript
         id: run
@@ -249,8 +302,12 @@ jobs:
       - name: Install promptfoo
         run: npm install -g promptfoo@latest
 
-      - name: Build defrost
-        run: go build -o defrost .
+      - name: Build defrost-ci
+        # CI workflows use defrost-ci (the slim binary): no DuckDB cgo,
+        # no embedded web bundle. Same exec/history/suppress/drop
+        # subcommands as the full binary; only serve differs (it's a
+        # stub that prints the install hint).
+        run: go build -o defrost ./cmd/defrost-ci
 
       - name: Configure git auth for defrost persist
         run: |
@@ -259,9 +316,15 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Suppress known-intentional failures (dogfood the suppression flow)
+        # Suppressions are now per-project at <project>/.defrost/suppressions.json
+        # rather than centralised on the data branch, so the suppress
+        # call must run from the same dir as the exec call below
+        # (examples/promptfoo) — otherwise it'd write to the parent
+        # repo's .defrost/ instead of the example's.
         run: |
           set -e
-          ./defrost suppress add \
+          cd examples/promptfoo
+          ../../defrost suppress add \
             'examples/promptfoo¬answer="I have no idea",question="capital-germany-wrong",prompt="f7a68f6f0557",provider="defrost-smoke-mock"' \
             'examples/promptfoo¬answer="London is the answer",question="contaminated-output",prompt="f7a68f6f0557",provider="defrost-smoke-mock"' \
             'examples/promptfoo¬answer="paris",question="case-sensitive",prompt="f7a68f6f0557",provider="defrost-smoke-mock"' \
@@ -326,8 +389,12 @@ jobs:
       - name: Install inspect-ai
         run: pip install -r examples/inspect/requirements.txt
 
-      - name: Build defrost
-        run: go build -o defrost .
+      - name: Build defrost-ci
+        # CI workflows use defrost-ci (the slim binary): no DuckDB cgo,
+        # no embedded web bundle. Same exec/history/suppress/drop
+        # subcommands as the full binary; only serve differs (it's a
+        # stub that prints the install hint).
+        run: go build -o defrost ./cmd/defrost-ci
 
       - name: Configure git auth for defrost persist
         run: |
@@ -336,9 +403,12 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Suppress known-intentional failures (dogfood the suppression flow)
+        # Suppressions are per-project at <project>/.defrost/suppressions.json,
+        # so suppress must run from the same dir as exec below.
         run: |
           set -e
-          ./defrost suppress add \
+          cd examples/inspect
+          ../../defrost suppress add \
             'examples/inspect¬task="capital_cities",sample="germany-fail"' \
             'examples/inspect¬task="capital_cities",sample="empty-fail"'
         env:
@@ -404,8 +474,12 @@ jobs:
         run: npm ci
         working-directory: examples/vitest-js
 
-      - name: Build defrost
-        run: go build -o defrost .
+      - name: Build defrost-ci
+        # CI workflows use defrost-ci (the slim binary): no DuckDB cgo,
+        # no embedded web bundle. Same exec/history/suppress/drop
+        # subcommands as the full binary; only serve differs (it's a
+        # stub that prints the install hint).
+        run: go build -o defrost ./cmd/defrost-ci
 
       - name: Run defrost against examples/vitest-js
         id: run
@@ -470,8 +544,12 @@ jobs:
         run: npm ci
         working-directory: examples/vitest-ts
 
-      - name: Build defrost
-        run: go build -o defrost .
+      - name: Build defrost-ci
+        # CI workflows use defrost-ci (the slim binary): no DuckDB cgo,
+        # no embedded web bundle. Same exec/history/suppress/drop
+        # subcommands as the full binary; only serve differs (it's a
+        # stub that prints the install hint).
+        run: go build -o defrost ./cmd/defrost-ci
 
       - name: Run defrost against examples/vitest-ts
         id: run
@@ -536,8 +614,12 @@ jobs:
         run: npm ci
         working-directory: web
 
-      - name: Build defrost
-        run: go build -o defrost .
+      - name: Build defrost-ci
+        # CI workflows use defrost-ci (the slim binary): no DuckDB cgo,
+        # no embedded web bundle. Same exec/history/suppress/drop
+        # subcommands as the full binary; only serve differs (it's a
+        # stub that prints the install hint).
+        run: go build -o defrost ./cmd/defrost-ci
 
       - name: Run defrost against web/ tests
         id: run

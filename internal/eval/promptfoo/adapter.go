@@ -7,7 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
+	"go.opentelemetry.io/collector/pdata/pmetric"
+	"go.opentelemetry.io/collector/pdata/ptrace"
 
 	"github.com/bjk95/defrost/internal/models"
 	"github.com/bjk95/defrost/internal/runner"
@@ -203,19 +204,19 @@ func buildArgs(cmd []string, jsonPath string) []string {
 // returning the child exit code and no test results / metrics. Used when
 // the promptfoo adapter recognises the invocation but can't safely
 // capture results (user-supplied non-JSON --output target).
-func passthroughRun(cmd []string) ([]models.TestResult, []*metricspb.Metric, int) {
+func passthroughRun(cmd []string) (ptrace.Traces, pmetric.Metrics, int) {
 	c := exec.Command(cmd[0], cmd[1:]...)
 	code, err := runner.RunChild(c)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "defrost:", err)
-		return nil, nil, 1
+		return ptrace.NewTraces(), pmetric.NewMetrics(), 1
 	}
-	return nil, nil, code
+	return ptrace.NewTraces(), pmetric.NewMetrics(), code
 }
 
-func (a *Adapter) Run(cmd []string) ([]models.TestResult, []*metricspb.Metric, int) {
+func (a *Adapter) Run(cmd []string, run models.RunContext) (ptrace.Traces, pmetric.Metrics, int) {
 	if len(cmd) == 0 {
-		return nil, nil, 2
+		return ptrace.NewTraces(), pmetric.NewMetrics(), 2
 	}
 
 	userOutputs := userOutputPaths(cmd[1:])
@@ -235,7 +236,7 @@ func (a *Adapter) Run(cmd []string) ([]models.TestResult, []*metricspb.Metric, i
 		f, err := os.CreateTemp("", "defrost-promptfoo-*.json")
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "defrost:", err)
-			return nil, nil, 1
+			return ptrace.NewTraces(), pmetric.NewMetrics(), 1
 		}
 		tempPath = f.Name()
 		f.Close()
@@ -245,7 +246,7 @@ func (a *Adapter) Run(cmd []string) ([]models.TestResult, []*metricspb.Metric, i
 		// child run can't be silently parsed as the current run's results.
 		if err := os.Remove(tempPath); err != nil && !os.IsNotExist(err) {
 			fmt.Fprintln(os.Stderr, "defrost: cannot clear", tempPath, ":", err)
-			return nil, nil, 1
+			return ptrace.NewTraces(), pmetric.NewMetrics(), 1
 		}
 	}
 
@@ -255,7 +256,7 @@ func (a *Adapter) Run(cmd []string) ([]models.TestResult, []*metricspb.Metric, i
 	exitCode, err := runner.RunChild(child)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "defrost:", err)
-		return nil, nil, 1
+		return ptrace.NewTraces(), pmetric.NewMetrics(), 1
 	}
 
 	f, err := os.Open(tempPath)
@@ -264,7 +265,7 @@ func (a *Adapter) Run(cmd []string) ([]models.TestResult, []*metricspb.Metric, i
 		if exitCode == 0 {
 			exitCode = 1
 		}
-		return nil, nil, exitCode
+		return ptrace.NewTraces(), pmetric.NewMetrics(), exitCode
 	}
 	defer f.Close()
 
@@ -274,15 +275,15 @@ func (a *Adapter) Run(cmd []string) ([]models.TestResult, []*metricspb.Metric, i
 	}
 	scope := joinScope(append([]string{runner.RepoRelCwd()}, configPaths...)...)
 
-	tests, metrics, parseErr := Parse(f, scope)
+	tests, metrics, parseErr := Parse(f, scope, run)
 	if parseErr != nil {
 		fmt.Fprintln(os.Stderr, "defrost:", parseErr)
 		if exitCode == 0 {
 			exitCode = 1
 		}
-		return nil, nil, exitCode
+		return ptrace.NewTraces(), pmetric.NewMetrics(), exitCode
 	}
 	runner.ApplyRepoPrefix(tests)
 
-	return tests, metrics, exitCode
+	return runner.TestResultsToTraces(tests, run), metrics, exitCode
 }

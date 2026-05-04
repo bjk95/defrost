@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -11,9 +12,9 @@ import (
 
 const suppressionsFile = "suppressions.json"
 
-// suppressionsDoc is the on-disk shape of suppressions.json. The schema
-// field future-proofs the move to richer entries (reason/expiry/etc.) if
-// a later iteration needs them.
+// suppressionsDoc is the on-disk shape of suppressions.json. The
+// schema field future-proofs the move to richer entries
+// (reason/expiry/etc.) if a later iteration needs them.
 type suppressionsDoc struct {
 	Schema  int      `json:"schema"`
 	TestIDs []string `json:"test_ids"`
@@ -21,15 +22,15 @@ type suppressionsDoc struct {
 
 const suppressionsSchema = 1
 
-// readSuppressionsFile returns the suppression list at dir/suppressions.json.
-// An absent file is not an error: it returns an empty slice. A present-but-
-// malformed file IS an error — defrost must not silently treat corruption as
+// readSuppressionsFromDir parses dir/suppressions.json. An absent file
+// is not an error: it returns an empty slice. A present-but-malformed
+// file IS an error — defrost must not silently treat corruption as
 // "no suppressions" (which would un-suppress everything).
-func readSuppressionsFile(dir string) ([]string, error) {
+func readSuppressionsFromDir(dir string) ([]string, error) {
 	path := filepath.Join(dir, suppressionsFile)
 	b, err := os.ReadFile(path)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
+		if errors.Is(err, fs.ErrNotExist) {
 			return []string{}, nil
 		}
 		return nil, err
@@ -41,84 +42,78 @@ func readSuppressionsFile(dir string) ([]string, error) {
 	return doc.TestIDs, nil
 }
 
-// writeSuppressionsFile sorts and dedupes ids, then writes the JSON
-// document to dir/suppressions.json with two-space indent and a trailing
-// newline. Sorting on every write keeps diffs minimal regardless of input
-// order.
-func writeSuppressionsFile(dir string, ids []string) error {
+// writeSuppressionsToDir sorts and dedupes ids, then writes the JSON
+// document with two-space indent and a trailing newline. Sorting on
+// every write keeps diffs minimal regardless of input order.
+func writeSuppressionsToDir(dir string, ids []string) error {
 	doc := suppressionsDoc{Schema: suppressionsSchema, TestIDs: sortAndDedupe(ids)}
 	b, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal suppressions: %w", err)
 	}
-	path := filepath.Join(dir, suppressionsFile)
-	return os.WriteFile(path, append(b, '\n'), 0o644)
+	return os.WriteFile(filepath.Join(dir, suppressionsFile), append(b, '\n'), 0o644)
 }
+
+// fileBackend's suppressions are just a local file — no git involved.
+// Lives at <repo>/.defrost/suppressions.json (same path the gitBackend
+// reads from, so a switch from --dev to prod doesn't move the file).
 
 func (b *fileBackend) GetSuppressions() ([]string, error) {
 	if _, err := os.Stat(b.dir); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
+		if errors.Is(err, fs.ErrNotExist) {
 			return []string{}, nil
 		}
 		return nil, err
 	}
-	return readSuppressionsFile(b.dir)
+	return readSuppressionsFromDir(b.dir)
 }
 
 func (b *fileBackend) UpdateSuppressions(mutate func([]string) []string, _ string) error {
-	if err := b.InitialisePersistence(); err != nil {
+	if err := os.MkdirAll(b.dir, 0o755); err != nil {
 		return err
 	}
-	cur, err := readSuppressionsFile(b.dir)
+	cur, err := readSuppressionsFromDir(b.dir)
 	if err != nil {
 		return err
 	}
-	return writeSuppressionsFile(b.dir, mutate(cur))
+	next := sortAndDedupe(mutate(cur))
+	if stringSlicesEqual(cur, next) {
+		return nil
+	}
+	return writeSuppressionsToDir(b.dir, next)
 }
 
+// gitBackend's suppressions live at the data branch root, alongside
+// traces/, metrics/, and logs/. Reads use the persistent worktree at
+// <repo>/.defrost/ when available (no git roundtrip needed); writes
+// go through a temp clone so they don't race the worktree's
+// fetch+reset cycle.
+
 func (b *gitBackend) GetSuppressions() ([]string, error) {
-	branch := b.opts.DataBranch
-	if branch == "" {
-		branch = DefaultDataBranch
-	}
-
-	remoteURL, err := resolveTargetURL(b.opts)
+	// Route through CloneForRead so we get the ls-remote freshness
+	// check + clone-once-then-fetch logic for free. When the local
+	// worktree's HEAD already matches origin's tip, CloneForRead is a
+	// single ~50ms ls-remote round-trip — no fetch, no reset. When it
+	// doesn't, the worktree is brought up to date before we read the
+	// file. Either way the suppressions we return reflect origin at
+	// command start, not whatever stale snapshot was last on disk.
+	snap, err := b.CloneForRead()
 	if err != nil {
 		return nil, err
 	}
-
-	exists, err := branchExistsOnRemote(remoteURL, branch)
-	if err != nil {
-		return nil, err
-	}
-	if !exists {
+	if snap.Dir == "" {
+		// Branch missing on origin → no suppressions yet.
 		return []string{}, nil
 	}
-
-	workDir, err := os.MkdirTemp("", "defrost-suppress-read-")
-	if err != nil {
-		return nil, fmt.Errorf("mktemp: %w", err)
-	}
-	defer os.RemoveAll(workDir)
-	_ = os.Remove(workDir) // clone wants the path missing
-
-	if _, err := runGit("", "clone", "--quiet", "--depth=1", "--single-branch", "--branch", branch, remoteURL, workDir); err != nil {
-		return nil, fmt.Errorf("clone data branch: %w", err)
-	}
-	return readSuppressionsFile(workDir)
+	return readSuppressionsFromDir(snap.Dir)
 }
 
 func (b *gitBackend) UpdateSuppressions(mutate func([]string) []string, msg string) error {
-	branch := b.opts.DataBranch
-	if branch == "" {
-		branch = DefaultDataBranch
-	}
-
+	branch := b.dataBranch()
 	remoteURL, err := resolveTargetURL(b.opts)
 	if err != nil {
 		return err
 	}
-
 	workDir, err := os.MkdirTemp("", "defrost-suppress-write-")
 	if err != nil {
 		return fmt.Errorf("mktemp: %w", err)
@@ -134,30 +129,31 @@ func (b *gitBackend) UpdateSuppressions(mutate func([]string) []string, msg stri
 			return err
 		}
 	}
-
 	return updateSuppressionsInWorkDir(workDir, branch, mutate, msg)
 }
 
-// updateSuppressionsInWorkDir handles the apply/commit/push/retry cycle
-// against a workdir that already holds a checkout of the data branch.
-// Split out from UpdateSuppressions so tests can pre-stage a workdir whose
-// clone predates a competing push and exercise the retry path directly.
+// updateSuppressionsInWorkDir handles the apply/commit/push/retry
+// cycle against a workdir that already holds a checkout of the data
+// branch. Two concurrent `defrost suppress add` calls land both IDs
+// in the final list via fetch-rebase-replay rather than three-way
+// merging the JSON (which would corrupt the file).
 func updateSuppressionsInWorkDir(workDir, branch string, mutate func([]string) []string, msg string) error {
 	apply := func() (changed bool, err error) {
-		cur, err := readSuppressionsFile(workDir)
+		cur, err := readSuppressionsFromDir(workDir)
 		if err != nil {
 			return false, err
 		}
 		next := sortAndDedupe(mutate(cur))
-		// cur is already canonical because we always write sorted+deduped
-		// (or it's [] for an absent file). Compare lists, not file bytes —
-		// otherwise a no-op mutation on a fresh branch (where prevBytes is
-		// empty but newBytes is the empty-list JSON) would falsely report
-		// "changed" and create the data branch for a no-op operation.
+		// cur is already canonical because we always write
+		// sorted+deduped (or it's [] for an absent file). Compare
+		// lists, not file bytes — otherwise a no-op mutation on a
+		// fresh branch (where prevBytes is empty but newBytes is the
+		// empty-list JSON) would falsely report "changed" and create
+		// the data branch for a no-op operation.
 		if stringSlicesEqual(cur, next) {
 			return false, nil
 		}
-		if err := writeSuppressionsFile(workDir, next); err != nil {
+		if err := writeSuppressionsToDir(workDir, next); err != nil {
 			return false, err
 		}
 		return true, nil
@@ -178,13 +174,6 @@ func updateSuppressionsInWorkDir(workDir, branch string, mutate func([]string) [
 		return err
 	}
 
-	// Retry-on-conflict: discard the local commit, fetch the remote tip,
-	// hard-reset to it, re-apply the mutation closure, and re-commit. This
-	// works for suppressions.json (single canonical file, NOT covered by
-	// the merge=union driver in .gitattributes) — a three-way merge of
-	// JSON would corrupt the file, so we replay the user's intent against
-	// the latest tree instead. Two concurrent add calls for different IDs
-	// both land in the final list this way.
 	var lastErr error
 	for attempt := 1; attempt <= maxPushAttempts; attempt++ {
 		err := pushBranch(workDir, branch)
@@ -195,11 +184,10 @@ func updateSuppressionsInWorkDir(workDir, branch string, mutate func([]string) [
 		if !isNonFastForward(err) {
 			return err
 		}
-		// Non-fast-forward at this point means another writer raced us:
-		// either updating an existing branch (branchExisted=true) OR
-		// creating it for the first time between our existence check and
-		// our push (branchExisted=false). Both cases recover the same
-		// way — fetch the winner's tip, reset hard, replay.
+		// Non-fast-forward at this point means another writer raced
+		// us. Recover by fetching the winner's tip, hard-resetting
+		// to it, and replaying the user's intent (the mutate
+		// closure) against the new state.
 		refspec := fmt.Sprintf("+refs/heads/%s:refs/remotes/origin/%s", branch, branch)
 		if _, err := runGit(workDir, "fetch", "--quiet", "origin", refspec); err != nil {
 			return fmt.Errorf("fetch after push conflict (attempt %d): %w", attempt, err)
@@ -211,12 +199,11 @@ func updateSuppressionsInWorkDir(workDir, branch string, mutate func([]string) [
 		if err != nil {
 			return err
 		}
-		// If the rebased tip already reflects the user's intent (e.g. two
-		// concurrent `add X` calls where the winner already added X), the
-		// replay is a no-op. Calling commitAll here would fail with
-		// "nothing to commit" — instead, treat the desired state as
-		// already present remotely and return success.
 		if !changed {
+			// The rebased tip already reflects the user's intent
+			// (e.g. two concurrent `add X` calls where the winner
+			// already added X). Treat as success rather than calling
+			// commitAll on an empty change.
 			return nil
 		}
 		if err := commitAll(workDir, msg); err != nil {

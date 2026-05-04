@@ -1,143 +1,100 @@
 package otlp
 
 import (
-	"bytes"
-	"compress/gzip"
 	"context"
 	"fmt"
-	"io"
 	"net"
-	"net/http"
-	"sync"
-	"time"
+	"strconv"
 
-	cmetricspb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
-	"google.golang.org/protobuf/proto"
+	"go.opentelemetry.io/collector/component/componenttest"
+	"go.opentelemetry.io/collector/config/configgrpc"
+	"go.opentelemetry.io/collector/config/configoptional"
+	"go.opentelemetry.io/collector/receiver"
+	"go.opentelemetry.io/collector/receiver/otlpreceiver"
+	"go.opentelemetry.io/collector/receiver/receivertest"
 )
 
-// Receiver is a minimal OTLP/HTTP listener for metrics. It binds a
-// random localhost port, accepts POST /v1/metrics requests with
-// Content-Type: application/x-protobuf, and buffers the decoded
-// ExportMetricsServiceRequest messages in memory until Shutdown is called.
+// Receiver wraps the upstream `otlpreceiver` factory so defrost can use
+// it as a library — without spinning up the full Collector service. The
+// receiver listens on a random localhost HTTP port for /v1/traces,
+// /v1/metrics, and /v1/logs and forwards every payload into the
+// supplied Sink.
 type Receiver struct {
-	server *http.Server
-	port   int
-	mu     sync.Mutex
-	buf    []*cmetricspb.ExportMetricsServiceRequest
-	closed bool
+	port    int
+	traces  receiver.Traces
+	metrics receiver.Metrics
+	logs    receiver.Logs
 }
 
-// New returns a non-started Receiver.
-func New() *Receiver { return &Receiver{} }
+// Start binds the receiver on 127.0.0.1 with a free port chosen by the
+// kernel and returns the chosen port. All three signals are wired up to
+// sink. gRPC is disabled — defrost only uses HTTP.
+func Start(ctx context.Context, sink *Sink) (*Receiver, int, error) {
+	port, err := pickFreePort()
+	if err != nil {
+		return nil, 0, fmt.Errorf("otlp receiver: pick port: %w", err)
+	}
+	factory := otlpreceiver.NewFactory()
+	cfg := factory.CreateDefaultConfig().(*otlpreceiver.Config)
+	// Default() optionals don't materialize a value until an unmarshal
+	// or GetOrInsertDefault() promotes them. Promote HTTP so we can set
+	// the listen endpoint, then disable gRPC entirely (defrost is
+	// HTTP-only — gRPC support is one config flip away if a real bug
+	// ever lands).
+	httpCfg := cfg.Protocols.HTTP.GetOrInsertDefault()
+	httpCfg.ServerConfig.NetAddr.Endpoint = "127.0.0.1:" + strconv.Itoa(port)
+	cfg.Protocols.GRPC = configoptional.None[configgrpc.ServerConfig]()
 
-// Start binds 127.0.0.1 on a free port and serves until Shutdown.
-// Returns the chosen port.
-func (r *Receiver) Start() (int, error) {
+	settings := receivertest.NewNopSettings(factory.Type())
+	host := componenttest.NewNopHost()
+
+	tr, err := factory.CreateTraces(ctx, settings, cfg, sink)
+	if err != nil {
+		return nil, 0, fmt.Errorf("otlp receiver: create traces: %w", err)
+	}
+	mr, err := factory.CreateMetrics(ctx, settings, cfg, sink)
+	if err != nil {
+		return nil, 0, fmt.Errorf("otlp receiver: create metrics: %w", err)
+	}
+	lr, err := factory.CreateLogs(ctx, settings, cfg, sink)
+	if err != nil {
+		return nil, 0, fmt.Errorf("otlp receiver: create logs: %w", err)
+	}
+	r := &Receiver{port: port, traces: tr, metrics: mr, logs: lr}
+
+	// The traces, metrics, and logs receivers share the same underlying
+	// otlpReceiver (sharedcomponent.LoadOrStore on the cfg pointer), so
+	// a single Start call brings up the HTTP server. The other Start
+	// calls are no-ops.
+	if err := tr.Start(ctx, host); err != nil {
+		return nil, 0, fmt.Errorf("otlp receiver: start traces: %w", err)
+	}
+	return r, port, nil
+}
+
+// Port returns the bound port.
+func (r *Receiver) Port() int { return r.port }
+
+// Shutdown stops the underlying receiver. The sink retains whatever
+// pdata it accumulated — Drain it separately.
+func (r *Receiver) Shutdown(ctx context.Context) error {
+	if r == nil || r.traces == nil {
+		return nil
+	}
+	return r.traces.Shutdown(ctx)
+}
+
+// pickFreePort opens an ephemeral listener, reads its assigned port,
+// and closes it. The TIME_WAIT race window between close and the
+// receiver's bind is small enough to ignore for a developer-machine
+// CLI. If the race ever bites, the receiver Start fails loudly and the
+// run continues without metric collection (see exec.go).
+func pickFreePort() (int, error) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		return 0, fmt.Errorf("otlp receiver: bind: %w", err)
-	}
-	mux := http.NewServeMux()
-	mux.HandleFunc("/v1/metrics", r.handleMetrics)
-	srv := &http.Server{
-		Handler:           mux,
-		ReadHeaderTimeout: 5 * time.Second,
+		return 0, err
 	}
 	port := ln.Addr().(*net.TCPAddr).Port
-
-	r.mu.Lock()
-	r.port = port
-	r.server = srv
-	r.mu.Unlock()
-
-	go func() { _ = srv.Serve(ln) }()
+	_ = ln.Close()
 	return port, nil
-}
-
-// Shutdown stops accepting new connections, waits for in-flight handlers
-// to drain bounded by ctx, and returns the buffered metric requests.
-// Subsequent calls return (nil, nil).
-func (r *Receiver) Shutdown(ctx context.Context) ([]*cmetricspb.ExportMetricsServiceRequest, error) {
-	r.mu.Lock()
-	if r.closed {
-		r.mu.Unlock()
-		return nil, nil
-	}
-	r.closed = true
-	server := r.server
-	r.mu.Unlock()
-
-	// Drain in-flight handlers BEFORE capturing the buffer. server.Shutdown
-	// blocks until every active handleMetrics call returns; once it does,
-	// no new handler can run, so capturing r.buf afterwards is exhaustive.
-	var err error
-	if server != nil {
-		err = server.Shutdown(ctx)
-	}
-
-	r.mu.Lock()
-	out := r.buf
-	r.buf = nil
-	r.mu.Unlock()
-
-	return out, err
-}
-
-func (r *Receiver) handleMetrics(w http.ResponseWriter, req *http.Request) {
-	if req.Method != http.MethodPost {
-		w.Header().Set("Allow", "POST")
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	if ct := req.Header.Get("Content-Type"); ct != "application/x-protobuf" {
-		http.Error(w, "unsupported media type", http.StatusUnsupportedMediaType)
-		return
-	}
-	// Cap raw payloads at 16 MiB and decompressed payloads at 64 MiB.
-	// Defrost's expected workload is one run's worth of OTLP exports —
-	// well below either ceiling — so both caps are guards against
-	// misbehaving clients (zip bombs in particular), not real limits.
-	const maxBody = 16 << 20
-	const maxDecompressed = 64 << 20
-	raw, err := io.ReadAll(http.MaxBytesReader(w, req.Body, maxBody))
-	if err != nil {
-		http.Error(w, "read body", http.StatusBadRequest)
-		return
-	}
-	body := raw
-	// OTel SDKs default to gzip in many languages
-	// (OTEL_EXPORTER_OTLP_COMPRESSION=gzip is the recommended default in
-	// the OTLP spec). Honor Content-Encoding so compressed payloads land.
-	if enc := req.Header.Get("Content-Encoding"); enc == "gzip" {
-		gz, err := gzip.NewReader(bytes.NewReader(raw))
-		if err != nil {
-			http.Error(w, "decode gzip", http.StatusBadRequest)
-			return
-		}
-		body, err = io.ReadAll(io.LimitReader(gz, maxDecompressed+1))
-		_ = gz.Close()
-		if err != nil {
-			http.Error(w, "decompress body", http.StatusBadRequest)
-			return
-		}
-		if len(body) > maxDecompressed {
-			http.Error(w, "decompressed body too large", http.StatusRequestEntityTooLarge)
-			return
-		}
-	} else if enc != "" && enc != "identity" {
-		http.Error(w, "unsupported content encoding", http.StatusUnsupportedMediaType)
-		return
-	}
-	msg := &cmetricspb.ExportMetricsServiceRequest{}
-	if err := proto.Unmarshal(body, msg); err != nil {
-		http.Error(w, "decode protobuf", http.StatusBadRequest)
-		return
-	}
-	r.mu.Lock()
-	r.buf = append(r.buf, msg)
-	r.mu.Unlock()
-	resp, _ := proto.Marshal(&cmetricspb.ExportMetricsServiceResponse{})
-	w.Header().Set("Content-Type", "application/x-protobuf")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(resp)
 }

@@ -3,116 +3,117 @@ package models
 import (
 	"crypto/rand"
 	"crypto/sha256"
-
-	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
-	resourcepb "go.opentelemetry.io/proto/otlp/resource/v1"
 )
 
-// RunContext carries the OTel-shaped per-run identity used by translators
-// and the persist layer. Built once at the start of a defrost exec
-// invocation and threaded through everything that emits spans or metrics.
+// RunContext carries the per-run identity used by translators and the
+// gitExporter. Built once at the start of a defrost exec invocation
+// and threaded through everything that emits spans, metrics, or logs.
 //
-// TraceID and RootSpanID are raw bytes — 16 and 8 respectively — because
-// that's what the OTel proto types consume directly. Hex stringification
-// happens at projection / display time only.
+// TraceID is the raw 16-byte OTel trace id; RootSpanID is the raw
+// 8-byte OTel span id. Hex stringification happens at projection time.
+//
+// Attrs is a primitive list of key/value pairs — by design RunContext
+// does NOT depend on pdata, so DetectRunContext (in internal/persist)
+// stays independent of the OTel pdata package. The conversion to
+// pcommon.Map happens at the boundary in internal/runner/spans.go.
 type RunContext struct {
 	RunID             string
-	TraceID           []byte // 16 raw bytes, derived from RunID via SHA256
-	RootSpanID        []byte // 8 raw bytes, fresh per run
-	Resource          *resourcepb.Resource
+	TraceID           [16]byte
+	RootSpanID        [8]byte
+	Attrs             []Attr
 	StartTimeUnixNano int64
+}
+
+// Attr is one resource-level attribute. Value is one of:
+// string | bool | int64 | float64 | []string. Other types are not
+// supported — defrost only uses these.
+type Attr struct {
+	Key   string
+	Value any
 }
 
 // DeriveTraceID hashes a run id into the 16-byte trace id shape OTel
 // mandates. Deterministic so a given run always maps to the same trace
 // id, which makes cross-file joins on trace_id reproducible.
-func DeriveTraceID(runID string) []byte {
+func DeriveTraceID(runID string) [16]byte {
 	h := sha256.Sum256([]byte(runID))
-	out := make([]byte, 16)
-	copy(out, h[:16])
+	var out [16]byte
+	copy(out[:], h[:16])
 	return out
 }
 
 // NewSpanID returns a fresh 8-byte span id.
-func NewSpanID() []byte {
-	out := make([]byte, 8)
-	if _, err := rand.Read(out); err != nil {
+func NewSpanID() [8]byte {
+	var out [8]byte
+	if _, err := rand.Read(out[:]); err != nil {
 		panic("crypto/rand: " + err.Error())
 	}
 	return out
 }
 
-// StringAttr is a tiny helper for building Resource / Attribute KeyValue
-// lists with a string value. Most defrost-emitted attributes are strings.
-func StringAttr(key, value string) *commonpb.KeyValue {
-	return &commonpb.KeyValue{
-		Key:   key,
-		Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: value}},
-	}
+// StringAttr is a tiny helper for building Attr lists with a string value.
+func StringAttr(key, value string) Attr {
+	return Attr{Key: key, Value: value}
 }
 
-// BoolAttr builds a KeyValue with a bool value.
-func BoolAttr(key string, value bool) *commonpb.KeyValue {
-	return &commonpb.KeyValue{
-		Key:   key,
-		Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_BoolValue{BoolValue: value}},
-	}
+// BoolAttr builds an Attr with a bool value.
+func BoolAttr(key string, value bool) Attr {
+	return Attr{Key: key, Value: value}
 }
 
-// IntAttr builds a KeyValue with an int64 value.
-func IntAttr(key string, value int64) *commonpb.KeyValue {
-	return &commonpb.KeyValue{
-		Key:   key,
-		Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_IntValue{IntValue: value}},
-	}
+// IntAttr builds an Attr with an int64 value.
+func IntAttr(key string, value int64) Attr {
+	return Attr{Key: key, Value: value}
 }
 
-// DoubleAttr returns a *commonpb.KeyValue carrying a float64.
-func DoubleAttr(key string, value float64) *commonpb.KeyValue {
-	return &commonpb.KeyValue{
-		Key:   key,
-		Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_DoubleValue{DoubleValue: value}},
-	}
+// DoubleAttr builds an Attr with a float64 value.
+func DoubleAttr(key string, value float64) Attr {
+	return Attr{Key: key, Value: value}
 }
 
-// StringArrayAttr builds a KeyValue with a string-array value (used for
-// `defrost.cmd` which is the wrapped argv).
-func StringArrayAttr(key string, values []string) *commonpb.KeyValue {
-	arr := make([]*commonpb.AnyValue, 0, len(values))
-	for _, v := range values {
-		arr = append(arr, &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: v}})
-	}
-	return &commonpb.KeyValue{
-		Key:   key,
-		Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_ArrayValue{ArrayValue: &commonpb.ArrayValue{Values: arr}}},
-	}
+// StringArrayAttr builds an Attr with a string-slice value.
+func StringArrayAttr(key string, values []string) Attr {
+	cp := make([]string, len(values))
+	copy(cp, values)
+	return Attr{Key: key, Value: cp}
 }
 
-// ResourceString reads a string-typed attribute from a Resource by key,
-// returning "" when the key is absent or the value is not a string.
-func ResourceString(r *resourcepb.Resource, key string) string {
-	if r == nil {
-		return ""
-	}
-	for _, kv := range r.Attributes {
-		if kv.Key == key {
-			if v, ok := kv.Value.GetValue().(*commonpb.AnyValue_StringValue); ok {
-				return v.StringValue
-			}
+// AttrString reads a string-typed attribute by key, or "" if absent or
+// not a string.
+func AttrString(attrs []Attr, key string) string {
+	for _, a := range attrs {
+		if a.Key != key {
+			continue
+		}
+		if s, ok := a.Value.(string); ok {
+			return s
 		}
 	}
 	return ""
 }
 
-// AttrString reads a string-typed attribute from a KeyValue list by key,
-// returning "" when absent.
-func AttrString(attrs []*commonpb.KeyValue, key string) string {
-	for _, kv := range attrs {
-		if kv.Key == key {
-			if v, ok := kv.Value.GetValue().(*commonpb.AnyValue_StringValue); ok {
-				return v.StringValue
-			}
+// AttrBool reads a bool-typed attribute by key, or false if absent.
+func AttrBool(attrs []Attr, key string) bool {
+	for _, a := range attrs {
+		if a.Key != key {
+			continue
+		}
+		if b, ok := a.Value.(bool); ok {
+			return b
 		}
 	}
-	return ""
+	return false
+}
+
+// AttrStrings reads a string-array-typed attribute by key.
+func AttrStrings(attrs []Attr, key string) []string {
+	for _, a := range attrs {
+		if a.Key != key {
+			continue
+		}
+		if v, ok := a.Value.([]string); ok {
+			return v
+		}
+	}
+	return nil
 }

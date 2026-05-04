@@ -32,13 +32,19 @@ jobs:
         with:
           go-version: stable
 
-      - name: Install defrost
-        run: go install github.com/bjk95/defrost@latest
+      - name: Install defrost-ci
+        # CI runners only need the write path (exec / history /
+        # suppress / drop). The slim `defrost-ci` binary skips DuckDB
+        # cgo and the embedded web bundle — about 1/3 the size of the
+        # full `defrost` and much faster to install. Subcommands are
+        # otherwise identical; only `serve` differs (it's a stub on
+        # this binary).
+        run: go install github.com/bjk95/defrost/cmd/defrost-ci@latest
 
       - name: Run tests under defrost
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: defrost exec go test ./...
+        run: defrost-ci exec go test ./...
 ```
 
 That's the whole setup. After the first run merges, `_defrost` exists
@@ -62,9 +68,8 @@ for the full list.
 ## Parallel jobs
 
 Multiple CI jobs writing concurrently is supported. Each run lands in
-a different file path (`traces/<date>/<trace-id>.otlp.pb.zst`), and
-defrost's `.gitattributes` declares those paths as `merge=union`, so
-fan-out matrices like:
+a different file path (`traces/<date>/<trace-id>.otlp.pb.zst`) — there
+are no shared files to contend on, so fan-out matrices like:
 
 ```yaml
 strategy:
@@ -72,12 +77,15 @@ strategy:
     py: ["3.11", "3.12", "3.13"]
 ```
 
-…all push without colliding.
+…all push without colliding. If a push hits a non-fast-forward race,
+defrost fetches the new tip, rebases, and retries (up to 5 attempts).
 
-`suppressions.json` does **not** use `merge=union` (order matters).
-Concurrent suppression mutations resolve via fetch-rebase-retry. In
-practice this only matters if you're calling `defrost suppress` from
-multiple CI jobs at the same time, which is unusual.
+Suppressions live on the data branch as `suppressions.json` at the
+branch root. Concurrent `defrost suppress add` calls push to the same
+file with the same fetch + replay-on-non-FF logic that handles
+concurrent run writes. Running `defrost suppress` from CI is fine,
+though most teams find it more natural to run it locally and let
+defrost push the change through.
 
 ## What about pull requests from forks?
 
@@ -94,9 +102,9 @@ platform-level restriction, not a defrost one. Two options:
   ```yaml
   - run: |
       if [[ "${{ github.event.pull_request.head.repo.fork }}" == "true" ]]; then
-        defrost exec --no-persist go test ./...
+        defrost-ci exec --no-persist go test ./...
       else
-        defrost exec go test ./...
+        defrost-ci exec go test ./...
       fi
   ```
 
@@ -105,8 +113,9 @@ platform-level restriction, not a defrost one. Two options:
 The pattern is the same anywhere:
 
 1. Check out the repo, including write access to push to it.
-2. Install the `defrost` binary.
-3. Wrap your existing test/eval command with `defrost exec`.
+2. Install the `defrost-ci` binary (or full `defrost` — both expose the
+   same `exec` / `history` / `suppress` / `drop` subcommands).
+3. Wrap your existing test/eval command with `defrost-ci exec`.
 4. (Optional) Set whichever env vars apply (`GITHUB_PR_NUMBER` if your
    CI exposes a PR number under a different name, etc.).
 

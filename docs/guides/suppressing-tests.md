@@ -62,21 +62,27 @@ Two cases where the rewrite does **not** apply:
 
 ## Audit trail
 
-`suppressions.json` lives at the root of the data branch. `git blame`
-on it shows who suppressed what and when:
+`suppressions.json` lives at the root of the `_defrost` data branch.
+`git log` and `git blame` against that branch tell you who suppressed
+what and when:
 
 ```sh
-git fetch origin _defrost
-git -C $(git rev-parse --show-toplevel) blame _defrost -- suppressions.json
+# Inspect via the persistent worktree defrost keeps in sync.
+git -C .defrost log --follow suppressions.json
+git -C .defrost blame suppressions.json
 ```
 
-Use this for periodic reviews — long-lived suppressions usually mean a
-test that should be either fixed or deleted.
+Use this for periodic reviews — long-lived suppressions usually mean
+a test that should be either fixed or deleted.
 
 ## Doing it from CI scripts
 
 The dashboard exposes the same operations as HTTP endpoints (used by
 the SPA). If you have programmatic suppression management — e.g. a
-bot that opens a PR adding suppressions when a flake threshold is
-crossed — you can either shell out to `defrost suppress add` or use
-the [Serve HTTP API](../../reference/serve-api/#suppressions) directly.
+bot that suppresses flaky tests when a threshold is crossed — you
+can either shell out to `defrost suppress add` or use the
+[Serve HTTP API](../../reference/serve-api/#suppressions) directly.
+
+Both paths push to `_defrost` immediately (no manual commit needed).
+A `defrost suppress add` from CI updates the shared list for every
+subsequent `defrost exec` invocation across the team.

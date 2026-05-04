@@ -10,12 +10,13 @@ inspect it by hand.
 
 1. **Created on first use.** The first `defrost exec` against a repo
    creates the branch as an **orphan** branch (no shared history with
-   `main`). The seed commit contains a `.gitattributes` declaring
-   `traces/**` and `metrics/**` as `merge=union`, plus a small
-   `README.md` pointing back to defrost.
-2. **Append-only by default.** Every recorded run appends one commit.
-   Suppression mutations append one commit each. The data branch grows
-   monotonically.
+   `main`). The seed commit contains a `README.md` pointing back to
+   defrost and a `.gitignore` that keeps the per-machine DuckDB cache
+   (`cache.duckdb`) out of subsequent commits.
+2. **Append-only by default.** Every recorded run appends one commit
+   carrying one trace file (and, if the run emitted any, one metrics
+   file and one logs file). Suppression changes append one commit
+   each. The data branch grows monotonically.
 3. **Force-rewritten only by `defrost drop history`.** That command
    creates a new orphan commit containing only the keep set and
    force-pushes it. Old objects become unreachable and are
@@ -24,11 +25,12 @@ inspect it by hand.
 ## What's in it
 
 ```text
-.gitattributes
+.gitignore
 README.md
-suppressions.json
 traces/<YYYY>/<MM>/<DD>/<trace-id>.otlp.pb.zst
 metrics/<YYYY>/<MM>/<DD>/<trace-id>.otlp.pb.zst
+logs/<YYYY>/<MM>/<DD>/<trace-id>.otlp.pb.zst
+suppressions.json
 ```
 
 See [storage layout](../../reference/storage-layout/) for the exact
@@ -36,15 +38,17 @@ file format and naming rules.
 
 ## Inspecting the branch by hand
 
-The branch is just git, so anything that works on git works on it:
+The data branch is just git, so anything that works on git works on
+it. The fastest path is the persistent worktree defrost keeps at
+`<repo>/.defrost/`:
 
 ```sh
-# Switch to the data branch in a separate worktree (recommended).
-git worktree add ../defrost-data _defrost
-cd ../defrost-data
+# defrost serve keeps the worktree fresh — peek at it directly.
+cd .defrost
 git log --oneline | head
+ls traces/ metrics/ logs/
 
-# Decode a single trace file with zstd + protoc, or use defrost itself:
+# Or decode a single test's history via defrost itself:
 defrost history "tests/test_basics.py::test_pass" | head -1 | jq
 
 # See who suppressed what.

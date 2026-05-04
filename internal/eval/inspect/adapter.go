@@ -8,7 +8,8 @@ import (
 	"regexp"
 	"strings"
 
-	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
+	"go.opentelemetry.io/collector/pdata/pmetric"
+	"go.opentelemetry.io/collector/pdata/ptrace"
 
 	"github.com/bjk95/defrost/internal/models"
 	"github.com/bjk95/defrost/internal/runner"
@@ -72,19 +73,19 @@ func buildArgs(cmd []string, tempDir string) []string {
 // passthroughRun executes cmd verbatim with stdio and signals wired through,
 // returning the child exit code without parsing any results. Used when the
 // user supplied --log-dir or --log-format and defrost can't safely override.
-func passthroughRun(cmd []string) ([]models.TestResult, []*metricspb.Metric, int) {
+func passthroughRun(cmd []string) (ptrace.Traces, pmetric.Metrics, int) {
 	c := exec.Command(cmd[0], cmd[1:]...)
 	code, err := runner.RunChild(c)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "defrost:", err)
-		return nil, nil, 1
+		return ptrace.NewTraces(), pmetric.NewMetrics(), 1
 	}
-	return nil, nil, code
+	return ptrace.NewTraces(), pmetric.NewMetrics(), code
 }
 
-func (a *Adapter) Run(cmd []string) ([]models.TestResult, []*metricspb.Metric, int) {
+func (a *Adapter) Run(cmd []string, run models.RunContext) (ptrace.Traces, pmetric.Metrics, int) {
 	if len(cmd) == 0 {
-		return nil, nil, 2
+		return ptrace.NewTraces(), pmetric.NewMetrics(), 2
 	}
 
 	if hasFlag(cmd[1:], "--log-dir") || hasFlag(cmd[1:], "--log-format") {
@@ -96,7 +97,7 @@ func (a *Adapter) Run(cmd []string) ([]models.TestResult, []*metricspb.Metric, i
 	tempDir, err := os.MkdirTemp("", "defrost-inspect-*")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "defrost:", err)
-		return nil, nil, 1
+		return ptrace.NewTraces(), pmetric.NewMetrics(), 1
 	}
 	defer os.RemoveAll(tempDir)
 
@@ -105,16 +106,16 @@ func (a *Adapter) Run(cmd []string) ([]models.TestResult, []*metricspb.Metric, i
 	exitCode, err := runner.RunChild(child)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "defrost:", err)
-		return nil, nil, 1
+		return ptrace.NewTraces(), pmetric.NewMetrics(), 1
 	}
 
-	results, metrics, parseErr := parseLogDir(tempDir, runner.RepoRelCwd())
+	results, metrics, parseErr := parseLogDir(tempDir, runner.RepoRelCwd(), run)
 	if parseErr != nil {
 		fmt.Fprintln(os.Stderr, "defrost:", parseErr)
 		if exitCode == 0 {
 			exitCode = 1
 		}
-		return nil, nil, exitCode
+		return ptrace.NewTraces(), pmetric.NewMetrics(), exitCode
 	}
 	if len(results) == 0 {
 		fmt.Fprintln(os.Stderr,
@@ -123,11 +124,11 @@ func (a *Adapter) Run(cmd []string) ([]models.TestResult, []*metricspb.Metric, i
 		if exitCode == 0 {
 			exitCode = 1
 		}
-		return nil, nil, exitCode
+		return ptrace.NewTraces(), pmetric.NewMetrics(), exitCode
 	}
 
 	runner.ApplyRepoPrefix(results)
-	return results, metrics, exitCode
+	return runner.TestResultsToTraces(results, run), metrics, exitCode
 }
 
 // parseLogDir scans dir for *.json files (Inspect's --log-format=json output)
@@ -136,29 +137,42 @@ func (a *Adapter) Run(cmd []string) ([]models.TestResult, []*metricspb.Metric, i
 // to ParseFile, which combines it with each log's `eval.task_file` field
 // to form a per-file metric-name prefix. Returns error only on directory
 // listing failure.
-func parseLogDir(dir, repoRelCwd string) ([]models.TestResult, []*metricspb.Metric, error) {
+func parseLogDir(dir, repoRelCwd string, run models.RunContext) ([]models.TestResult, pmetric.Metrics, error) {
 	matches, err := filepath.Glob(filepath.Join(dir, "*.json"))
 	if err != nil {
-		return nil, nil, fmt.Errorf("glob inspect log dir: %w", err)
+		return nil, pmetric.NewMetrics(), fmt.Errorf("glob inspect log dir: %w", err)
 	}
-	var (
-		allTests   []models.TestResult
-		allMetrics []*metricspb.Metric
-	)
+	var allTests []models.TestResult
+	allMetrics := runner.NewEvalMetrics(run)
 	for _, path := range matches {
 		f, err := os.Open(path)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "defrost: inspect: open", path, ":", err)
 			continue
 		}
-		tests, metrics, parseErr := ParseFile(f, repoRelCwd)
+		tests, metrics, parseErr := ParseFile(f, repoRelCwd, run)
 		f.Close()
 		if parseErr != nil {
 			fmt.Fprintln(os.Stderr, "defrost: inspect: parse", path, ":", parseErr)
 			continue
 		}
 		allTests = append(allTests, tests...)
-		allMetrics = append(allMetrics, metrics...)
+		mergeMetrics(allMetrics, metrics)
 	}
 	return allTests, allMetrics, nil
+}
+
+// mergeMetrics moves every Metric from src.ScopeMetrics[0] into
+// dst.ScopeMetrics[0]. dst and src must both have been produced by
+// runner.NewEvalMetrics so the resource and scope shapes already match.
+func mergeMetrics(dst, src pmetric.Metrics) {
+	if src.ResourceMetrics().Len() == 0 || dst.ResourceMetrics().Len() == 0 {
+		return
+	}
+	srcRM := src.ResourceMetrics().At(0)
+	dstRM := dst.ResourceMetrics().At(0)
+	if srcRM.ScopeMetrics().Len() == 0 || dstRM.ScopeMetrics().Len() == 0 {
+		return
+	}
+	srcRM.ScopeMetrics().At(0).Metrics().MoveAndAppendTo(dstRM.ScopeMetrics().At(0).Metrics())
 }

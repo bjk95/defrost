@@ -12,7 +12,7 @@ import (
 )
 
 // DropSelector chooses which signal directories to drop. At least one
-// flag must be true; both true means "drop everything".
+// flag must be true; all flags true means "drop everything".
 //
 // BeforeUTC, when non-zero, scopes the drop to runs whose YYYY/MM/DD
 // partition is strictly before the cutoff. Files dated >= the cutoff
@@ -20,21 +20,24 @@ import (
 type DropSelector struct {
 	DropTraces  bool
 	DropMetrics bool
+	DropLogs    bool
 	BeforeUTC   time.Time
 }
 
 // DropPlan is the inventory shown to the user before a drop is executed.
 // All counts and bytes are computed from the data branch (or scratch dir)
 // as it currently exists; the date range is derived from the YYYY/MM/DD
-// path partitioning under traces/ and metrics/.
+// path partitioning under traces/, metrics/, and logs/.
 type DropPlan struct {
 	Branch        string
 	OriginURL     string // empty in dev mode
 	Dev           bool
 	TraceFiles    int
 	MetricFiles   int
+	LogFiles      int
 	TraceBytes    int64
 	MetricBytes   int64
+	LogBytes      int64
 	OldestRunUTC  time.Time
 	NewestRunUTC  time.Time
 	SuppressionsN int
@@ -54,6 +57,9 @@ func (p DropPlan) Nothing() bool {
 	if p.Sel.DropMetrics && p.MetricFiles > 0 {
 		return false
 	}
+	if p.Sel.DropLogs && p.LogFiles > 0 {
+		return false
+	}
 	return true
 }
 
@@ -68,8 +74,8 @@ func (p DropPlan) Nothing() bool {
 // the plan is a no-op so the CLI can print "nothing to drop" with the
 // same context (branch / scratch dir).
 func (b *gitBackend) DropHistory(sel DropSelector, confirm func(DropPlan) bool) error {
-	if !sel.DropTraces && !sel.DropMetrics {
-		return errors.New("drop: nothing selected (need DropTraces and/or DropMetrics)")
+	if !sel.DropTraces && !sel.DropMetrics && !sel.DropLogs {
+		return errors.New("drop: nothing selected (need DropTraces, DropMetrics, or DropLogs)")
 	}
 
 	branch := b.dataBranch()
@@ -153,8 +159,8 @@ func (b *gitBackend) DropHistory(sel DropSelector, confirm func(DropPlan) bool) 
 }
 
 func (b *fileBackend) DropHistory(sel DropSelector, confirm func(DropPlan) bool) error {
-	if !sel.DropTraces && !sel.DropMetrics {
-		return errors.New("drop: nothing selected (need DropTraces and/or DropMetrics)")
+	if !sel.DropTraces && !sel.DropMetrics && !sel.DropLogs {
+		return errors.New("drop: nothing selected (need DropTraces, DropMetrics, or DropLogs)")
 	}
 
 	plan := buildDropPlan(b.dir, sel)
@@ -179,17 +185,26 @@ func buildDropPlan(dir string, sel DropSelector) DropPlan {
 	// count regardless of cutoff — otherwise the UI's
 	// "preserved · N files, X KiB" line underreports because files
 	// on/after the cutoff would be excluded.
-	var traceCutoff, metricCutoff time.Time
+	var traceCutoff, metricCutoff, logCutoff time.Time
 	if sel.DropTraces {
 		traceCutoff = sel.BeforeUTC
 	}
 	if sel.DropMetrics {
 		metricCutoff = sel.BeforeUTC
 	}
+	if sel.DropLogs {
+		logCutoff = sel.BeforeUTC
+	}
 	plan.TraceFiles, plan.TraceBytes = inventorySignalDir(filepath.Join(dir, "traces"), traceCutoff)
 	plan.MetricFiles, plan.MetricBytes = inventorySignalDir(filepath.Join(dir, "metrics"), metricCutoff)
+	plan.LogFiles, plan.LogBytes = inventorySignalDir(filepath.Join(dir, "logs"), logCutoff)
 	plan.OldestRunUTC, plan.NewestRunUTC = dateRangeFromPartitions(dir)
-	if ids, err := readSuppressionsFile(dir); err == nil {
+	// Suppressions sit at the data branch root next to traces/, metrics/,
+	// and logs/. dropSignalFiles only removes signal directories, so
+	// suppressions.json survives the orphan commit by default. We report
+	// the count so the confirmation prompt can say "preserved: N
+	// suppressions" without surprising the user.
+	if ids, err := readSuppressionsFromDir(dir); err == nil {
 		plan.SuppressionsN = len(ids)
 	}
 	return plan
@@ -202,6 +217,7 @@ func buildDropPlan(dir string, sel DropSelector) DropPlan {
 func dropSignalFiles(root string, sel DropSelector) error {
 	tracesDir := filepath.Join(root, "traces")
 	metricsDir := filepath.Join(root, "metrics")
+	logsDir := filepath.Join(root, "logs")
 	if sel.BeforeUTC.IsZero() {
 		if sel.DropTraces {
 			if err := os.RemoveAll(tracesDir); err != nil {
@@ -211,6 +227,11 @@ func dropSignalFiles(root string, sel DropSelector) error {
 		if sel.DropMetrics {
 			if err := os.RemoveAll(metricsDir); err != nil {
 				return fmt.Errorf("remove metrics: %w", err)
+			}
+		}
+		if sel.DropLogs {
+			if err := os.RemoveAll(logsDir); err != nil {
+				return fmt.Errorf("remove logs: %w", err)
 			}
 		}
 		return nil
@@ -223,6 +244,11 @@ func dropSignalFiles(root string, sel DropSelector) error {
 	if sel.DropMetrics {
 		if err := removeSignalFilesBefore(metricsDir, sel.BeforeUTC); err != nil {
 			return fmt.Errorf("remove metrics before %s: %w", sel.BeforeUTC.Format("2006-01-02"), err)
+		}
+	}
+	if sel.DropLogs {
+		if err := removeSignalFilesBefore(logsDir, sel.BeforeUTC); err != nil {
+			return fmt.Errorf("remove logs before %s: %w", sel.BeforeUTC.Format("2006-01-02"), err)
 		}
 	}
 	return nil
@@ -346,7 +372,7 @@ func pruneEmptyDirs(root string) error {
 }
 
 func dateRangeFromPartitions(workDir string) (oldest, newest time.Time) {
-	for _, signal := range []string{"traces", "metrics"} {
+	for _, signal := range []string{"traces", "metrics", "logs"} {
 		root := filepath.Join(workDir, signal)
 		_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 			if err != nil || d == nil {
@@ -383,13 +409,18 @@ func dateRangeFromPartitions(workDir string) (oldest, newest time.Time) {
 }
 
 func dropCommitMessage(sel DropSelector) string {
-	switch {
-	case sel.DropTraces && sel.DropMetrics:
-		return "defrost: drop history (traces + metrics)"
-	case sel.DropTraces:
-		return "defrost: drop history (traces)"
-	case sel.DropMetrics:
-		return "defrost: drop history (metrics)"
+	parts := make([]string, 0, 3)
+	if sel.DropTraces {
+		parts = append(parts, "traces")
 	}
-	return "defrost: drop history"
+	if sel.DropMetrics {
+		parts = append(parts, "metrics")
+	}
+	if sel.DropLogs {
+		parts = append(parts, "logs")
+	}
+	if len(parts) == 0 {
+		return "defrost: drop history"
+	}
+	return "defrost: drop history (" + strings.Join(parts, " + ") + ")"
 }

@@ -2,218 +2,171 @@ package otlp
 
 import (
 	"bytes"
-	"compress/gzip"
 	"context"
 	"fmt"
 	"net/http"
 	"testing"
 	"time"
 
-	cmetricspb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
-	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
-	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
-	"google.golang.org/protobuf/proto"
+	"go.opentelemetry.io/collector/pdata/plog"
+	"go.opentelemetry.io/collector/pdata/plog/plogotlp"
+	"go.opentelemetry.io/collector/pdata/pmetric"
+	"go.opentelemetry.io/collector/pdata/pmetric/pmetricotlp"
+	"go.opentelemetry.io/collector/pdata/ptrace"
+	"go.opentelemetry.io/collector/pdata/ptrace/ptraceotlp"
 )
 
-func TestReceiver_AcceptsMetrics(t *testing.T) {
-	r := New()
-	port, err := r.Start()
+func TestReceiver_RoundTrip_Traces(t *testing.T) {
+	sink := NewSink()
+	r, port, err := Start(context.Background(), sink)
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	defer r.Shutdown(context.Background())
 
-	req := &cmetricspb.ExportMetricsServiceRequest{
-		ResourceMetrics: []*metricspb.ResourceMetrics{{
-			ScopeMetrics: []*metricspb.ScopeMetrics{{
-				Metrics: []*metricspb.Metric{{
-					Name: "test.gauge",
-					Data: &metricspb.Metric_Gauge{Gauge: &metricspb.Gauge{
-						DataPoints: []*metricspb.NumberDataPoint{{
-							TimeUnixNano: 1,
-							Attributes:   []*commonpb.KeyValue{strKV("k", "v")},
-							Value:        &metricspb.NumberDataPoint_AsDouble{AsDouble: 1.5},
-						}},
-					}},
-				}},
-			}},
-		}},
-	}
-	body, err := proto.Marshal(req)
+	td := ptrace.NewTraces()
+	rs := td.ResourceSpans().AppendEmpty()
+	rs.Resource().Attributes().PutStr("service.name", "round-trip")
+	rs.ScopeSpans().AppendEmpty().Spans().AppendEmpty().SetName("TestFoo")
+	body, err := ptraceotlp.NewExportRequestFromTraces(td).MarshalProto()
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	resp, err := http.Post(fmt.Sprintf("http://127.0.0.1:%d/v1/metrics", port), "application/x-protobuf", bytes.NewReader(body))
-	if err != nil {
-		t.Fatalf("POST: %v", err)
+
+	url := fmt.Sprintf("http://127.0.0.1:%d/v1/traces", port)
+	deadline := time.Now().Add(5 * time.Second)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		req, err := http.NewRequest("POST", url, bytes.NewReader(body))
+		if err != nil {
+			t.Fatalf("new req: %v", err)
+		}
+		req.Header.Set("Content-Type", "application/x-protobuf")
+		resp, err := http.DefaultClient.Do(req)
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				lastErr = nil
+				break
+			}
+			lastErr = fmt.Errorf("unexpected status %d", resp.StatusCode)
+		} else {
+			lastErr = err
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status: want 200, got %d", resp.StatusCode)
+	if lastErr != nil {
+		t.Fatalf("post: %v", lastErr)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	got, err := r.Shutdown(ctx)
-	if err != nil {
-		t.Fatalf("Shutdown: %v", err)
-	}
-	if len(got) != 1 {
-		t.Fatalf("want 1 buffered request, got %d", len(got))
-	}
-	if got[0].ResourceMetrics[0].ScopeMetrics[0].Metrics[0].Name != "test.gauge" {
-		t.Errorf("buffered metric name wrong: %q", got[0].ResourceMetrics[0].ScopeMetrics[0].Metrics[0].Name)
+	got, _, _ := sink.Drain()
+	if got.ResourceSpans().Len() != 1 {
+		t.Errorf("traces drained: got %d ResourceSpans, want 1", got.ResourceSpans().Len())
 	}
 }
 
-func TestReceiver_RejectsWrongMethod(t *testing.T) {
-	r := New()
-	port, err := r.Start()
+func TestReceiver_RoundTrip_Metrics(t *testing.T) {
+	sink := NewSink()
+	r, port, err := Start(context.Background(), sink)
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	defer r.Shutdown(context.Background())
 
-	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/v1/metrics", port))
-	if err != nil {
-		t.Fatalf("GET: %v", err)
-	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusMethodNotAllowed {
-		t.Errorf("status: want 405, got %d", resp.StatusCode)
-	}
-}
-
-func TestReceiver_RejectsWrongPath(t *testing.T) {
-	r := New()
-	port, err := r.Start()
-	if err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-	defer r.Shutdown(context.Background())
-
-	resp, err := http.Post(fmt.Sprintf("http://127.0.0.1:%d/v1/traces", port), "application/x-protobuf", bytes.NewReader([]byte{}))
-	if err != nil {
-		t.Fatalf("POST: %v", err)
-	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusNotFound {
-		t.Errorf("status: want 404, got %d", resp.StatusCode)
-	}
-}
-
-func TestReceiver_RejectsWrongContentType(t *testing.T) {
-	r := New()
-	port, err := r.Start()
-	if err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-	defer r.Shutdown(context.Background())
-
-	resp, err := http.Post(fmt.Sprintf("http://127.0.0.1:%d/v1/metrics", port), "application/json", bytes.NewReader([]byte("{}")))
-	if err != nil {
-		t.Fatalf("POST: %v", err)
-	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusUnsupportedMediaType {
-		t.Errorf("status: want 415, got %d", resp.StatusCode)
-	}
-}
-
-func TestReceiver_RejectsBadProtobuf(t *testing.T) {
-	r := New()
-	port, err := r.Start()
-	if err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-	defer r.Shutdown(context.Background())
-
-	resp, err := http.Post(fmt.Sprintf("http://127.0.0.1:%d/v1/metrics", port), "application/x-protobuf", bytes.NewReader([]byte{0xff, 0xff, 0xff}))
-	if err != nil {
-		t.Fatalf("POST: %v", err)
-	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Errorf("status: want 400, got %d", resp.StatusCode)
-	}
-}
-
-func TestReceiver_ShutdownDrainsAndIsIdempotent(t *testing.T) {
-	r := New()
-	if _, err := r.Start(); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-	ctx := context.Background()
-	if _, err := r.Shutdown(ctx); err != nil {
-		t.Fatalf("first Shutdown: %v", err)
-	}
-	if _, err := r.Shutdown(ctx); err != nil {
-		t.Errorf("second Shutdown should be a no-op, got: %v", err)
-	}
-}
-
-func TestReceiver_AcceptsGzippedMetrics(t *testing.T) {
-	r := New()
-	port, err := r.Start()
-	if err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-	defer r.Shutdown(context.Background())
-
-	req := &cmetricspb.ExportMetricsServiceRequest{
-		ResourceMetrics: []*metricspb.ResourceMetrics{{
-			ScopeMetrics: []*metricspb.ScopeMetrics{{
-				Metrics: []*metricspb.Metric{{
-					Name: "test.gzip",
-					Data: &metricspb.Metric_Gauge{Gauge: &metricspb.Gauge{
-						DataPoints: []*metricspb.NumberDataPoint{{
-							TimeUnixNano: 1,
-							Attributes:   []*commonpb.KeyValue{strKV("k", "v")},
-							Value:        &metricspb.NumberDataPoint_AsDouble{AsDouble: 2.5},
-						}},
-					}},
-				}},
-			}},
-		}},
-	}
-	raw, err := proto.Marshal(req)
+	md := pmetric.NewMetrics()
+	rm := md.ResourceMetrics().AppendEmpty()
+	rm.Resource().Attributes().PutStr("service.name", "metric-roundtrip")
+	m := rm.ScopeMetrics().AppendEmpty().Metrics().AppendEmpty()
+	m.SetName("test.metric")
+	g := m.SetEmptyGauge()
+	g.DataPoints().AppendEmpty().SetDoubleValue(42)
+	body, err := pmetricotlp.NewExportRequestFromMetrics(md).MarshalProto()
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	var compressed bytes.Buffer
-	gz := gzip.NewWriter(&compressed)
-	if _, err := gz.Write(raw); err != nil {
-		t.Fatalf("gzip write: %v", err)
+	url := fmt.Sprintf("http://127.0.0.1:%d/v1/metrics", port)
+	deadline := time.Now().Add(5 * time.Second)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		req, _ := http.NewRequest("POST", url, bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/x-protobuf")
+		resp, err := http.DefaultClient.Do(req)
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				lastErr = nil
+				break
+			}
+			lastErr = fmt.Errorf("unexpected status %d", resp.StatusCode)
+		} else {
+			lastErr = err
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
-	if err := gz.Close(); err != nil {
-		t.Fatalf("gzip close: %v", err)
+	if lastErr != nil {
+		t.Fatalf("post: %v", lastErr)
 	}
+	_, gotM, _ := sink.Drain()
+	if gotM.ResourceMetrics().Len() != 1 {
+		t.Errorf("metrics drained: got %d, want 1", gotM.ResourceMetrics().Len())
+	}
+}
 
-	httpReq, err := http.NewRequest(http.MethodPost, fmt.Sprintf("http://127.0.0.1:%d/v1/metrics", port), &compressed)
+// TestReceiver_RoundTrip_Logs proves the otlpreceiver factory's
+// CreateLogs path is wired through to our Sink. Same shape as the
+// trace and metric round-trips above: build a tiny plog.Logs, marshal
+// to canonical OTLP, POST to /v1/logs, drain the sink, assert.
+//
+// This is the smallest end-to-end test that exercises the third
+// signal — sink-level coverage (sink_test.go) verifies ConsumeLogs
+// in isolation, but doesn't prove the receiver's HTTP route or
+// factory wiring; this one does.
+func TestReceiver_RoundTrip_Logs(t *testing.T) {
+	sink := NewSink()
+	r, port, err := Start(context.Background(), sink)
 	if err != nil {
-		t.Fatalf("NewRequest: %v", err)
+		t.Fatalf("Start: %v", err)
 	}
-	httpReq.Header.Set("Content-Type", "application/x-protobuf")
-	httpReq.Header.Set("Content-Encoding", "gzip")
-	resp, err := http.DefaultClient.Do(httpReq)
-	if err != nil {
-		t.Fatalf("Do: %v", err)
-	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status: want 200, got %d", resp.StatusCode)
-	}
+	defer r.Shutdown(context.Background())
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	got, err := r.Shutdown(ctx)
+	ld := plog.NewLogs()
+	rl := ld.ResourceLogs().AppendEmpty()
+	rl.Resource().Attributes().PutStr("service.name", "log-roundtrip")
+	rec := rl.ScopeLogs().AppendEmpty().LogRecords().AppendEmpty()
+	rec.SetSeverityText("INFO")
+	rec.Body().SetStr("hello from a test")
+	body, err := plogotlp.NewExportRequestFromLogs(ld).MarshalProto()
 	if err != nil {
-		t.Fatalf("Shutdown: %v", err)
+		t.Fatalf("marshal: %v", err)
 	}
-	if len(got) != 1 {
-		t.Fatalf("want 1 buffered request, got %d", len(got))
+	url := fmt.Sprintf("http://127.0.0.1:%d/v1/logs", port)
+	deadline := time.Now().Add(5 * time.Second)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		req, _ := http.NewRequest("POST", url, bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/x-protobuf")
+		resp, err := http.DefaultClient.Do(req)
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				lastErr = nil
+				break
+			}
+			lastErr = fmt.Errorf("unexpected status %d", resp.StatusCode)
+		} else {
+			lastErr = err
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
-	if got[0].ResourceMetrics[0].ScopeMetrics[0].Metrics[0].Name != "test.gzip" {
-		t.Errorf("buffered metric name wrong: %q", got[0].ResourceMetrics[0].ScopeMetrics[0].Metrics[0].Name)
+	if lastErr != nil {
+		t.Fatalf("post: %v", lastErr)
+	}
+	_, _, gotL := sink.Drain()
+	if gotL.ResourceLogs().Len() != 1 {
+		t.Fatalf("logs drained: got %d ResourceLogs, want 1", gotL.ResourceLogs().Len())
+	}
+	first := gotL.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords().At(0)
+	if got := first.Body().Str(); got != "hello from a test" {
+		t.Errorf("log body: got %q, want %q", got, "hello from a test")
 	}
 }

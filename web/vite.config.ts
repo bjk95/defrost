@@ -17,7 +17,12 @@ export default defineConfig({
     },
   },
   build: {
-    outDir: "dist",
+    // Output to internal/serve/assets/dist so the Go //go:embed directive
+    // in internal/serve/assets/assets.go (`//go:embed all:dist`) can
+    // pick up the SPA bundle from a sibling-of-the-embed-file location.
+    // The dist directory is committed so `go install` works without a
+    // Node toolchain.
+    outDir: path.resolve(__dirname, "../internal/serve/assets/dist"),
     emptyOutDir: true,
   },
   test: {

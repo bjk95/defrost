@@ -22,10 +22,38 @@ defrost serve --port 8080
 | `--port` | int | `6969` | Port to bind on `127.0.0.1`. |
 | `--repo-dir` | string | `.` | Path to the git repo. |
 | `--data-branch` | string | `_defrost` | Branch name to read from. |
-| `--dev`, `-d` | bool | `false` | Dev mode: read the local scratch dir instead of the data branch. |
+| `--dev`, `-d` | bool | `false` | Dev mode: read only from the local `<repo>/.defrost/` tree (no `git fetch`). |
 
 The server binds only to `127.0.0.1` — never to `0.0.0.0`. There is no
 flag to expose it on a public interface.
+
+This subcommand is only available on the full `defrost` binary.
+`defrost-ci serve` is a stub that prints the install hint and exits
+1 — see [installation](../../../guides/quickstart/#1-install).
+
+## How it serves data
+
+Reads happen against an embedded DuckDB instance at
+`<repo>/.defrost/cache.duckdb`, hydrated from canonical OTLP files in
+`<repo>/.defrost/` (a persistent worktree of the data branch).
+
+Steady-state cost of refreshing the dashboard is one `git ls-remote`
+per request:
+
+1. **`git ls-remote origin <branch>`** (~50ms typical). If the SHA
+   matches `cache_meta.last_sha` in DuckDB, return immediately —
+   nothing to do.
+2. Otherwise, fetch + `git reset --hard` against the persistent
+   worktree. If the remote was force-rewritten (e.g. by `defrost drop
+   history`), the materialised tables get truncated and re-hydrated
+   from scratch.
+3. Walk new files since the last hydrate, decode the OTLP bytes, and
+   `INSERT` into `traces` / `metrics` / `logs`. Files already in
+   `hydration_state` are skipped.
+4. Update `cache_meta.last_sha` so the next request can short-circuit.
+
+First-time cost (cold cache, full clone): proportional to the size of
+the data branch. Subsequent loads are sub-second on unchanged remotes.
 
 ## What you get
 

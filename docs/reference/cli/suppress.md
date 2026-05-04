@@ -4,12 +4,15 @@ title: '`defrost suppress`'
 
 Manage the suppression list. When every failing test in a `defrost exec`
 run is suppressed, the exit code is rewritten to `0` so CI can stay
-green without skipping the test in source. Suppressions are stored in
-`suppressions.json` on the data branch — see
-[storage layout](../../storage-layout/#suppressionsjson).
+green without skipping the test in source. Suppressions are stored at
+the root of the `_defrost` data branch as `suppressions.json`. See
+[storage layout](../../storage-layout/#suppressionsjson) for the file
+format.
 
 `defrost suppress` has three subcommands: `add`, `remove`, `list`. All
-mutations are idempotent.
+mutations are idempotent. Mutations push to the data branch
+immediately (no manual commit needed); same conflict-resolution model
+as run writes (fetch + replay-mutation on non-FF, up to 5 retries).
 
 ## `defrost suppress add`
 
@@ -30,10 +33,11 @@ defrost suppress add \
 |---|---|---|---|
 | `--repo-dir` | string | `.` | Path to the git repo. |
 | `--data-branch` | string | `_defrost` | Branch where suppressions are stored. |
-| `--dev`, `-d` | bool | `false` | Read/write the local scratch dir. |
+| `--dev`, `-d` | bool | `false` | Read/write only the local `<repo>/.defrost/` tree (no remote operations). |
 
-**Exit codes:** `0` on success (including no-op). `1` on commit/push
-failure. `2` if no test IDs were provided.
+**Exit codes:** `0` on success (including no-op when every ID was
+already on the list). `1` on commit/push failure. `2` if no test IDs
+were provided.
 
 ## `defrost suppress remove`
 
@@ -47,7 +51,7 @@ defrost suppress remove [flags] <test-id>
 |---|---|---|---|
 | `--repo-dir` | string | `.` | Path to the git repo. |
 | `--data-branch` | string | `_defrost` | Branch where suppressions are stored. |
-| `--dev`, `-d` | bool | `false` | Read/write the local scratch dir. |
+| `--dev`, `-d` | bool | `false` | Read/write only the local `<repo>/.defrost/` tree (no remote operations). |
 
 **Exit codes:** `0` on success (including no-op when the ID was already
 absent). `1` on commit/push failure.
@@ -64,7 +68,7 @@ defrost suppress list [flags]
 |---|---|---|---|
 | `--repo-dir` | string | `.` | Path to the git repo. |
 | `--data-branch` | string | `_defrost` | Branch to read from. |
-| `--dev`, `-d` | bool | `false` | Read the local scratch dir. |
+| `--dev`, `-d` | bool | `false` | Read only from the local `<repo>/.defrost/` tree (no remote operations). |
 
 **Exit codes:** `0` on success. `1` on read failure.
 
@@ -81,7 +85,8 @@ After a child exits with a non-zero code, `defrost exec` reads
 - File-level errors (test IDs ending in `::<file-error>`) are never
   suppressed — these indicate the test runner itself failed and should
   not be hidden.
-- If persistence failed, suppression is skipped entirely and the exit
-  code is rewritten to `1`.
 
-See also [`defrost exec` exit codes](../exec/#exit-codes).
+A persist failure does **not** disable suppression. The test command's
+exit signal is what matters; suppression rewriting still applies. See
+[`defrost exec` exit codes](../exec/#exit-codes) and
+[troubleshooting persist failures](../../../guides/troubleshooting/persist-failed/).
