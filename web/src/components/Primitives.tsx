@@ -287,23 +287,23 @@ export function HistoryStrip({
   cellSize?: number;
   gap?: number;
 }) {
-  const ordered = [...runs].reverse();
+  // Render only runs where this test has data. Empty placeholder
+  // cells were removed to keep the strip right-aligned with no
+  // visual gaps — the strip's rightmost cell is always present, and
+  // shorter rows extend leftward from the right edge.
   const byRun = new Map(row.cells.map((c) => [c.run_id, c] as const));
+  const ordered = [...runs].reverse().filter((r) => byRun.has(r.run_id));
   return (
     <div style={{ display: "flex", gap, alignItems: "center" }}>
       {ordered.map((run) => {
-        const cell = byRun.get(run.run_id);
+        const cell = byRun.get(run.run_id)!;
         return (
           <RunCell
             key={run.run_id}
-            status={cell?.status}
-            onClick={cell && onCellClick ? () => onCellClick(run, cell) : undefined}
+            status={cell.status}
+            onClick={onCellClick ? () => onCellClick(run, cell) : undefined}
             selected={selectedRunId === run.run_id}
-            title={
-              cell
-                ? `${cell.status} · ${fmt.duration(cell.duration_ms)} · ${run.commit?.slice(0, 7) ?? ""} · ${fmt.relTime(run.ts)}`
-                : `not in run ${run.commit?.slice(0, 7) ?? ""}`
-            }
+            title={`${cell.status} · ${fmt.duration(cell.duration_ms)} · ${run.commit?.slice(0, 7) ?? ""} · ${fmt.relTime(run.ts)}`}
             size={cellSize}
           />
         );
@@ -355,11 +355,13 @@ export function GroupHistoryStrip({
     else next = "skip";
     byRun.set(c.run_id, next!);
   }
-  const ordered = [...runs].reverse();
+  // Render only runs where this branch has data — same right-align
+  // policy as HistoryStrip; no placeholder cells.
+  const ordered = [...runs].reverse().filter((r) => byRun.has(r.run_id));
   return (
     <div style={{ display: "flex", gap: STRIP_GAP }}>
       {ordered.map((r) => {
-        const status = byRun.get(r.run_id);
+        const status = byRun.get(r.run_id)!;
         return (
           <div
             key={r.run_id}
@@ -368,8 +370,7 @@ export function GroupHistoryStrip({
               width: STRIP_CELL,
               height: STRIP_CELL,
               borderRadius: 2,
-              background: status ? statusColor(status) : "transparent",
-              border: status ? "none" : "1px dashed var(--border)",
+              background: statusColor(status),
               opacity: status === "skip" ? 0.6 : 1,
             }}
           />

@@ -139,6 +139,13 @@ function TestsPageInner({
   const runStripWidth = stripWidth(visibleRuns.length);
   const gridColumns = `minmax(0,1fr) 80px ${runStripWidth}px`;
 
+  // Zero right padding on every row so the run-status column's
+  // rightmost cell sits at the right edge of <main>'s content area
+  // (the visible "page right edge" the user sees, which is inside
+  // <main>'s 24px padding). The 8px row gutter we keep on
+  // left/top/bottom would otherwise leave a small gap there.
+  const ROW_PAD_RIGHT = 0;
+
   const totalStats = useMemo(() => {
     let pass = 0, fail = 0, skip = 0, total = 0;
     for (const t of filtered) {
@@ -224,6 +231,7 @@ function TestsPageInner({
           letterSpacing: 0.06,
           textTransform: "uppercase",
           paddingBottom: 8,
+          paddingRight: ROW_PAD_RIGHT,
           marginBottom: 4,
           borderBottom: "1px solid var(--border)",
         }}
@@ -256,6 +264,7 @@ function TestsPageInner({
           onOpenTest={onOpenTest}
           suppressedSet={suppressedSet}
           gridColumns={gridColumns}
+          padRight={ROW_PAD_RIGHT}
         />
       ))}
     </div>
@@ -273,6 +282,7 @@ function TreeNodeView({
   onOpenTest,
   suppressedSet,
   gridColumns,
+  padRight,
 }: {
   node: TreeNode;
   runs: RunSummary[];
@@ -281,6 +291,7 @@ function TreeNodeView({
   onOpenTest: (testId: string) => void;
   suppressedSet: Set<string>;
   gridColumns: string;
+  padRight: number;
 }) {
   if (node.kind === "leaf") {
     return (
@@ -292,6 +303,7 @@ function TreeNodeView({
         onClick={() => onOpenTest(node.test.test_id)}
         isSuppressed={suppressedSet.has(node.test.test_id)}
         gridColumns={gridColumns}
+        padRight={padRight}
       />
     );
   }
@@ -306,6 +318,7 @@ function TreeNodeView({
         collapsed={isCollapsed}
         onToggle={() => onToggle(node.path)}
         gridColumns={gridColumns}
+        padRight={padRight}
       />
       {!isCollapsed &&
         node.children.map((c) => (
@@ -318,6 +331,7 @@ function TreeNodeView({
             onOpenTest={onOpenTest}
             suppressedSet={suppressedSet}
             gridColumns={gridColumns}
+            padRight={padRight}
           />
         ))}
     </div>
@@ -346,6 +360,7 @@ function BranchHeader({
   collapsed,
   onToggle,
   gridColumns,
+  padRight,
 }: {
   node: TreeBranch;
   stats: { pass: number; fail: number; skip: number; total: number };
@@ -353,6 +368,7 @@ function BranchHeader({
   collapsed: boolean;
   onToggle: () => void;
   gridColumns: string;
+  padRight: number;
 }) {
   const indent = ROW_BASE_INDENT + node.depth * ROW_INDENT_STEP;
   const isTop = node.depth === 0;
@@ -364,7 +380,7 @@ function BranchHeader({
         gridTemplateColumns: gridColumns,
         gap: 16,
         alignItems: "center",
-        padding: `${isTop ? 10 : 6}px 8px ${isTop ? 10 : 6}px ${indent}px`,
+        padding: `${isTop ? 10 : 6}px ${padRight}px ${isTop ? 10 : 6}px ${indent}px`,
         background: isTop ? "var(--bg-subtle)" : "transparent",
         borderTop: isTop ? "1px solid var(--border)" : "none",
         borderBottom: isTop ? "1px solid var(--border)" : "1px dashed var(--border)",
@@ -437,6 +453,7 @@ function TestRowView({
   onClick,
   isSuppressed,
   gridColumns,
+  padRight,
 }: {
   test: TestRow;
   leafName: string;
@@ -445,6 +462,7 @@ function TestRowView({
   onClick: () => void;
   isSuppressed: boolean;
   gridColumns: string;
+  padRight: number;
 }) {
   const [hover, setHover] = useState(false);
   const stats = testStats(test.cells);
@@ -459,7 +477,7 @@ function TestRowView({
         gridTemplateColumns: gridColumns,
         gap: 16,
         alignItems: "center",
-        padding: `7px 8px 7px ${indent}px`,
+        padding: `7px ${padRight}px 7px ${indent}px`,
         cursor: "pointer",
         background: hover ? "var(--bg-subtle)" : "transparent",
         borderBottom: "1px solid var(--border)",
