@@ -111,7 +111,7 @@ jobs:
       - name: Assert result count matches expected
         run: |
           # Parse the "→ P passed   ✗ F failed   ⊘ S skipped" summary
-          # line. Total = P + F + S. Expected 10 across the pytest example.
+          # line. Total = P + F + S + Suppressed. Expected 10 across the pytest example.
           line=$(grep -E '^→ [0-9]+ passed' out.txt | tail -1)
           if [ -z "$line" ]; then
             echo "FAIL: no result-summary line ('→ N passed   ✗ N failed   ⊘ N skipped') found"
@@ -119,11 +119,11 @@ jobs:
             exit 1
           fi
           echo "summary: $line"
-          counts=$(echo "$line" | sed -E 's/^→ ([0-9]+) passed[[:space:]]+✗ ([0-9]+) failed[[:space:]]+⊘ ([0-9]+) skipped.*/\1 \2 \3/')
+          counts=$(echo "$line" | sed -E 's/^→ ([0-9]+) passed[[:space:]]+✗ ([0-9]+) failed[[:space:]]+⊘ ([0-9]+) skipped[[:space:]]+✱ ([0-9]+) suppressed.*/\1 \2 \3 \4/')
           set -- $counts
-          total=$(( $1 + $2 + $3 ))
+          total=$(( $1 + $2 + $3 + $4 ))
           if [ "$total" -ne 10 ]; then
-            echo "FAIL: expected 10 results total, got $total ($1 pass, $2 fail, $3 skip)"
+            echo "FAIL: expected 10 results total, got $total ($1 pass, $2 fail, $3 skip, $4 suppressed)"
             cat out.txt
             exit 1
           fi
@@ -198,11 +198,11 @@ jobs:
             exit 1
           fi
           echo "summary: $line"
-          counts=$(echo "$line" | sed -E 's/^→ ([0-9]+) passed[[:space:]]+✗ ([0-9]+) failed[[:space:]]+⊘ ([0-9]+) skipped.*/\1 \2 \3/')
+          counts=$(echo "$line" | sed -E 's/^→ ([0-9]+) passed[[:space:]]+✗ ([0-9]+) failed[[:space:]]+⊘ ([0-9]+) skipped[[:space:]]+✱ ([0-9]+) suppressed.*/\1 \2 \3 \4/')
           set -- $counts
-          total=$(( $1 + $2 + $3 ))
+          total=$(( $1 + $2 + $3 + $4 ))
           if [ "$total" -ne 12 ]; then
-            echo "FAIL: expected 12 results total, got $total ($1 pass, $2 fail, $3 skip)"
+            echo "FAIL: expected 12 results total, got $total ($1 pass, $2 fail, $3 skip, $4 suppressed)"
             cat examples/javascript/out.txt
             exit 1
           fi
@@ -268,11 +268,11 @@ jobs:
             exit 1
           fi
           echo "summary: $line"
-          counts=$(echo "$line" | sed -E 's/^→ ([0-9]+) passed[[:space:]]+✗ ([0-9]+) failed[[:space:]]+⊘ ([0-9]+) skipped.*/\1 \2 \3/')
+          counts=$(echo "$line" | sed -E 's/^→ ([0-9]+) passed[[:space:]]+✗ ([0-9]+) failed[[:space:]]+⊘ ([0-9]+) skipped[[:space:]]+✱ ([0-9]+) suppressed.*/\1 \2 \3 \4/')
           set -- $counts
-          total=$(( $1 + $2 + $3 ))
+          total=$(( $1 + $2 + $3 + $4 ))
           if [ "$total" -ne 12 ]; then
-            echo "FAIL: expected 12 results total, got $total ($1 pass, $2 fail, $3 skip)"
+            echo "FAIL: expected 12 results total, got $total ($1 pass, $2 fail, $3 skip, $4 suppressed)"
             cat examples/typescript/out.txt
             exit 1
           fi
@@ -355,11 +355,11 @@ jobs:
             exit 1
           fi
           echo "summary: $line"
-          counts=$(echo "$line" | sed -E 's/^→ ([0-9]+) passed[[:space:]]+✗ ([0-9]+) failed[[:space:]]+⊘ ([0-9]+) skipped.*/\1 \2 \3/')
+          counts=$(echo "$line" | sed -E 's/^→ ([0-9]+) passed[[:space:]]+✗ ([0-9]+) failed[[:space:]]+⊘ ([0-9]+) skipped[[:space:]]+✱ ([0-9]+) suppressed.*/\1 \2 \3 \4/')
           set -- $counts
-          total=$(( $1 + $2 + $3 ))
+          total=$(( $1 + $2 + $3 + $4 ))
           if [ "$total" -ne 30 ]; then
-            echo "FAIL: expected 30 results total, got $total ($1 pass, $2 fail, $3 skip)"
+            echo "FAIL: expected 30 results total, got $total ($1 pass, $2 fail, $3 skip, $4 suppressed)"
             cat examples/promptfoo/out.txt
             exit 1
           fi
@@ -513,11 +513,11 @@ jobs:
             exit 1
           fi
           echo "summary: $line"
-          counts=$(echo "$line" | sed -E 's/^→ ([0-9]+) passed[[:space:]]+✗ ([0-9]+) failed[[:space:]]+⊘ ([0-9]+) skipped.*/\1 \2 \3/')
+          counts=$(echo "$line" | sed -E 's/^→ ([0-9]+) passed[[:space:]]+✗ ([0-9]+) failed[[:space:]]+⊘ ([0-9]+) skipped[[:space:]]+✱ ([0-9]+) suppressed.*/\1 \2 \3 \4/')
           set -- $counts
-          total=$(( $1 + $2 + $3 ))
+          total=$(( $1 + $2 + $3 + $4 ))
           if [ "$total" -ne 12 ]; then
-            echo "FAIL: expected 12 results total, got $total ($1 pass, $2 fail, $3 skip)"
+            echo "FAIL: expected 12 results total, got $total ($1 pass, $2 fail, $3 skip, $4 suppressed)"
             cat examples/vitest-js/out.txt
             exit 1
           fi
@@ -583,11 +583,11 @@ jobs:
             exit 1
           fi
           echo "summary: $line"
-          counts=$(echo "$line" | sed -E 's/^→ ([0-9]+) passed[[:space:]]+✗ ([0-9]+) failed[[:space:]]+⊘ ([0-9]+) skipped.*/\1 \2 \3/')
+          counts=$(echo "$line" | sed -E 's/^→ ([0-9]+) passed[[:space:]]+✗ ([0-9]+) failed[[:space:]]+⊘ ([0-9]+) skipped[[:space:]]+✱ ([0-9]+) suppressed.*/\1 \2 \3 \4/')
           set -- $counts
-          total=$(( $1 + $2 + $3 ))
+          total=$(( $1 + $2 + $3 + $4 ))
           if [ "$total" -ne 12 ]; then
-            echo "FAIL: expected 12 results total, got $total ($1 pass, $2 fail, $3 skip)"
+            echo "FAIL: expected 12 results total, got $total ($1 pass, $2 fail, $3 skip, $4 suppressed)"
             cat examples/vitest-ts/out.txt
             exit 1
           fi
@@ -653,9 +653,9 @@ jobs:
             exit 1
           fi
           echo "summary: $line"
-          counts=$(echo "$line" | sed -E 's/^→ ([0-9]+) passed[[:space:]]+✗ ([0-9]+) failed[[:space:]]+⊘ ([0-9]+) skipped.*/\1 \2 \3/')
+          counts=$(echo "$line" | sed -E 's/^→ ([0-9]+) passed[[:space:]]+✗ ([0-9]+) failed[[:space:]]+⊘ ([0-9]+) skipped[[:space:]]+✱ ([0-9]+) suppressed.*/\1 \2 \3 \4/')
           set -- $counts
-          total=$(( $1 + $2 + $3 ))
+          total=$(( $1 + $2 + $3 + $4 ))
           if [ "$total" -lt 20 ]; then
             echo "FAIL: expected >= 20 results total, got $total"
             cat web/out.txt
