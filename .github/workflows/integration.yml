@@ -78,6 +78,18 @@ jobs:
         # stub that prints the install hint).
         run: go build -o defrost ./cmd/defrost-ci
 
+      - name: Configure git auth for defrost persist
+        # actions/checkout@v4 wires auth into the checked-out repo,
+        # but defrost clones into its own temp dir to push the data
+        # branch — that fresh clone has no auth unless we set a global
+        # url.<base>.insteadOf rule. Without this, persist silently
+        # fails (the warn-not-fail path), and no run files land on
+        # origin/_defrost.
+        run: |
+          git config --global url."https://x-access-token:${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Run defrost against examples/python
         id: run
         run: |
