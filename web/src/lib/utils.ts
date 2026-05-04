@@ -336,8 +336,12 @@ export function useSuppressions(): SuppressionsView {
   };
 }
 
-export const cn = (...xs: Array<string | false | null | undefined>) =>
-  xs.filter(Boolean).join(" ");
+import { clsx, type ClassValue } from "clsx";
+import { twMerge } from "tailwind-merge";
+
+export function cn(...inputs: ClassValue[]): string {
+  return twMerge(clsx(inputs));
+}
 
 // Map a per-run cell lookup so consumers can do byRun.get(runId).
 export function cellsByRun(cells: Cell[]): Map<string, Cell> {
