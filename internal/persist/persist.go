@@ -298,7 +298,7 @@ func (b *gitBackend) InsertNewRun(run Run) error {
 			return err
 		}
 	}
-	if err := writeRunFiles(filepath.Join(workDir, "data"), run); err != nil {
+	if err := writeRunFiles(workDir, run); err != nil {
 		return err
 	}
 	msg := run.CommitMessage
