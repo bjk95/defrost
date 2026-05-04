@@ -87,13 +87,14 @@ func execWith(a runner.Adapter, c ExecCmd) int {
 
 	results, adapterMetrics, code := a.Run(c.Cmd, run)
 
+	// Drain the sink once after the child exits; this also shuts the
+	// receiver down. Merge the three signals into the local pdata so
+	// downstream code sees one set of structures per signal.
+	receiverLogs := plog.NewLogs()
 	if td, mt, lg := drainSink(sink, receiver); persistEnabled && !persistFailed {
-		// Merge in-process adapter output into the sink's accumulator
-		// so the gitExporter sees a single set of bytes per signal.
 		td.ResourceSpans().MoveAndAppendTo(results.ResourceSpans())
 		mt.ResourceMetrics().MoveAndAppendTo(adapterMetrics.ResourceMetrics())
-		lg.ResourceLogs() // unused but referenced
-		_ = lg
+		lg.ResourceLogs().MoveAndAppendTo(receiverLogs.ResourceLogs())
 	}
 
 	pass, fail, skip := tallyResults(results)
@@ -113,12 +114,20 @@ func execWith(a runner.Adapter, c ExecCmd) int {
 		dur.ResourceMetrics().MoveAndAppendTo(adapterMetrics.ResourceMetrics())
 
 		// Drain the sink one more time in case the SDK was still
-		// flushing during our spans/metrics build above.
-		_, _, _ = drainSink(sink, nil)
+		// flushing during our spans/metrics build above. Merge any
+		// late arrivals across all three signals.
+		td2, mt2, lg2 := drainSink(sink, nil)
+		td2.ResourceSpans().MoveAndAppendTo(results.ResourceSpans())
+		mt2.ResourceMetrics().MoveAndAppendTo(adapterMetrics.ResourceMetrics())
+		lg2.ResourceLogs().MoveAndAppendTo(receiverLogs.ResourceLogs())
 
-		if err := persistRun(pOpts, run, results, adapterMetrics, plog.NewLogs()); err != nil {
+		if err := persistRun(pOpts, run, results, adapterMetrics, receiverLogs); err != nil {
 			persistFailed = true
 			logPersistFailure(err)
+		} else {
+			fmt.Fprintf(os.Stderr,
+				"defrost: persisted: spans=%d, metric_points=%d, log_records=%d\n",
+				results.SpanCount(), adapterMetrics.DataPointCount(), receiverLogs.LogRecordCount())
 		}
 	}
 
