@@ -1,11 +1,6 @@
 /*
  * Starlight + Tailwind v4 integration following the official guide:
  * https://starlight.astro.build/guides/css-and-tailwind/#tailwind-css
- *
- * Layer order matters. Tailwind's `base` and Starlight's own styles
- * sit at the bottom; theme tokens come next; component-level styles
- * (Starlight's content) sit above; and Tailwind utilities sit on top
- * so a utility class always wins over a component default.
  */
 
 @layer base, starlight, theme, components, utilities;
@@ -19,9 +14,8 @@
 
 /*
  * House design tokens, mirrored from the dashboard's web/src/index.css.
- * These are the source of truth — Starlight's --sl-color-* and Tailwind's
- * --color-* both reference them, so the docs site and the dashboard
- * render in identical palettes.
+ * Blue is intentionally absent — the dashboard's aesthetic is monochrome
+ * (Vercel-style), with status colors reserved for test results.
  */
 :root {
   --gray-0: oklch(1 0 0);
@@ -37,20 +31,20 @@
   --gray-900: oklch(0.16 0 0);
   --gray-1000: oklch(0.09 0 0);
 
-  --blue-500: oklch(0.60 0.22 255);
-  --blue-600: oklch(0.54 0.22 258);
-  --blue-700: oklch(0.45 0.20 258);
-
   --success: oklch(0.62 0.17 150);
   --warning: oklch(0.76 0.16 75);
   --danger: oklch(0.58 0.24 27);
+
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
 }
 
 /*
- * Starlight theme override. Light mode uses the lighter end of the
- * gray ramp; dark mode flips it. Starlight's --sl-color-white is the
- * foreground and --sl-color-black is the background — counterintuitive
- * but documented.
+ * Light theme. Accent collapses onto the foreground color so active
+ * sidebar items render as a solid near-black pill with white text —
+ * the Vercel-docs aesthetic. There is no blue anywhere.
  */
 :root[data-theme="light"] {
   --sl-color-white: var(--gray-900);
@@ -63,18 +57,18 @@
   --sl-color-gray-7: var(--gray-100);
   --sl-color-black: var(--gray-0);
 
-  --sl-color-accent-low: oklch(0.95 0.04 258);
-  --sl-color-accent: var(--blue-600);
-  --sl-color-accent-high: var(--blue-700);
+  --sl-color-accent-low: var(--gray-100);
+  --sl-color-accent: var(--gray-900);
+  --sl-color-accent-high: var(--gray-1000);
 
   --sl-color-text: var(--gray-900);
-  --sl-color-text-accent: var(--blue-700);
+  --sl-color-text-accent: var(--gray-900);
   --sl-color-text-invert: var(--gray-0);
   --sl-color-bg: var(--gray-0);
   --sl-color-bg-nav: var(--gray-0);
   --sl-color-bg-sidebar: var(--gray-0);
   --sl-color-bg-inline-code: var(--gray-100);
-  --sl-color-bg-accent: var(--blue-600);
+  --sl-color-bg-accent: var(--gray-900);
   --sl-color-hairline-light: var(--gray-200);
   --sl-color-hairline: var(--gray-200);
   --sl-color-hairline-shade: var(--gray-300);
@@ -91,18 +85,18 @@
   --sl-color-gray-7: var(--gray-900);
   --sl-color-black: var(--gray-1000);
 
-  --sl-color-accent-low: oklch(0.32 0.10 258);
-  --sl-color-accent: var(--blue-500);
-  --sl-color-accent-high: oklch(0.92 0.06 258);
+  --sl-color-accent-low: var(--gray-800);
+  --sl-color-accent: var(--gray-50);
+  --sl-color-accent-high: var(--gray-0);
 
   --sl-color-text: var(--gray-50);
-  --sl-color-text-accent: var(--blue-500);
+  --sl-color-text-accent: var(--gray-50);
   --sl-color-text-invert: var(--gray-900);
   --sl-color-bg: var(--gray-1000);
   --sl-color-bg-nav: var(--gray-1000);
   --sl-color-bg-sidebar: var(--gray-1000);
   --sl-color-bg-inline-code: var(--gray-800);
-  --sl-color-bg-accent: var(--blue-500);
+  --sl-color-bg-accent: var(--gray-50);
   --sl-color-hairline-light: oklch(1 0 0 / 0.08);
   --sl-color-hairline: oklch(1 0 0 / 0.1);
   --sl-color-hairline-shade: oklch(1 0 0 / 0.15);
@@ -118,4 +112,53 @@ html {
   font-feature-settings: 'ss01', 'cv11', 'tnum';
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+}
+
+/*
+ * Tighter, dashboard-aligned corner radii. Starlight does not expose a
+ * single radius token, so we override the components directly. 6px on
+ * chrome (sidebar items, search box, TOC), 8px on surfaces (code blocks,
+ * asides). Matches the dashboard's --radius-sm / --radius-md.
+ */
+@layer components {
+  .sidebar-content a,
+  .sidebar-content summary,
+  .sidebar-content button {
+    border-radius: var(--radius-sm);
+  }
+
+  starlight-toc nav ul a,
+  mobile-starlight-toc nav ul a {
+    border-radius: var(--radius-sm);
+  }
+
+  .expressive-code .frame,
+  .expressive-code .frame pre {
+    border-radius: var(--radius-md);
+  }
+
+  .expressive-code .frame.has-title:not(.is-terminal) .header {
+    border-top-left-radius: var(--radius-md);
+    border-top-right-radius: var(--radius-md);
+  }
+
+  .starlight-aside {
+    border-radius: var(--radius-md);
+  }
+
+  button[data-open-modal],
+  [data-open-modal] kbd {
+    border-radius: var(--radius-sm);
+  }
+
+  /* Pagefind search dialog input + result cards */
+  dialog[data-pagefind-ui] .pagefind-ui__search-input,
+  dialog[data-pagefind-ui] .pagefind-ui__result {
+    border-radius: var(--radius-sm);
+  }
+
+  /* Inline code: tighter than the default rounded-full Starlight uses */
+  :not(pre) > code {
+    border-radius: var(--radius-xs);
+  }
 }
