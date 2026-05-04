@@ -27,15 +27,22 @@ CREATE INDEX IF NOT EXISTS idx_traces_trace_id ON traces(trace_id);
 CREATE TABLE IF NOT EXISTS metrics (
     metric_name   VARCHAR,
     metric_unit   VARCHAR,
-    value         DOUBLE,
+    metric_type   VARCHAR,            -- gauge | sum | histogram | exp_histogram
+    value         DOUBLE,             -- scalar for gauge/sum, mean for hist (lossy summary)
     ts            TIMESTAMP,
     start_ts      TIMESTAMP,
     trace_id      VARCHAR,
     attrs         JSON,
-    resource      JSON
+    resource      JSON,
+    histogram     JSON                -- full payload for histogram/exp_histogram, NULL otherwise
 );
 CREATE INDEX IF NOT EXISTS idx_metrics_name_ts ON metrics(metric_name, ts);
 CREATE INDEX IF NOT EXISTS idx_metrics_trace_id ON metrics(trace_id);
+-- Idempotent upgrade for caches created before metric_type / histogram
+-- columns existed. CREATE TABLE IF NOT EXISTS won't ALTER an existing
+-- table, so we add columns conditionally.
+ALTER TABLE metrics ADD COLUMN IF NOT EXISTS metric_type VARCHAR;
+ALTER TABLE metrics ADD COLUMN IF NOT EXISTS histogram JSON;
 
 CREATE TABLE IF NOT EXISTS logs (
     trace_id     VARCHAR,

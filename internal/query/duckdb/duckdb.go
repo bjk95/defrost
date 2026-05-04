@@ -407,8 +407,18 @@ func (q *Querier) Grid(w query.RunWindow) (query.GridData, error) {
 	for _, rr := range runs {
 		traceIDtoRunID[rr.traceID] = rr.run.RunID
 	}
+	// Filter to spans that actually carry test-case semantics — i.e.
+	// have an attrs.test.case.result.status set. The receiver now
+	// captures any user-emitted span (the OTel SDK in the child can
+	// emit application/library spans alongside the adapter-synthesised
+	// test-case spans), and we don't want those polluting the heat-map
+	// grid as fake "tests" with empty status. The defrost.run root
+	// span is filtered out separately by name (it doesn't carry the
+	// test attribute either).
 	cellRows, err := q.db.QueryContext(ctx, fmt.Sprintf(`SELECT trace_id, span_name, start_time, end_time, attrs FROM traces
-        WHERE span_name <> 'defrost.run' AND trace_id IN (%s)`, placeholders(len(traceIDs))),
+        WHERE span_name <> 'defrost.run'
+          AND json_extract_string(attrs, '$."test.case.result.status"') IS NOT NULL
+          AND trace_id IN (%s)`, placeholders(len(traceIDs))),
 		anyArgs(traceIDs)...)
 	if err != nil {
 		return query.GridData{}, fmt.Errorf("query test spans: %w", err)

@@ -114,9 +114,9 @@ func insertTraces(ctx context.Context, tx *sql.Tx, td ptrace.Traces) error {
 
 func insertMetrics(ctx context.Context, tx *sql.Tx, md pmetric.Metrics) error {
 	stmt, err := tx.PrepareContext(ctx, `INSERT INTO metrics
-        (metric_name, metric_unit, value, ts, start_ts, trace_id,
-         attrs, resource)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+        (metric_name, metric_unit, metric_type, value, ts, start_ts,
+         trace_id, attrs, resource, histogram)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return err
 	}
@@ -135,30 +135,28 @@ func insertMetrics(ctx context.Context, tx *sql.Tx, md pmetric.Metrics) error {
 				case pmetric.MetricTypeGauge:
 					for d := 0; d < m.Gauge().DataPoints().Len(); d++ {
 						dp := m.Gauge().DataPoints().At(d)
-						if err := insertNumberDP(ctx, stmt, m, dp, resJSON); err != nil {
+						if err := insertNumberDP(ctx, stmt, m, "gauge", dp, resJSON); err != nil {
 							return err
 						}
 					}
 				case pmetric.MetricTypeSum:
 					for d := 0; d < m.Sum().DataPoints().Len(); d++ {
 						dp := m.Sum().DataPoints().At(d)
-						if err := insertNumberDP(ctx, stmt, m, dp, resJSON); err != nil {
+						if err := insertNumberDP(ctx, stmt, m, "sum", dp, resJSON); err != nil {
 							return err
 						}
 					}
 				case pmetric.MetricTypeHistogram:
 					for d := 0; d < m.Histogram().DataPoints().Len(); d++ {
 						dp := m.Histogram().DataPoints().At(d)
-						val := histogramMean(dp.Sum(), dp.Count())
-						if err := insertHistogramDP(ctx, stmt, m, dp.Timestamp(), dp.StartTimestamp(), val, dp.Attributes(), exemplarTraceID(dp.Exemplars()), resJSON); err != nil {
+						if err := insertHistogramDP(ctx, stmt, m, "histogram", dp.Timestamp(), dp.StartTimestamp(), histogramMean(dp.Sum(), dp.Count()), dp.Attributes(), exemplarTraceID(dp.Exemplars()), resJSON, encodeHistogramDP(dp)); err != nil {
 							return err
 						}
 					}
 				case pmetric.MetricTypeExponentialHistogram:
 					for d := 0; d < m.ExponentialHistogram().DataPoints().Len(); d++ {
 						dp := m.ExponentialHistogram().DataPoints().At(d)
-						val := histogramMean(dp.Sum(), dp.Count())
-						if err := insertHistogramDP(ctx, stmt, m, dp.Timestamp(), dp.StartTimestamp(), val, dp.Attributes(), exemplarTraceID(dp.Exemplars()), resJSON); err != nil {
+						if err := insertHistogramDP(ctx, stmt, m, "exp_histogram", dp.Timestamp(), dp.StartTimestamp(), histogramMean(dp.Sum(), dp.Count()), dp.Attributes(), exemplarTraceID(dp.Exemplars()), resJSON, encodeExpHistogramDP(dp)); err != nil {
 							return err
 						}
 					}
@@ -169,7 +167,7 @@ func insertMetrics(ctx context.Context, tx *sql.Tx, md pmetric.Metrics) error {
 	return nil
 }
 
-func insertNumberDP(ctx context.Context, stmt *sql.Stmt, m pmetric.Metric, dp pmetric.NumberDataPoint, resJSON string) error {
+func insertNumberDP(ctx context.Context, stmt *sql.Stmt, m pmetric.Metric, metricType string, dp pmetric.NumberDataPoint, resJSON string) error {
 	val := 0.0
 	switch dp.ValueType() {
 	case pmetric.NumberDataPointValueTypeDouble:
@@ -181,12 +179,14 @@ func insertNumberDP(ctx context.Context, stmt *sql.Stmt, m pmetric.Metric, dp pm
 	_, err := stmt.ExecContext(ctx,
 		m.Name(),
 		m.Unit(),
+		metricType,
 		val,
 		time.Unix(0, int64(dp.Timestamp())).UTC(),
 		time.Unix(0, int64(dp.StartTimestamp())).UTC(),
 		traceID,
 		mapToJSON(dp.Attributes()),
 		resJSON,
+		nil, // histogram payload — only set for histogram/exp_histogram
 	)
 	if err != nil {
 		return fmt.Errorf("insert metric data point: %w", err)
@@ -194,21 +194,121 @@ func insertNumberDP(ctx context.Context, stmt *sql.Stmt, m pmetric.Metric, dp pm
 	return nil
 }
 
-func insertHistogramDP(ctx context.Context, stmt *sql.Stmt, m pmetric.Metric, ts, start pcommon.Timestamp, value float64, attrs pcommon.Map, traceID, resJSON string) error {
+// insertHistogramDP persists a histogram (or exponential histogram)
+// data point. The summary `value` is a lossy mean (sum/count) kept
+// for legacy single-scalar queries; the full bucket counts, bounds,
+// min/max, and (for exponential) scale + zero count live in the
+// histogram JSON column so quantile/heatmap queries can reconstruct
+// the distribution faithfully.
+func insertHistogramDP(ctx context.Context, stmt *sql.Stmt, m pmetric.Metric, metricType string, ts, start pcommon.Timestamp, value float64, attrs pcommon.Map, traceID, resJSON, histogramJSON string) error {
 	_, err := stmt.ExecContext(ctx,
 		m.Name(),
 		m.Unit(),
+		metricType,
 		value,
 		time.Unix(0, int64(ts)).UTC(),
 		time.Unix(0, int64(start)).UTC(),
 		traceID,
 		mapToJSON(attrs),
 		resJSON,
+		histogramJSON,
 	)
 	if err != nil {
 		return fmt.Errorf("insert histogram data point: %w", err)
 	}
 	return nil
+}
+
+// encodeHistogramDP serializes an explicit-bucket histogram data
+// point as JSON: count, sum, min/max (when present), bucket_counts,
+// and explicit_bounds. Aligns with the OTel Collector's ClickHouse
+// exporter so a hosted backend storing the same JSON shape can serve
+// the same dashboard queries without translation.
+func encodeHistogramDP(dp pmetric.HistogramDataPoint) string {
+	type out struct {
+		Type           string    `json:"type"`
+		Count          uint64    `json:"count"`
+		Sum            *float64  `json:"sum,omitempty"`
+		Min            *float64  `json:"min,omitempty"`
+		Max            *float64  `json:"max,omitempty"`
+		BucketCounts   []uint64  `json:"bucket_counts"`
+		ExplicitBounds []float64 `json:"explicit_bounds"`
+	}
+	o := out{
+		Type:           "histogram",
+		Count:          dp.Count(),
+		BucketCounts:   dp.BucketCounts().AsRaw(),
+		ExplicitBounds: dp.ExplicitBounds().AsRaw(),
+	}
+	if dp.HasSum() {
+		v := dp.Sum()
+		o.Sum = &v
+	}
+	if dp.HasMin() {
+		v := dp.Min()
+		o.Min = &v
+	}
+	if dp.HasMax() {
+		v := dp.Max()
+		o.Max = &v
+	}
+	b, err := json.Marshal(o)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+// encodeExpHistogramDP serializes an exponential-histogram data
+// point: count, sum, min/max, scale, zero_count, plus the positive
+// and negative bucket runs (offset + counts each).
+func encodeExpHistogramDP(dp pmetric.ExponentialHistogramDataPoint) string {
+	type buckets struct {
+		Offset       int32    `json:"offset"`
+		BucketCounts []uint64 `json:"bucket_counts"`
+	}
+	type out struct {
+		Type      string   `json:"type"`
+		Count     uint64   `json:"count"`
+		Sum       *float64 `json:"sum,omitempty"`
+		Min       *float64 `json:"min,omitempty"`
+		Max       *float64 `json:"max,omitempty"`
+		Scale     int32    `json:"scale"`
+		ZeroCount uint64   `json:"zero_count"`
+		Positive  buckets  `json:"positive"`
+		Negative  buckets  `json:"negative"`
+	}
+	o := out{
+		Type:      "exp_histogram",
+		Count:     dp.Count(),
+		Scale:     dp.Scale(),
+		ZeroCount: dp.ZeroCount(),
+		Positive: buckets{
+			Offset:       dp.Positive().Offset(),
+			BucketCounts: dp.Positive().BucketCounts().AsRaw(),
+		},
+		Negative: buckets{
+			Offset:       dp.Negative().Offset(),
+			BucketCounts: dp.Negative().BucketCounts().AsRaw(),
+		},
+	}
+	if dp.HasSum() {
+		v := dp.Sum()
+		o.Sum = &v
+	}
+	if dp.HasMin() {
+		v := dp.Min()
+		o.Min = &v
+	}
+	if dp.HasMax() {
+		v := dp.Max()
+		o.Max = &v
+	}
+	b, err := json.Marshal(o)
+	if err != nil {
+		return ""
+	}
+	return string(b)
 }
 
 func insertLogs(ctx context.Context, tx *sql.Tx, ld plog.Logs) error {
