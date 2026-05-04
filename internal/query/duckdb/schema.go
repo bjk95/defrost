@@ -1,59 +1,171 @@
 package duckdb
 
 // schemaSQL is the DuckDB schema the hydrator populates from canonical
-// OTLP/protobuf bytes on disk. Column shape mirrors the OTel Collector's
-// ClickHouse exporter conventions so a future hosted-defrost ClickHouse
-// implementation can serve the same dashboard with negligible
-// translation work.
+// OTLP/protobuf bytes on disk.
+//
+// Table and column shapes are an exact match for the duckdb-otlp
+// extension (https://github.com/smithclay/duckdb-otlp): same names,
+// same types, same field order. That extension exposes table-valued
+// functions like read_otlp_traces(<file>) producing rows in this
+// schema; matching it means a defrost user can run the same SQL
+// against their cache.duckdb and against ad-hoc OTLP files via the
+// extension, with no rewrites.
+//
+// Identifiers (trace_id, span_id, parent_span_id) are VARCHAR hex.
+// Attribute fields (resource_attributes, scope_attributes,
+// span_attributes, log_attributes, metric_attributes,
+// exemplars_json, events_json, links_json, bucket_counts,
+// explicit_bounds, positive_bucket_counts, negative_bucket_counts)
+// are VARCHAR holding JSON — query with json_extract / json_extract_string.
+//
+// Primary `timestamp` is TIMESTAMP_MS (ms since epoch). Companion
+// timestamps (`start_timestamp`, `end_timestamp`, `observed_timestamp`)
+// are BIGINT nanoseconds since epoch — same as the OTLP wire encoding.
+//
+// hydration_state and cache_meta are defrost-internal bookkeeping
+// tables (not part of duckdb-otlp); the hydrator uses them to track
+// per-file ingest state and the last-hydrated commit SHA.
 const schemaSQL = `
-CREATE TABLE IF NOT EXISTS traces (
-    trace_id      VARCHAR,
-    span_id       VARCHAR,
-    parent_span   VARCHAR,
-    span_name     VARCHAR,
-    service_name  VARCHAR,
-    start_time    TIMESTAMP,
-    end_time      TIMESTAMP,
-    duration_ns   BIGINT,
-    status_code   INTEGER,
-    status_msg    VARCHAR,
-    attrs         JSON,
-    resource      JSON,
-    output        VARCHAR
+CREATE TABLE IF NOT EXISTS otel_traces (
+    timestamp                TIMESTAMP_MS,
+    end_timestamp            BIGINT,
+    duration                 BIGINT,
+    trace_id                 VARCHAR,
+    span_id                  VARCHAR,
+    parent_span_id           VARCHAR,
+    trace_state              VARCHAR,
+    service_name             VARCHAR,
+    service_namespace        VARCHAR,
+    service_instance_id      VARCHAR,
+    span_name                VARCHAR,
+    span_kind                INTEGER,
+    status_code              INTEGER,
+    status_message           VARCHAR,
+    resource_attributes      VARCHAR,
+    scope_name               VARCHAR,
+    scope_version            VARCHAR,
+    scope_attributes         VARCHAR,
+    span_attributes          VARCHAR,
+    events_json              VARCHAR,
+    links_json               VARCHAR,
+    dropped_attributes_count INTEGER,
+    dropped_events_count     INTEGER,
+    dropped_links_count      INTEGER,
+    flags                    INTEGER
 );
-CREATE INDEX IF NOT EXISTS idx_traces_name_start ON traces(span_name, start_time);
-CREATE INDEX IF NOT EXISTS idx_traces_trace_id ON traces(trace_id);
 
-CREATE TABLE IF NOT EXISTS metrics (
-    metric_name   VARCHAR,
-    metric_unit   VARCHAR,
-    metric_type   VARCHAR,            -- gauge | sum | histogram | exp_histogram
-    value         DOUBLE,             -- scalar for gauge/sum, mean for hist (lossy summary)
-    ts            TIMESTAMP,
-    start_ts      TIMESTAMP,
-    trace_id      VARCHAR,
-    attrs         JSON,
-    resource      JSON,
-    histogram     JSON                -- full payload for histogram/exp_histogram, NULL otherwise
+CREATE TABLE IF NOT EXISTS otel_logs (
+    timestamp           TIMESTAMP_MS,
+    observed_timestamp  BIGINT,
+    trace_id            VARCHAR,
+    span_id             VARCHAR,
+    service_name        VARCHAR,
+    service_namespace   VARCHAR,
+    service_instance_id VARCHAR,
+    severity_number     INTEGER,
+    severity_text       VARCHAR,
+    body                VARCHAR,
+    resource_attributes VARCHAR,
+    scope_name          VARCHAR,
+    scope_version       VARCHAR,
+    scope_attributes    VARCHAR,
+    log_attributes      VARCHAR
 );
-CREATE INDEX IF NOT EXISTS idx_metrics_name_ts ON metrics(metric_name, ts);
-CREATE INDEX IF NOT EXISTS idx_metrics_trace_id ON metrics(trace_id);
--- Idempotent upgrade for caches created before metric_type / histogram
--- columns existed. CREATE TABLE IF NOT EXISTS won't ALTER an existing
--- table, so we add columns conditionally.
-ALTER TABLE metrics ADD COLUMN IF NOT EXISTS metric_type VARCHAR;
-ALTER TABLE metrics ADD COLUMN IF NOT EXISTS histogram JSON;
 
-CREATE TABLE IF NOT EXISTS logs (
-    trace_id     VARCHAR,
-    span_id      VARCHAR,
-    ts           TIMESTAMP,
-    severity     VARCHAR,
-    body         VARCHAR,
-    attrs        JSON,
-    resource     JSON
+CREATE TABLE IF NOT EXISTS otel_metrics_gauge (
+    timestamp           TIMESTAMP_MS,
+    start_timestamp     BIGINT,
+    metric_name         VARCHAR,
+    metric_description  VARCHAR,
+    metric_unit         VARCHAR,
+    value               DOUBLE,
+    service_name        VARCHAR,
+    service_namespace   VARCHAR,
+    service_instance_id VARCHAR,
+    resource_attributes VARCHAR,
+    scope_name          VARCHAR,
+    scope_version       VARCHAR,
+    scope_attributes    VARCHAR,
+    metric_attributes   VARCHAR,
+    flags               INTEGER,
+    exemplars_json      VARCHAR
 );
-CREATE INDEX IF NOT EXISTS idx_logs_trace_id_ts ON logs(trace_id, ts);
+
+CREATE TABLE IF NOT EXISTS otel_metrics_sum (
+    timestamp               TIMESTAMP_MS,
+    start_timestamp         BIGINT,
+    metric_name             VARCHAR,
+    metric_description      VARCHAR,
+    metric_unit             VARCHAR,
+    value                   DOUBLE,
+    service_name            VARCHAR,
+    service_namespace       VARCHAR,
+    service_instance_id     VARCHAR,
+    resource_attributes     VARCHAR,
+    scope_name              VARCHAR,
+    scope_version           VARCHAR,
+    scope_attributes        VARCHAR,
+    metric_attributes       VARCHAR,
+    flags                   INTEGER,
+    exemplars_json          VARCHAR,
+    aggregation_temporality INTEGER,
+    is_monotonic            BOOLEAN
+);
+
+CREATE TABLE IF NOT EXISTS otel_metrics_histogram (
+    timestamp               TIMESTAMP_MS,
+    start_timestamp         BIGINT,
+    metric_name             VARCHAR,
+    metric_description      VARCHAR,
+    metric_unit             VARCHAR,
+    count                   BIGINT,
+    sum                     DOUBLE,
+    min                     DOUBLE,
+    max                     DOUBLE,
+    bucket_counts           VARCHAR,
+    explicit_bounds         VARCHAR,
+    service_name            VARCHAR,
+    service_namespace       VARCHAR,
+    service_instance_id     VARCHAR,
+    resource_attributes     VARCHAR,
+    scope_name              VARCHAR,
+    scope_version           VARCHAR,
+    scope_attributes        VARCHAR,
+    metric_attributes       VARCHAR,
+    flags                   INTEGER,
+    exemplars_json          VARCHAR,
+    aggregation_temporality INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS otel_metrics_exp_histogram (
+    timestamp               TIMESTAMP_MS,
+    start_timestamp         BIGINT,
+    metric_name             VARCHAR,
+    metric_description      VARCHAR,
+    metric_unit             VARCHAR,
+    count                   BIGINT,
+    sum                     DOUBLE,
+    min                     DOUBLE,
+    max                     DOUBLE,
+    scale                   INTEGER,
+    zero_count              BIGINT,
+    zero_threshold          DOUBLE,
+    positive_offset         INTEGER,
+    positive_bucket_counts  VARCHAR,
+    negative_offset         INTEGER,
+    negative_bucket_counts  VARCHAR,
+    service_name            VARCHAR,
+    service_namespace       VARCHAR,
+    service_instance_id     VARCHAR,
+    resource_attributes     VARCHAR,
+    scope_name              VARCHAR,
+    scope_version           VARCHAR,
+    scope_attributes        VARCHAR,
+    metric_attributes       VARCHAR,
+    flags                   INTEGER,
+    exemplars_json          VARCHAR,
+    aggregation_temporality INTEGER
+);
 
 CREATE TABLE IF NOT EXISTS hydration_state (
     file_path  VARCHAR PRIMARY KEY,

@@ -105,9 +105,9 @@ func TestHydrate_WipesDerivedStateOnForceReset(t *testing.T) {
 	// runs from the old history that drop just rewrote away.
 	ctx := context.Background()
 	for _, stmt := range []string{
-		`INSERT INTO traces (trace_id, span_name, start_time, status_code) VALUES ('stale', 'old.run', NOW(), 0)`,
-		`INSERT INTO metrics (metric_name, ts) VALUES ('stale', NOW())`,
-		`INSERT INTO logs (trace_id, ts, severity, body) VALUES ('stale', NOW(), 'INFO', 'old')`,
+		`INSERT INTO otel_traces (trace_id, span_name, timestamp, status_code) VALUES ('stale', 'old.run', epoch_ms(0), 0)`,
+		`INSERT INTO otel_metrics_gauge (metric_name, timestamp, value) VALUES ('stale', epoch_ms(0), 0)`,
+		`INSERT INTO otel_logs (trace_id, timestamp, severity_text, body) VALUES ('stale', epoch_ms(0), 'INFO', 'old')`,
 		`INSERT INTO hydration_state (file_path, file_size, file_mtime) VALUES ('/tmp/stale', 1, 1)`,
 	} {
 		if _, err := q.db.ExecContext(ctx, stmt); err != nil {
@@ -127,9 +127,9 @@ func TestHydrate_WipesDerivedStateOnForceReset(t *testing.T) {
 	for _, c := range []struct {
 		name, sql string
 	}{
-		{"traces", `SELECT COUNT(*) FROM traces WHERE trace_id = 'stale'`},
-		{"metrics", `SELECT COUNT(*) FROM metrics WHERE metric_name = 'stale'`},
-		{"logs", `SELECT COUNT(*) FROM logs WHERE trace_id = 'stale'`},
+		{"otel_traces", `SELECT COUNT(*) FROM otel_traces WHERE trace_id = 'stale'`},
+		{"otel_metrics_gauge", `SELECT COUNT(*) FROM otel_metrics_gauge WHERE metric_name = 'stale'`},
+		{"otel_logs", `SELECT COUNT(*) FROM otel_logs WHERE trace_id = 'stale'`},
 		{"hydration_state", `SELECT COUNT(*) FROM hydration_state WHERE file_path = '/tmp/stale'`},
 	} {
 		var n int
