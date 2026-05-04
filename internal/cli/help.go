@@ -122,8 +122,18 @@ func renderSubcommandHelp(w io.Writer, ctx *kong.Context, p helpStyler) error {
 
 	if ex := examplesFor(node); ex != "" {
 		fmt.Fprintln(w, p.Bold("EXAMPLES"))
+		// Each line gets a 2-space indent from the renderer. Strip
+		// leading whitespace from the source so the cli.go EXAMPLES
+		// strings can be written naturally (with their own indent for
+		// readability) without double-indenting in the output. Blank
+		// lines stay blank — no trailing whitespace.
 		for _, line := range strings.Split(strings.TrimRight(ex, "\n"), "\n") {
-			fmt.Fprintf(w, "  %s\n", line)
+			trimmed := strings.TrimLeft(line, " \t")
+			if trimmed == "" {
+				fmt.Fprintln(w)
+				continue
+			}
+			fmt.Fprintf(w, "  %s\n", trimmed)
 		}
 		fmt.Fprintln(w)
 	}
