@@ -33,7 +33,13 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Run defrost against go unit tests
-        run: ./defrost exec go test ./...
+        # ./internal/... rather than ./... so the dogfood step doesn't
+        # try to compile cmd/defrost (which pulls in DuckDB cgo and a
+        # ~80MB prebuilt static lib via go-duckdb v2). cmd/* packages
+        # have no tests of their own; the explicit `go build -o
+        # defrost-ci ./cmd/defrost-ci` step above already verifies the
+        # CI binary compiles.
+        run: ./defrost exec go test ./internal/...
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
