@@ -1,6 +1,7 @@
-import { useState, type CSSProperties, type ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import type { Cell, RunSummary, TestRow } from "@/types";
-import { fmt } from "@/lib/utils";
+import { fmt, cn } from "@/lib/utils";
+import { Card as UICard } from "@/components/ui/card";
 
 export const CELL_PASS = "var(--success)";
 export const CELL_FAIL = "var(--danger)";
@@ -231,37 +232,37 @@ export function SectionLabel({
   );
 }
 
+// Card wraps the shadcn Card primitive with the legacy props (padding as
+// number, custom hover, onClick). Visuals match the previous hand-rolled
+// version — same border, radius, and bg-subtle hover swap.
 export function Card({
   children,
   padding = 16,
   style,
   onClick,
   hover,
+  className,
 }: {
   children: ReactNode;
   padding?: number;
   style?: CSSProperties;
   onClick?: () => void;
   hover?: boolean;
+  className?: string;
 }) {
-  const [hovered, setHovered] = useState(false);
   return (
-    <div
+    <UICard
       onClick={onClick}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-      style={{
-        background: hover && hovered ? "var(--bg-subtle)" : "var(--bg)",
-        border: "1px solid var(--border)",
-        borderRadius: 10,
-        padding,
-        cursor: onClick ? "pointer" : undefined,
-        transition: "background var(--dur-fast) var(--ease-out)",
-        ...style,
-      }}
+      className={cn(
+        "rounded-[10px] shadow-none transition-colors",
+        hover && "hover:bg-bg-subtle",
+        onClick && "cursor-pointer",
+        className,
+      )}
+      style={{ padding, ...style }}
     >
       {children}
-    </div>
+    </UICard>
   );
 }
 

@@ -1,4 +1,5 @@
 import { Icon } from "./Icons";
+import { cn } from "@/lib/utils";
 
 export function SearchInput({
   value,
@@ -10,46 +11,22 @@ export function SearchInput({
   placeholder?: string;
 }) {
   return (
-    <div
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 8,
-        padding: "0 10px",
-        height: 32,
-        border: "1px solid var(--border)",
-        borderRadius: 8,
-        background: "var(--bg)",
-        minWidth: 240,
-      }}
-    >
-      <span style={{ color: "var(--fg-muted)" }}><Icon.Search /></span>
+    <div className="inline-flex h-8 min-w-[240px] items-center gap-2 rounded-md border border-border bg-background px-2.5">
+      <span className="text-fg-muted">
+        <Icon.Search />
+      </span>
       <input
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
-        style={{
-          border: "none",
-          outline: "none",
-          background: "transparent",
-          fontFamily: "var(--font-sans)",
-          fontSize: 13,
-          color: "var(--fg)",
-          flex: 1,
-          minWidth: 0,
-        }}
+        className="min-w-0 flex-1 border-none bg-transparent font-sans text-[13px] text-foreground outline-none placeholder:text-fg-muted"
       />
       {value && (
         <button
+          type="button"
           onClick={() => onChange("")}
-          style={{
-            border: "none",
-            background: "transparent",
-            color: "var(--fg-muted)",
-            cursor: "pointer",
-            padding: 0,
-            fontSize: 12,
-          }}
+          className="cursor-pointer border-none bg-transparent p-0 text-xs text-fg-muted hover:text-foreground"
+          aria-label="Clear search"
         >
           ×
         </button>
@@ -68,34 +45,20 @@ export function Segmented<T extends string>({
   options: Array<{ value: T; label: string }>;
 }) {
   return (
-    <div
-      style={{
-        display: "inline-flex",
-        border: "1px solid var(--border)",
-        borderRadius: 8,
-        padding: 2,
-        background: "var(--bg-subtle)",
-        height: 32,
-      }}
-    >
+    <div className="inline-flex h-8 rounded-md border border-border bg-bg-subtle p-0.5">
       {options.map((o) => {
         const active = o.value === value;
         return (
           <button
             key={o.value}
+            type="button"
             onClick={() => onChange(o.value)}
-            style={{
-              padding: "0 10px",
-              fontSize: 12,
-              fontWeight: 500,
-              border: "none",
-              borderRadius: 6,
-              background: active ? "var(--bg)" : "transparent",
-              color: active ? "var(--fg)" : "var(--fg-muted)",
-              boxShadow: active ? "var(--shadow-xs)" : "none",
-              cursor: "pointer",
-              fontFamily: "var(--font-sans)",
-            }}
+            className={cn(
+              "cursor-pointer rounded-[6px] border-none px-2.5 font-sans text-xs font-medium transition-colors",
+              active
+                ? "bg-background text-foreground shadow-xs"
+                : "bg-transparent text-fg-muted hover:text-foreground",
+            )}
           >
             {o.label}
           </button>
