@@ -52,10 +52,18 @@ near-real-time, reload the page periodically.
 ## On a CI host
 
 `defrost serve` is intended for local use. Running it on a long-lived
-server is possible (clone the repo, fetch `_defrost`, run the
-command), but the server has no auth layer of its own — pair it with
-your own access control if you do this. Most teams find that "run it
-locally when you need it" is enough.
+server is possible (clone the repo, run `defrost serve`), but the
+server has no auth layer of its own — pair it with your own access
+control if you do this. Most teams find that "run it locally when you
+need it" is enough.
+
+`defrost serve` is only available on the full `defrost` binary; the
+slim `defrost-ci` binary stubs it with an install hint. Install the
+full binary first:
+
+```sh
+go install github.com/bjk95/defrost/cmd/defrost@latest
+```
 
 ## Reading data without the dashboard
 

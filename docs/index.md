@@ -5,14 +5,24 @@ title: 'defrost'
 Track AI evals, metrics, and tests with Git as the database.
 
 defrost wraps your existing test or eval command, captures results as
-[OpenTelemetry](https://opentelemetry.io/) traces and metrics, and commits
-them to a `_defrost` branch in the same repo. The history travels with the
-code — no database, no SaaS, no API keys.
+[OpenTelemetry](https://opentelemetry.io/) traces, metrics, and logs,
+and commits them to a `_defrost` branch in the same repo. The history
+travels with the code — no database, no SaaS, no API keys.
 
 ## Install
 
 ```sh
-go install github.com/bjk95/defrost@latest
+# Full install: includes the dashboard and embedded DuckDB read engine.
+go install github.com/bjk95/defrost/cmd/defrost@latest
+```
+
+For CI workflows that only need the write path (`exec`, `history`,
+`suppress`, `drop`) — no dashboard, no DuckDB cgo, no embedded web
+bundle — install the slim `defrost-ci` binary instead. About 1/3 the
+size and faster to install:
+
+```sh
+go install github.com/bjk95/defrost/cmd/defrost-ci@latest
 ```
 
 ## Quickstart

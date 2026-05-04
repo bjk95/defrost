@@ -38,7 +38,7 @@ defrost history <test-id> | jq -r '.scopeSpans[].spans[] | "\(.startTimeUnixNano
 |---|---|---|---|
 | `--repo-dir` | string | `.` | Path to the git repo. |
 | `--data-branch` | string | `_defrost` | Branch name to read from. |
-| `--dev`, `-d` | bool | `false` | Dev mode: read from `<repo-dir>/.defrost-dev/` instead of the data branch. |
+| `--dev`, `-d` | bool | `false` | Dev mode: read only from `<repo-dir>/.defrost/data/` (no remote operations). |
 
 ## Test ID format
 
@@ -63,6 +63,11 @@ line is the OTel `ResourceSpans` for that run filtered to spans whose
 name matches the requested test ID. The root `defrost.run` span is
 included so resource attributes (commit SHA, branch, PR number, etc.) are
 available per line.
+
+`history` reads OTLP files directly from the persistent worktree at
+`<repo>/.defrost/data/` (or via clone if the worktree doesn't exist
+yet), without going through DuckDB — so the slim `defrost-ci` binary
+serves `history` identically to the full `defrost`.
 
 ## Exit codes
 

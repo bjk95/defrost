@@ -5,11 +5,15 @@ title: '`defrost suppress`'
 Manage the suppression list. When every failing test in a `defrost exec`
 run is suppressed, the exit code is rewritten to `0` so CI can stay
 green without skipping the test in source. Suppressions are stored in
-`suppressions.json` on the data branch — see
-[storage layout](../../storage-layout/#suppressionsjson).
+your working tree at `<repo>/.defrost/suppressions.json` — committed
+alongside your source so changes flow through normal PR review. See
+[storage layout](../../storage-layout/#suppressionsjson) for the file
+format.
 
 `defrost suppress` has three subcommands: `add`, `remove`, `list`. All
-mutations are idempotent.
+mutations are idempotent. Mutations write the file directly — defrost
+does **not** auto-commit. Run `git add .defrost/suppressions.json &&
+git commit` afterwards to share the change with your team.
 
 ## `defrost suppress add`
 
@@ -30,10 +34,11 @@ defrost suppress add \
 |---|---|---|---|
 | `--repo-dir` | string | `.` | Path to the git repo. |
 | `--data-branch` | string | `_defrost` | Branch where suppressions are stored. |
-| `--dev`, `-d` | bool | `false` | Read/write the local scratch dir. |
+| `--dev`, `-d` | bool | `false` | Read/write only the local `<repo>/.defrost/` tree (no remote operations). Same effect as the prod path here, since suppressions are local-file-only either way; the flag is preserved for symmetry. |
 
-**Exit codes:** `0` on success (including no-op). `1` on commit/push
-failure. `2` if no test IDs were provided.
+**Exit codes:** `0` on success (including no-op when every ID was
+already on the list). `1` on file-write failure. `2` if no test IDs
+were provided.
 
 ## `defrost suppress remove`
 
@@ -47,10 +52,10 @@ defrost suppress remove [flags] <test-id>
 |---|---|---|---|
 | `--repo-dir` | string | `.` | Path to the git repo. |
 | `--data-branch` | string | `_defrost` | Branch where suppressions are stored. |
-| `--dev`, `-d` | bool | `false` | Read/write the local scratch dir. |
+| `--dev`, `-d` | bool | `false` | Read/write only the local `<repo>/.defrost/` tree (no remote operations). Same effect as the prod path here, since suppressions are local-file-only either way; the flag is preserved for symmetry. |
 
 **Exit codes:** `0` on success (including no-op when the ID was already
-absent). `1` on commit/push failure.
+absent). `1` on file-write failure.
 
 ## `defrost suppress list`
 
@@ -64,7 +69,7 @@ defrost suppress list [flags]
 |---|---|---|---|
 | `--repo-dir` | string | `.` | Path to the git repo. |
 | `--data-branch` | string | `_defrost` | Branch to read from. |
-| `--dev`, `-d` | bool | `false` | Read the local scratch dir. |
+| `--dev`, `-d` | bool | `false` | Read only from the local `<repo>/.defrost/` tree (no remote operations). |
 
 **Exit codes:** `0` on success. `1` on read failure.
 

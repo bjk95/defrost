@@ -123,7 +123,7 @@ defrost drop history --metrics-only
 # Skip the prompt (CI / scripts).
 defrost drop history --yes
 
-# Wipe the local scratch dir from `--dev` runs.
+# Wipe just the local <repo>/.defrost/data/ tree (no remote operations).
 defrost drop history --dev
 ```
 
@@ -135,21 +135,23 @@ About to drop history on branch _defrost (origin: git@github.com:you/repo.git):
   metrics: 142 files,  4.2 MB  (2024-09-12 → 2026-04-29)
 
 This rewrites the branch via orphan commit + force-push and is irreversible.
-Preserved: suppressions.json (37 entries), README.md.
+Drop will not affect your 37 suppressions (they live in
+<repo>/.defrost/suppressions.json, not on the data branch).
 
 Type "drop" to confirm:
 ```
 
-**What's preserved.** Suppressions, the data-branch `README.md`, and
-whichever signal you didn't drop (e.g. metrics, when you used
-`--traces-only`).
+**What's preserved.** Suppressions (committed in your working tree at
+`<repo>/.defrost/suppressions.json`, untouched by drop), the data-branch
+`README.md`, and whichever signal you didn't drop (e.g. metrics, when you
+used `--traces-only`).
 
 **How space gets reclaimed.** Defrost replaces the data branch with a
 single new commit containing only the kept files. Old commits become
 unreachable and the remote (GitHub, GitLab, …) garbage-collects them over
-time. Local clones of the data branch keep their old objects until the
-next `git gc` — `defrost serve` always re-clones from origin, so the
-dashboard reflects the rewritten state immediately.
+time. The next `defrost serve` notices the force-push (via a cheap
+`ls-remote` against the persistent worktree at `<repo>/.defrost/data/`),
+wipes its local DuckDB cache, and re-hydrates against the new history.
 
 **Concurrency.** If someone else's `defrost exec` lands between the
 confirmation and the push, defrost aborts with a clear error rather than
@@ -172,31 +174,53 @@ repo to share it. Concurrent runs from different machines never conflict
 because each writer owns a unique filename (one file per run, named by its
 OTel `trace_id`).
 
-To experiment without touching git, pass `--no-persist` (don't store
-anything) or `--dev` (write to `.defrost-dev/` instead of the data branch).
+Defrost also keeps a local home in your working tree at `<repo>/.defrost/`:
+
+```
+<your-repo>/.defrost/
+├── .gitignore           auto-generated; ignores data/ and cache.duckdb
+├── data/                persistent worktree of the data branch (gitignored)
+├── cache.duckdb         DuckDB read cache (gitignored)
+└── suppressions.json    committed: shared list of suppressed test IDs
+```
+
+The persistent worktree means `defrost serve` does a single `git fetch`
+on subsequent loads instead of re-cloning, and a `git ls-remote` short-
+circuit skips even that when no new commits exist. Suppressions are in
+the working tree (committed) so `defrost suppress add` produces a
+reviewable diff in your normal PR workflow.
+
+To experiment without pushing to origin, pass `--no-persist` (don't store
+anything) or `--dev` (write locally to `.defrost/data/` only — same path
+as prod mode, just no push).
 
 When the branch grows large enough to matter, use
 [`defrost drop history`](#defrost-drop-history) to rewrite it and reclaim
-space. Suppressions are preserved.
+space. Suppressions are preserved (they live in your working tree, not
+on the data branch).
 
 ### Under the hood
 
 For the curious — you do not need to know any of this to use defrost.
 
 The data branch is shaped like OpenTelemetry. One `defrost exec` invocation
-is one trace; the run is the root span; each test is a child span. Evals
-and metrics emitted during the run are persisted as OTel metric data
-points. Each file is the canonical OTLP/Protobuf payload, zstd-compressed.
+is one trace; the run is the root span; each test is a child span. Evals,
+metrics, and structured log records emitted during the run are persisted
+as OTel data points and log records. Each file is the canonical
+OTLP/Protobuf payload (produced by upstream `pdata` serializers, same as
+an OTel Collector exporter would emit), zstd-compressed.
 
 ```
 _defrost branch
 ├── traces/<YYYY>/<MM>/<DD>/<trace_id>.otlp.pb.zst    # one ExportTraceServiceRequest per run
 ├── metrics/<YYYY>/<MM>/<DD>/<trace_id>.otlp.pb.zst   # one ExportMetricsServiceRequest per run
-└── suppressions.json
+└── logs/<YYYY>/<MM>/<DD>/<trace_id>.otlp.pb.zst      # one ExportLogsServiceRequest per run (when emitted)
 ```
 
-Run-scoped attributes (commit, branch, author, command, OS/arch, run id,
-…) live exactly once on each file's `Resource`. The OTel span `name` is
-the canonical fully qualified test name — no lossy projections are stored
-alongside it. Compaction (collapsing many per-run files into one daily
-file) is on the roadmap.
+Defrost runs the upstream `otlpreceiver` from the OpenTelemetry Collector
+in library mode during `exec`, so any OTel SDK pointed at
+`OTEL_EXPORTER_OTLP_ENDPOINT` works for traces, metrics, AND logs out of
+the box. Run-scoped attributes (commit, branch, author, command, OS/arch,
+run id, …) live exactly once on each file's `Resource`. The OTel span
+`name` is the canonical fully qualified test name — no lossy projections
+are stored alongside it.

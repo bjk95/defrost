@@ -2,8 +2,8 @@
 title: '`defrost exec`'
 ---
 
-Execute a test command, capture results as OpenTelemetry traces and
-metrics, and commit them to the data branch.
+Execute a test command, capture results as OpenTelemetry traces,
+metrics, and logs, and commit them to the data branch.
 
 ## Synopsis
 
@@ -31,15 +31,17 @@ defrost exec -- pytest -k "evals" --maxfail=1
 | `--repo-dir` | string | `.` | Path to the git repo to persist into. |
 | `--data-branch` | string | `_defrost` | Branch name where results are stored. |
 | `--no-persist` | bool | `false` | Run tests without persisting results. The OTel receiver still runs (so child SDKs do not error) but nothing is committed. |
-| `--dev`, `-d` | bool | `false` | Dev mode: write results to `<repo-dir>/.defrost-dev/` (a gitignored scratch dir) instead of committing/pushing. For developing defrost itself. |
+| `--dev`, `-d` | bool | `false` | Dev mode: write results locally only — files still land at `<repo-dir>/.defrost/data/` (same path as prod mode), but no push to origin. For developing defrost itself. |
 
 ## What it does
 
 1. Detects the repository state at `--repo-dir`: commit SHA, branch, dirty
    working tree, host OS/arch, defrost version. These become OTel
    resource attributes on the run.
-2. Starts an OTLP/HTTP receiver on a random free port on `127.0.0.1`
-   (see [OTel ingestion](../../otel-ingestion/)).
+2. Starts the upstream
+   [`otlpreceiver`](https://pkg.go.dev/go.opentelemetry.io/collector/receiver/otlpreceiver)
+   in library mode on a random free port on `127.0.0.1`. The receiver
+   accepts traces, metrics, AND logs — see [OTel ingestion](../../otel-ingestion/).
 3. Sets `OTEL_EXPORTER_OTLP_ENDPOINT` and `OTEL_EXPORTER_OTLP_PROTOCOL`
    in the child environment so any OTel SDK in the child auto-points at
    defrost.
@@ -50,10 +52,12 @@ defrost exec -- pytest -k "evals" --maxfail=1
    produces.
 6. Waits up to 2 seconds after the child exits for in-flight OTel
    exports to drain.
-7. Writes one trace file and (if any metrics arrived) one metrics file
-   to the data branch — see [storage layout](../../storage-layout/).
-8. Reads `suppressions.json` and applies the [suppression rule](#exit-codes)
-   to the exit code.
+7. Writes one trace file (and, if any arrived during the run, one
+   metrics file and one logs file) to the data branch — see
+   [storage layout](../../storage-layout/).
+8. Reads `<repo-dir>/.defrost/suppressions.json` (a local file in your
+   working tree) and applies the [suppression rule](#exit-codes) to the
+   exit code.
 
 ## Exit codes
 

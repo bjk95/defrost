@@ -8,11 +8,23 @@ minutes.
 ## 1. Install
 
 ```sh
-go install github.com/bjk95/defrost@latest
+go install github.com/bjk95/defrost/cmd/defrost@latest
 ```
 
 This drops a `defrost` binary in `$GOBIN` (usually `~/go/bin`). Make
 sure that's on your `PATH`.
+
+For CI runners that only need the write path (no dashboard), install
+the slim binary instead:
+
+```sh
+go install github.com/bjk95/defrost/cmd/defrost-ci@latest
+```
+
+`defrost-ci` is about a third the size of `defrost`, doesn't link
+DuckDB, and doesn't ship the embedded web bundle. `defrost-ci serve`
+is a stub that prints the install hint and exits 1, so a misuse
+surfaces immediately.
 
 ## 2. Run your tests under defrost
 

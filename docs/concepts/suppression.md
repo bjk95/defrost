@@ -16,8 +16,9 @@ The distinction matters:
 | Result recorded? | No | Yes — every run, with output |
 | Failure visible in dashboard? | No | Yes |
 | Effect on CI exit code? | None | Failure is rewritten to `0` only when **every** failing test is suppressed |
-| Stored in source? | Yes (decorator / `t.Skip`) | No (only on the data branch) |
+| Stored in source? | Yes (decorator / `t.Skip`) | Yes — committed at `<repo>/.defrost/suppressions.json` |
 | Survives a code change? | Until someone deletes the marker | Until someone runs `defrost suppress remove` |
+| Reviewable in PRs? | Yes | Yes — same diff workflow as the rest of your code |
 
 A skipped test is invisible. A suppressed test keeps generating data —
 you can see at a glance how often it actually fails, whether the failure
@@ -41,7 +42,8 @@ should still be running.
 After the child exits with a non-zero code, `defrost exec`:
 
 1. Collects the IDs of the failing tests from the adapter.
-2. Reads `suppressions.json` from the data branch.
+2. Reads `<repo>/.defrost/suppressions.json` (a local file in your
+   working tree).
 3. If **every** failing test ID is in the list, rewrites the exit code
    to `0` and prints a one-line stderr note. CI sees green.
 4. Otherwise, preserves the original exit code. CI sees red.
@@ -56,7 +58,8 @@ build through.
 
 ## Where suppressions live
 
-`suppressions.json` at the root of the data branch:
+`<repo>/.defrost/suppressions.json` — a regular file in your working
+tree, committed alongside the rest of your source:
 
 ```json
 {
@@ -65,12 +68,18 @@ build through.
 }
 ```
 
-`git blame` on this file tells you who suppressed what and when. There
-is no expiry, watcher, or "auto-unsuppress when passing" behaviour —
-suppressions stay until removed. That's intentional: an automatic
-unsuppress would create a flake (test fails → suppression auto-removes →
-next run fails CI for "no reason"), and silent removal would defeat the
-audit trail.
+Earlier versions of defrost stored this on the `_defrost` data branch.
+That made `defrost suppress add` a silent commit-and-push, bypassing
+the team's PR review process. Moving it into the working tree lets
+suppression changes flow through the same diff/review/merge pipeline
+as the rest of the code. `git blame .defrost/suppressions.json` tells
+you who suppressed what and when.
+
+There is no expiry, watcher, or "auto-unsuppress when passing"
+behaviour — suppressions stay until removed. That's intentional: an
+automatic unsuppress would create a flake (test fails → suppression
+auto-removes → next run fails CI for "no reason"), and silent removal
+would defeat the audit trail.
 
 To remove a suppression manually:
 
