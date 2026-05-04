@@ -20,10 +20,11 @@ import tailwindcss from "@tailwindcss/vite";
 // ship zero JS.
 export default defineConfig({
   // Project sites on GitHub Pages live under https://<user>.github.io/<repo>/.
-  // The DOCS_BASE / DOCS_SITE env vars let CI override these without a
-  // code change.
-  site: process.env.DOCS_SITE ?? "https://bjk95.github.io",
-  base: process.env.DOCS_BASE ?? "/defrost/",
+  // CI sets DOCS_BASE=/defrost/ when deploying; locally `astro dev` runs at
+  // http://localhost:4321/ with no base prefix. DOCS_SITE follows the same
+  // pattern so canonical URLs resolve correctly in the deployed build.
+  site: process.env.DOCS_SITE ?? "http://localhost:4321",
+  base: process.env.DOCS_BASE ?? "/",
   trailingSlash: "ignore",
   output: "static",
   outDir: "./dist",
