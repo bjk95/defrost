@@ -9,10 +9,10 @@ import (
 	"strings"
 	"time"
 
-	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
-	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
+	"go.opentelemetry.io/collector/pdata/pmetric"
 
 	"github.com/bjk95/defrost/internal/models"
+	"github.com/bjk95/defrost/internal/runner"
 )
 
 // promptfooDoc is the top-level JSON shape `promptfoo eval --output X.json`
@@ -78,29 +78,24 @@ type promptfooAssertion struct {
 // (`eval.<criterion>`) and is intended for direct unit tests of Parse.
 //
 // Returns nil/nil/error only on JSON decode failure.
-func Parse(r io.Reader, scope string) ([]models.TestResult, []*metricspb.Metric, error) {
+func Parse(r io.Reader, scope string, run models.RunContext) ([]models.TestResult, pmetric.Metrics, error) {
 	var doc promptfooDoc
 	if err := json.NewDecoder(r).Decode(&doc); err != nil {
-		return nil, nil, fmt.Errorf("parse promptfoo json: %w", err)
+		return nil, pmetric.NewMetrics(), fmt.Errorf("parse promptfoo json: %w", err)
 	}
-	now := uint64(time.Now().UnixNano())
-	var (
-		tests   []models.TestResult
-		metrics []*metricspb.Metric
-	)
+	now := time.Now()
+	tests := make([]models.TestResult, 0, len(doc.Results.Results))
+	md := runner.NewEvalMetrics(run)
 	for i, r := range doc.Results.Results {
 		provider := providerLabel(r.Provider)
 		prompt := promptIdentity(r.Prompt)
-		caseName := caseName(r.Vars, i, provider, prompt)
-		tests = append(tests, mapResult(r, caseName))
+		cName := caseName(r.Vars, i, provider, prompt)
+		tests = append(tests, mapResult(r, cName))
 		for _, c := range r.GradingResult.ComponentResults {
-			metric := mapComponentResult(c, caseName, provider, scope, now)
-			if metric != nil {
-				metrics = append(metrics, metric)
-			}
+			appendComponentMetric(md, c, cName, provider, scope, now)
 		}
 	}
-	return tests, metrics, nil
+	return tests, md, nil
 }
 
 func caseName(vars map[string]any, idx int, providerLabel, promptID string) string {
@@ -212,18 +207,18 @@ func mapResult(r promptfooResult, caseName string) models.TestResult {
 	}
 }
 
-func mapComponentResult(c promptfooComponentResult, caseName, model, scope string, timeUnixNano uint64) *metricspb.Metric {
+func appendComponentMetric(md pmetric.Metrics, c promptfooComponentResult, caseName, model, scope string, ts time.Time) {
 	criterion := assertionMetricName(c.Assertion)
 	if criterion == "" {
 		// Composite/parent component result without assertion metadata.
 		// Skip — leaf nodes underneath produce their own metrics, and
 		// emitting `eval.` with an empty name would collapse unrelated
 		// scores into one stream.
-		return nil
+		return
 	}
 	score := c.Score
 
-	attrs := []*commonpb.KeyValue{
+	attrs := []models.Attr{
 		models.StringAttr("gen_ai.evaluation.name", criterion),
 		models.DoubleAttr("gen_ai.evaluation.score.value", score),
 		models.StringAttr("gen_ai.evaluation.score.label", passFailLabel(c.Pass)),
@@ -241,17 +236,7 @@ func mapComponentResult(c promptfooComponentResult, caseName, model, scope strin
 	if scope != "" {
 		name = "eval." + scope + "." + criterion
 	}
-
-	return &metricspb.Metric{
-		Name: name,
-		Data: &metricspb.Metric_Gauge{Gauge: &metricspb.Gauge{
-			DataPoints: []*metricspb.NumberDataPoint{{
-				TimeUnixNano: timeUnixNano,
-				Value:        &metricspb.NumberDataPoint_AsDouble{AsDouble: score},
-				Attributes:   attrs,
-			}},
-		}},
-	}
+	runner.AppendGauge(md, name, score, ts, attrs)
 }
 
 func assertionMetricName(a promptfooAssertion) string {

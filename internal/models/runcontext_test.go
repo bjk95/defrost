@@ -3,15 +3,12 @@ package models
 import (
 	"bytes"
 	"testing"
-
-	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
-	resourcepb "go.opentelemetry.io/proto/otlp/resource/v1"
 )
 
 func TestDeriveTraceID_Deterministic(t *testing.T) {
 	a := DeriveTraceID("run-001")
 	b := DeriveTraceID("run-001")
-	if !bytes.Equal(a, b) {
+	if !bytes.Equal(a[:], b[:]) {
 		t.Errorf("DeriveTraceID is not deterministic: %x vs %x", a, b)
 	}
 	if len(a) != 16 {
@@ -20,7 +17,8 @@ func TestDeriveTraceID_Deterministic(t *testing.T) {
 }
 
 func TestDeriveTraceID_DifferentInputs(t *testing.T) {
-	if bytes.Equal(DeriveTraceID("a"), DeriveTraceID("b")) {
+	a, b := DeriveTraceID("a"), DeriveTraceID("b")
+	if bytes.Equal(a[:], b[:]) {
 		t.Error("expected different trace ids for different run ids")
 	}
 }
@@ -33,9 +31,8 @@ func TestNewSpanID_Format(t *testing.T) {
 }
 
 func TestNewSpanID_Unique(t *testing.T) {
-	a := NewSpanID()
-	b := NewSpanID()
-	if bytes.Equal(a, b) {
+	a, b := NewSpanID(), NewSpanID()
+	if bytes.Equal(a[:], b[:]) {
 		t.Errorf("expected unique span ids, got %x twice", a)
 	}
 }
@@ -45,27 +42,13 @@ func TestStringAttr_RoundTrip(t *testing.T) {
 	if kv.Key != "test.case.name" {
 		t.Errorf("key: %q", kv.Key)
 	}
-	v, ok := kv.Value.GetValue().(*commonpb.AnyValue_StringValue)
-	if !ok || v.StringValue != "pkg.TestFoo" {
+	if kv.Value.(string) != "pkg.TestFoo" {
 		t.Errorf("value: %v", kv.Value)
 	}
 }
 
-func TestResourceString_FoundAndAbsent(t *testing.T) {
-	res := &resourcepb.Resource{Attributes: []*commonpb.KeyValue{StringAttr("vcs.repository.ref.name", "main")}}
-	if got := ResourceString(res, "vcs.repository.ref.name"); got != "main" {
-		t.Errorf("found: %q", got)
-	}
-	if got := ResourceString(res, "missing.key"); got != "" {
-		t.Errorf("absent: %q", got)
-	}
-	if got := ResourceString(nil, "anything"); got != "" {
-		t.Errorf("nil resource: %q", got)
-	}
-}
-
 func TestAttrString_FoundAndAbsent(t *testing.T) {
-	attrs := []*commonpb.KeyValue{StringAttr("test.case.name", "pkg.TestFoo")}
+	attrs := []Attr{StringAttr("test.case.name", "pkg.TestFoo")}
 	if got := AttrString(attrs, "test.case.name"); got != "pkg.TestFoo" {
 		t.Errorf("found: %q", got)
 	}
@@ -79,11 +62,17 @@ func TestDoubleAttr(t *testing.T) {
 	if kv.Key != "eval.score" {
 		t.Fatalf("expected key eval.score, got %q", kv.Key)
 	}
-	dv, ok := kv.Value.Value.(*commonpb.AnyValue_DoubleValue)
-	if !ok {
-		t.Fatalf("expected DoubleValue payload, got %T", kv.Value.Value)
+	if kv.Value.(float64) != 0.87 {
+		t.Fatalf("expected 0.87, got %v", kv.Value)
 	}
-	if dv.DoubleValue != 0.87 {
-		t.Fatalf("expected 0.87, got %v", dv.DoubleValue)
+}
+
+func TestStringArrayAttr_DefensiveCopy(t *testing.T) {
+	src := []string{"a", "b"}
+	kv := StringArrayAttr("defrost.cmd", src)
+	src[0] = "X"
+	got := kv.Value.([]string)
+	if got[0] != "a" {
+		t.Errorf("expected defensive copy, got %v", got)
 	}
 }

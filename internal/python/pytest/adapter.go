@@ -7,7 +7,8 @@ import (
 	"regexp"
 	"strings"
 
-	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
+	"go.opentelemetry.io/collector/pdata/pmetric"
+	"go.opentelemetry.io/collector/pdata/ptrace"
 
 	"github.com/bjk95/defrost/internal/models"
 	"github.com/bjk95/defrost/internal/runner"
@@ -42,7 +43,7 @@ func (Adapter) Matches(cmd []string) bool {
 	return false
 }
 
-func (Adapter) Run(cmd []string) ([]models.TestResult, []*metricspb.Metric, int) {
+func (Adapter) Run(cmd []string, run models.RunContext) (ptrace.Traces, pmetric.Metrics, int) {
 	if hasUserJunitxml(cmd) {
 		// User-controlled --junitxml means we can't inject our own without
 		// silently overriding their config. Run their command unchanged
@@ -53,15 +54,15 @@ func (Adapter) Run(cmd []string) ([]models.TestResult, []*metricspb.Metric, int)
 		code, err := runner.RunChild(c)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "defrost:", err)
-			return nil, nil, 1
+			return ptrace.NewTraces(), pmetric.NewMetrics(), 1
 		}
-		return nil, nil, code
+		return ptrace.NewTraces(), pmetric.NewMetrics(), code
 	}
 
 	f, err := os.CreateTemp("", "defrost-pytest-*.xml")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "defrost:", err)
-		return nil, nil, 1
+		return ptrace.NewTraces(), pmetric.NewMetrics(), 1
 	}
 	path := f.Name()
 	f.Close()
@@ -78,10 +79,10 @@ func (Adapter) Run(cmd []string) ([]models.TestResult, []*metricspb.Metric, int)
 	exitCode, err := runner.RunChild(child)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "defrost:", err)
-		return nil, nil, 1
+		return ptrace.NewTraces(), pmetric.NewMetrics(), 1
 	}
 
-	return parseOrPreserve(path, exitCode)
+	return parseOrPreserve(path, run, exitCode)
 }
 
 // parseOrPreserve reads pytest's JUnit XML and returns the parsed test
@@ -90,22 +91,22 @@ func (Adapter) Run(cmd []string) ([]models.TestResult, []*metricspb.Metric, int)
 // error, plugin crash); in both cases the XML may be missing or empty.
 // Preserve pytest's exit code rather than overwriting with a synthetic
 // 1 — that's the only signal the user has and we mustn't overwrite it.
-func parseOrPreserve(path string, exitCode int) ([]models.TestResult, []*metricspb.Metric, int) {
+func parseOrPreserve(path string, run models.RunContext, exitCode int) (ptrace.Traces, pmetric.Metrics, int) {
 	if !fileNonEmpty(path) {
 		fmt.Fprintf(os.Stderr,
 			"defrost: pytest exited %d without writing JUnit XML; recording run with no per-test results\n",
 			exitCode)
-		return nil, nil, exitCode
+		return ptrace.NewTraces(), pmetric.NewMetrics(), exitCode
 	}
 	results, err := ParseFile(path)
 	if err != nil {
 		fmt.Fprintf(os.Stderr,
 			"defrost: parse pytest output: %v; recording run with no per-test results\n",
 			err)
-		return nil, nil, exitCode
+		return ptrace.NewTraces(), pmetric.NewMetrics(), exitCode
 	}
 	runner.ApplyRepoPrefix(results)
-	return results, nil, exitCode
+	return runner.TestResultsToTraces(results, run), pmetric.NewMetrics(), exitCode
 }
 
 func fileNonEmpty(path string) bool {

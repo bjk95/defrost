@@ -5,7 +5,8 @@ import (
 	"os"
 	"os/exec"
 
-	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
+	"go.opentelemetry.io/collector/pdata/pmetric"
+	"go.opentelemetry.io/collector/pdata/ptrace"
 
 	"github.com/bjk95/defrost/internal/models"
 	"github.com/bjk95/defrost/internal/runner"
@@ -25,7 +26,7 @@ type Adapter struct{}
 
 func (Adapter) Matches(cmd []string) bool { return len(cmd) > 0 }
 
-func (Adapter) Run(cmd []string) ([]models.TestResult, []*metricspb.Metric, int) {
+func (Adapter) Run(cmd []string, _ models.RunContext) (ptrace.Traces, pmetric.Metrics, int) {
 	fmt.Fprintf(os.Stderr,
 		"defrost: no test-framework adapter matched %q; running passthrough (no per-test results will be recorded)\n",
 		cmd[0])
@@ -33,7 +34,7 @@ func (Adapter) Run(cmd []string) ([]models.TestResult, []*metricspb.Metric, int)
 	code, err := runner.RunChild(c)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "defrost:", err)
-		return nil, nil, 1
+		return ptrace.NewTraces(), pmetric.NewMetrics(), 1
 	}
-	return nil, nil, code
+	return ptrace.NewTraces(), pmetric.NewMetrics(), code
 }

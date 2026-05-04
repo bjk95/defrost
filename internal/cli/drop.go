@@ -1,4 +1,4 @@
-package main
+package cli
 
 import (
 	"bufio"
@@ -11,30 +11,32 @@ import (
 	"github.com/bjk95/defrost/internal/persist"
 )
 
-type DropOpts struct {
-	RepoDir     string
-	DataBranch  string
-	TracesOnly  bool
-	MetricsOnly bool
-	Yes         bool
-	Dev         bool
-}
-
-func HandleDropHistory(opts DropOpts) int {
-	if opts.TracesOnly && opts.MetricsOnly {
-		fmt.Fprintln(os.Stderr, "drop history: --traces-only and --metrics-only are mutually exclusive")
+// HandleDropHistory implements `defrost drop history`.
+func HandleDropHistory(c DropHistoryCmd) int {
+	exclusive := 0
+	if c.TracesOnly {
+		exclusive++
+	}
+	if c.MetricsOnly {
+		exclusive++
+	}
+	if c.LogsOnly {
+		exclusive++
+	}
+	if exclusive > 1 {
+		fmt.Fprintln(os.Stderr, "drop history: --traces-only / --metrics-only / --logs-only are mutually exclusive")
 		return 2
 	}
 	sel := persist.DropSelector{
-		DropTraces:  !opts.MetricsOnly,
-		DropMetrics: !opts.TracesOnly,
+		DropTraces:  !c.MetricsOnly && !c.LogsOnly,
+		DropMetrics: !c.TracesOnly && !c.LogsOnly,
+		DropLogs:    !c.TracesOnly && !c.MetricsOnly,
 	}
-
 	be := persist.New(persist.Options{
-		RepoDir:    opts.RepoDir,
-		DataBranch: opts.DataBranch,
+		RepoDir:    c.RepoDir,
+		DataBranch: c.DataBranch,
 		AuthToken:  os.Getenv("GITHUB_TOKEN"),
-		Dev:        opts.Dev,
+		Dev:        c.Dev,
 	})
 
 	confirm := func(plan persist.DropPlan) bool {
@@ -47,7 +49,7 @@ func HandleDropHistory(opts DropOpts) int {
 			return false
 		}
 		printDropPlan(os.Stderr, plan)
-		if opts.Yes {
+		if c.Yes {
 			return true
 		}
 		return askDropConfirmation(os.Stdin, os.Stderr)
@@ -62,15 +64,20 @@ func HandleDropHistory(opts DropOpts) int {
 
 func nothingToDropMessage(plan persist.DropPlan) string {
 	loc := dropLocation(plan)
-	switch {
-	case plan.Sel.DropTraces && plan.Sel.DropMetrics:
-		return fmt.Sprintf("nothing to drop: %s has no traces or metrics persisted.", loc)
-	case plan.Sel.DropTraces:
-		return fmt.Sprintf("nothing to drop: %s has no traces persisted.", loc)
-	case plan.Sel.DropMetrics:
-		return fmt.Sprintf("nothing to drop: %s has no metrics persisted.", loc)
+	parts := []string{}
+	if plan.Sel.DropTraces {
+		parts = append(parts, "traces")
 	}
-	return fmt.Sprintf("nothing to drop: %s.", loc)
+	if plan.Sel.DropMetrics {
+		parts = append(parts, "metrics")
+	}
+	if plan.Sel.DropLogs {
+		parts = append(parts, "logs")
+	}
+	if len(parts) == 0 {
+		return fmt.Sprintf("nothing to drop: %s.", loc)
+	}
+	return fmt.Sprintf("nothing to drop: %s has no %s persisted.", loc, strings.Join(parts, "/"))
 }
 
 func dropLocation(plan persist.DropPlan) string {
@@ -83,11 +90,13 @@ func dropLocation(plan persist.DropPlan) string {
 	return fmt.Sprintf("branch %s", plan.Branch)
 }
 
-// sanitizeOriginURL strips userinfo from the origin URL so an embedded
-// token in an HTTPS remote (e.g. https://<pat>@github.com/foo/bar.git or
-// https://user:pass@host/...) doesn't leak into the confirmation prompt
-// or, with --yes, into CI logs. SCP-style SSH remotes (git@host:path)
-// don't parse as URLs and pass through unchanged; they carry no secret.
+// SanitizeOriginURL strips userinfo from an origin URL so an embedded
+// token (https://<pat>@github.com/foo/bar.git, https://user:pass@host/...)
+// doesn't leak into the confirmation prompt or, with --yes, into CI
+// logs. SCP-style SSH remotes (git@host:path) don't parse as URLs and
+// pass through unchanged.
+func SanitizeOriginURL(raw string) string { return sanitizeOriginURL(raw) }
+
 func sanitizeOriginURL(raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil || u.Scheme == "" || u.User == nil {
@@ -99,16 +108,9 @@ func sanitizeOriginURL(raw string) string {
 
 func printDropPlan(w *os.File, plan persist.DropPlan) {
 	fmt.Fprintf(w, "About to drop history on %s:\n", dropLocation(plan))
-	if plan.Sel.DropTraces {
-		fmt.Fprintf(w, "  traces:  %s\n", formatSignalLine(plan.TraceFiles, plan.TraceBytes, plan.OldestRunUTC, plan.NewestRunUTC))
-	} else {
-		fmt.Fprintf(w, "  traces:  preserved (%d files, %s)\n", plan.TraceFiles, humanBytes(plan.TraceBytes))
-	}
-	if plan.Sel.DropMetrics {
-		fmt.Fprintf(w, "  metrics: %s\n", formatSignalLine(plan.MetricFiles, plan.MetricBytes, plan.OldestRunUTC, plan.NewestRunUTC))
-	} else {
-		fmt.Fprintf(w, "  metrics: preserved (%d files, %s)\n", plan.MetricFiles, humanBytes(plan.MetricBytes))
-	}
+	signalLine(w, "traces ", plan.Sel.DropTraces, plan.TraceFiles, plan.TraceBytes, plan.OldestRunUTC, plan.NewestRunUTC)
+	signalLine(w, "metrics", plan.Sel.DropMetrics, plan.MetricFiles, plan.MetricBytes, plan.OldestRunUTC, plan.NewestRunUTC)
+	signalLine(w, "logs   ", plan.Sel.DropLogs, plan.LogFiles, plan.LogBytes, plan.OldestRunUTC, plan.NewestRunUTC)
 	fmt.Fprintln(w)
 	if plan.Dev {
 		fmt.Fprintln(w, "This permanently deletes the files. Suppressions and README are preserved.")
@@ -117,6 +119,14 @@ func printDropPlan(w *os.File, plan persist.DropPlan) {
 	}
 	fmt.Fprintf(w, "Preserved: suppressions.json (%d entries), README.md.\n", plan.SuppressionsN)
 	fmt.Fprintln(w)
+}
+
+func signalLine(w *os.File, label string, drop bool, files int, bytes int64, oldest, newest time.Time) {
+	if drop {
+		fmt.Fprintf(w, "  %s: %s\n", label, formatSignalLine(files, bytes, oldest, newest))
+	} else {
+		fmt.Fprintf(w, "  %s: preserved (%d files, %s)\n", label, files, humanBytes(bytes))
+	}
 }
 
 func formatSignalLine(files int, bytes int64, oldest, newest time.Time) string {

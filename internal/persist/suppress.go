@@ -66,7 +66,7 @@ func (b *fileBackend) GetSuppressions() ([]string, error) {
 }
 
 func (b *fileBackend) UpdateSuppressions(mutate func([]string) []string, _ string) error {
-	if err := b.InitialisePersistence(); err != nil {
+	if err := os.MkdirAll(b.dir, 0o755); err != nil {
 		return err
 	}
 	cur, err := readSuppressionsFile(b.dir)

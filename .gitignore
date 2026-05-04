@@ -4,6 +4,12 @@
 # Build artefacts
 defrost
 defrost.exe
+defrost-ci
+defrost-ci.exe
+/cmd/defrost/defrost
+/cmd/defrost/defrost.exe
+/cmd/defrost-ci/defrost-ci
+/cmd/defrost-ci/defrost-ci.exe
 
 # Web tooling
 web/node_modules/

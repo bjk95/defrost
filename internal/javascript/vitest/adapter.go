@@ -8,7 +8,8 @@ import (
 	"regexp"
 	"strings"
 
-	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
+	"go.opentelemetry.io/collector/pdata/pmetric"
+	"go.opentelemetry.io/collector/pdata/ptrace"
 
 	"github.com/bjk95/defrost/internal/javascript/parser"
 	"github.com/bjk95/defrost/internal/models"
@@ -237,22 +238,22 @@ func readPackageScript(name string) (string, bool) {
 	return v, ok
 }
 
-func (a *Adapter) Run(cmd []string) ([]models.TestResult, []*metricspb.Metric, int) {
+func (a *Adapter) Run(cmd []string, run models.RunContext) (ptrace.Traces, pmetric.Metrics, int) {
 	if a.watchInScript {
 		fmt.Fprintf(os.Stderr,
 			"defrost: scripts.%s in package.json runs vitest in watch/UI mode; rewrite the script to use 'vitest run …'\n",
 			a.scriptName)
-		return nil, nil, 2
+		return ptrace.NewTraces(), pmetric.NewMetrics(), 2
 	}
 	if detectWatchTriggerArgv(cmd) {
 		fmt.Fprintln(os.Stderr,
 			"defrost: vitest in watch/UI mode can't be wrapped; use 'vitest run [args]' instead")
-		return nil, nil, 2
+		return ptrace.NewTraces(), pmetric.NewMetrics(), 2
 	}
 	if a.formD && detectWatchFlagInFormDArgv(cmd) {
 		fmt.Fprintln(os.Stderr,
 			"defrost: watch/UI flag passed through to vitest in argv; remove --watch / --ui / -w to enable result capture")
-		return nil, nil, 2
+		return ptrace.NewTraces(), pmetric.NewMetrics(), 2
 	}
 	if a.formD && !a.scriptOK {
 		fmt.Fprintf(os.Stderr,
@@ -265,7 +266,7 @@ func (a *Adapter) Run(cmd []string) ([]models.TestResult, []*metricspb.Metric, i
 		f, err := os.CreateTemp("", "defrost-vitest-*.json")
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "defrost:", err)
-			return nil, nil, 1
+			return ptrace.NewTraces(), pmetric.NewMetrics(), 1
 		}
 		path = f.Name()
 		f.Close()
@@ -278,15 +279,15 @@ func (a *Adapter) Run(cmd []string) ([]models.TestResult, []*metricspb.Metric, i
 	exitCode, err := runner.RunChild(child)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "defrost:", err)
-		return nil, nil, 1
+		return ptrace.NewTraces(), pmetric.NewMetrics(), 1
 	}
 
 	cwd, err := os.Getwd()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "defrost:", err)
-		return nil, nil, exitCode
+		return ptrace.NewTraces(), pmetric.NewMetrics(), exitCode
 	}
-	return parseOrPreserve(path, cwd, exitCode)
+	return parseOrPreserve(path, cwd, run, exitCode)
 }
 
 // parseOrPreserve reads vitest's JSON output and returns the parsed
@@ -295,22 +296,22 @@ func (a *Adapter) Run(cmd []string) ([]models.TestResult, []*metricspb.Metric, i
 // parsed, the exit code is preserved and a warning is logged — the
 // adapter never overwrites a meaningful child exit with a synthetic
 // parse-error 1, since that would mask the real failure signal.
-func parseOrPreserve(path, cwd string, exitCode int) ([]models.TestResult, []*metricspb.Metric, int) {
+func parseOrPreserve(path, cwd string, run models.RunContext, exitCode int) (ptrace.Traces, pmetric.Metrics, int) {
 	if !fileNonEmpty(path) {
 		fmt.Fprintf(os.Stderr,
 			"defrost: vitest exited %d without writing JSON output; recording run with no per-test results\n",
 			exitCode)
-		return nil, nil, exitCode
+		return ptrace.NewTraces(), pmetric.NewMetrics(), exitCode
 	}
 	results, err := parser.ParseFile(path, cwd)
 	if err != nil {
 		fmt.Fprintf(os.Stderr,
 			"defrost: parse vitest output: %v; recording run with no per-test results\n",
 			err)
-		return nil, nil, exitCode
+		return ptrace.NewTraces(), pmetric.NewMetrics(), exitCode
 	}
 	runner.ApplyRepoPrefix(results)
-	return results, nil, exitCode
+	return runner.TestResultsToTraces(results, run), pmetric.NewMetrics(), exitCode
 }
 
 func fileNonEmpty(path string) bool {
@@ -325,14 +326,14 @@ func fileNonEmpty(path string) bool {
 // returning the child exit code and no test results. Used when the
 // adapter recognises the invocation form but can't safely capture
 // results (form-D non-watch shape failures).
-func passthroughRun(cmd []string) ([]models.TestResult, []*metricspb.Metric, int) {
+func passthroughRun(cmd []string) (ptrace.Traces, pmetric.Metrics, int) {
 	c := exec.Command(cmd[0], cmd[1:]...)
 	code, err := runner.RunChild(c)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "defrost:", err)
-		return nil, nil, 1
+		return ptrace.NewTraces(), pmetric.NewMetrics(), 1
 	}
-	return nil, nil, code
+	return ptrace.NewTraces(), pmetric.NewMetrics(), code
 }
 
 // detectWatchTriggerArgv inspects the *resolved* argv (i.e. excluding

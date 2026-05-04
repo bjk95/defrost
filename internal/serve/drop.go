@@ -18,14 +18,17 @@ type dropPlanResponse struct {
 	Dev           bool   `json:"dev"`
 	TraceFiles    int    `json:"trace_files"`
 	MetricFiles   int    `json:"metric_files"`
+	LogFiles      int    `json:"log_files"`
 	TraceBytes    int64  `json:"trace_bytes"`
 	MetricBytes   int64  `json:"metric_bytes"`
+	LogBytes      int64  `json:"log_bytes"`
 	OldestRunUTC  string `json:"oldest_run_utc,omitempty"`
 	NewestRunUTC  string `json:"newest_run_utc,omitempty"`
 	SuppressionsN int    `json:"suppressions_n"`
 	BranchMissing bool   `json:"branch_missing"`
 	DropTraces    bool   `json:"drop_traces"`
 	DropMetrics   bool   `json:"drop_metrics"`
+	DropLogs      bool   `json:"drop_logs"`
 	BeforeUTC     string `json:"before_utc,omitempty"`
 	Nothing       bool   `json:"nothing"`
 }
@@ -33,16 +36,18 @@ type dropPlanResponse struct {
 type dropRequest struct {
 	DropTraces  bool   `json:"drop_traces"`
 	DropMetrics bool   `json:"drop_metrics"`
+	DropLogs    bool   `json:"drop_logs"`
 	BeforeUTC   string `json:"before_utc,omitempty"`
 }
 
 func parseDropSelector(q url.Values) (persist.DropSelector, error) {
 	traces := q.Get("drop_traces") != "false"
 	metrics := q.Get("drop_metrics") != "false"
-	if !traces && !metrics {
+	logs := q.Get("drop_logs") != "false"
+	if !traces && !metrics && !logs {
 		return persist.DropSelector{}, errSelectorEmpty
 	}
-	sel := persist.DropSelector{DropTraces: traces, DropMetrics: metrics}
+	sel := persist.DropSelector{DropTraces: traces, DropMetrics: metrics, DropLogs: logs}
 	if raw := q.Get("before_utc"); raw != "" {
 		t, err := parseBeforeUTC(raw)
 		if err != nil {
@@ -67,7 +72,7 @@ func parseBeforeUTC(raw string) (time.Time, error) {
 	return t.UTC(), nil
 }
 
-var errSelectorEmpty = httpErr{status: http.StatusBadRequest, msg: "select at least one of drop_traces or drop_metrics"}
+var errSelectorEmpty = httpErr{status: http.StatusBadRequest, msg: "select at least one of drop_traces, drop_metrics, or drop_logs"}
 
 type httpErr struct {
 	status int
@@ -83,12 +88,15 @@ func toDropPlanResponse(plan persist.DropPlan) dropPlanResponse {
 		Dev:           plan.Dev,
 		TraceFiles:    plan.TraceFiles,
 		MetricFiles:   plan.MetricFiles,
+		LogFiles:      plan.LogFiles,
 		TraceBytes:    plan.TraceBytes,
 		MetricBytes:   plan.MetricBytes,
+		LogBytes:      plan.LogBytes,
 		SuppressionsN: plan.SuppressionsN,
 		BranchMissing: plan.BranchMissing,
 		DropTraces:    plan.Sel.DropTraces,
 		DropMetrics:   plan.Sel.DropMetrics,
+		DropLogs:      plan.Sel.DropLogs,
 		Nothing:       plan.Nothing(),
 	}
 	if !plan.OldestRunUTC.IsZero() {
@@ -150,11 +158,11 @@ func handleDrop(w http.ResponseWriter, r *http.Request, opts persist.Options) {
 		writeJSONError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
 	}
-	if !req.DropTraces && !req.DropMetrics {
-		writeJSONError(w, http.StatusBadRequest, "select at least one of drop_traces or drop_metrics")
+	if !req.DropTraces && !req.DropMetrics && !req.DropLogs {
+		writeJSONError(w, http.StatusBadRequest, "select at least one of drop_traces, drop_metrics, or drop_logs")
 		return
 	}
-	sel := persist.DropSelector{DropTraces: req.DropTraces, DropMetrics: req.DropMetrics}
+	sel := persist.DropSelector{DropTraces: req.DropTraces, DropMetrics: req.DropMetrics, DropLogs: req.DropLogs}
 	if req.BeforeUTC != "" {
 		t, err := parseBeforeUTC(req.BeforeUTC)
 		if err != nil {

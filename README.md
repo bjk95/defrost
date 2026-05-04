@@ -24,8 +24,21 @@ travels with the code — no database, no SaaS, no API keys.
 ## Install
 
 ```sh
-go install github.com/bjk95/defrost@latest
+# Full install: includes the dashboard and embedded DuckDB read engine.
+go install github.com/bjk95/defrost/cmd/defrost@latest
 ```
+
+For CI workflows that only need the write path (`exec`, `history`,
+`suppress`, `drop`) — no dashboard, no DuckDB cgo, no embedded web
+bundle — install the slim `defrost-ci` binary instead. About 1/3 the
+size and faster to install:
+
+```sh
+go install github.com/bjk95/defrost/cmd/defrost-ci@latest
+```
+
+`defrost-ci serve` is a stub that prints the install hint and exits 1,
+so a misuse surfaces immediately rather than silently no-op'ing.
 
 ## Quickstart
 

@@ -1,9 +1,11 @@
 package golang
 
 import (
-	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
+	"go.opentelemetry.io/collector/pdata/pmetric"
+	"go.opentelemetry.io/collector/pdata/ptrace"
 
 	"github.com/bjk95/defrost/internal/models"
+	"github.com/bjk95/defrost/internal/runner"
 )
 
 // Adapter implements runner.Adapter for `go test ...` invocations.
@@ -16,7 +18,7 @@ func (Adapter) Matches(cmd []string) bool {
 	return len(cmd) >= 2 && cmd[0] == "go" && cmd[1] == "test"
 }
 
-func (Adapter) Run(cmd []string) ([]models.TestResult, []*metricspb.Metric, int) {
+func (Adapter) Run(cmd []string, run models.RunContext) (ptrace.Traces, pmetric.Metrics, int) {
 	results, exitCode := ExecuteGoTest(cmd)
-	return results, nil, exitCode
+	return runner.TestResultsToTraces(results, run), pmetric.NewMetrics(), exitCode
 }
