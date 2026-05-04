@@ -28,9 +28,19 @@ import (
 	"github.com/bjk95/defrost/internal/runner/passthrough"
 )
 
-// drainGrace is the window we give SDK background flushes after the
-// child exits before tearing down the OTLP receiver.
-const drainGrace = 2 * time.Second
+// drainTimeout is the upper bound on how long we'll wait for the
+// receiver's in-flight HTTP handlers to complete after the child
+// process exits. Hit this only if a handler is stuck (the child
+// disconnected mid-request, the proxy is broken, …) — under normal
+// conditions Shutdown returns near-instantly because there's no live
+// SDK left to push records once the child has exited.
+//
+// Generous on purpose: the eventual git commit + push is the slow
+// step in `defrost exec`, often 5–30s. Spending an extra few seconds
+// waiting for the OTel SDK to finish flushing costs nothing relative
+// to that, and avoids the prior 2-second hard cap that occasionally
+// truncated late records when CI runners were under load.
+const drainTimeout = 60 * time.Second
 
 // HandleExec is the `defrost exec` subcommand handler. Returns the
 // process exit code.
@@ -167,13 +177,14 @@ func logPersistFailure(err error) {
 
 // drainSink returns the sink's accumulated pdata. Callers MUST have
 // already shut down the receiver. When the receiver argument is non-nil
-// we shut it down first and wait drainGrace for stragglers.
+// we shut it down first and wait for in-flight requests to drain
+// (bounded by drainTimeout as a deadlock backstop).
 func drainSink(sink *otlp.Sink, receiver *otlp.Receiver) (ptrace.Traces, pmetric.Metrics, plog.Logs) {
 	if sink == nil {
 		return ptrace.NewTraces(), pmetric.NewMetrics(), plog.NewLogs()
 	}
 	if receiver != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), drainGrace)
+		ctx, cancel := context.WithTimeout(context.Background(), drainTimeout)
 		_ = receiver.Shutdown(ctx)
 		cancel()
 	}
