@@ -87,6 +87,11 @@ export function RunCell({
       disabled={isNull}
       data-testid={status ? `run-cell-${status}` : "run-cell-empty"}
       style={{
+        // box-sizing: border-box so the dashed border on empty cells
+        // doesn't enlarge the outer width by 2px relative to filled
+        // cells — without it the strip's gap looks ragged because
+        // every solid→dashed transition shifts position by a pixel.
+        boxSizing: "border-box",
         width: size,
         height: size,
         padding: 0,
@@ -313,8 +318,13 @@ export function HistoryStrip({
 // right-aligns consistently across rows. Use stripWidth() to compute
 // the total column width for a given run count so grid layouts stay
 // in lock-step.
+//
+// Both leaf RunCell and group cells set box-sizing: border-box so the
+// 1px dashed border on empty cells doesn't enlarge the outer width
+// relative to filled cells. Without that, the gap looked ragged
+// because every solid→dashed transition shifted position by a pixel.
 export const STRIP_CELL = 11;
-export const STRIP_GAP = 3;
+export const STRIP_GAP = 2;
 
 // stripWidth returns the px width of a history strip rendering runCount
 // squares. Use this as the fixed grid-column width on the run-status
@@ -354,6 +364,7 @@ export function GroupHistoryStrip({
           <div
             key={r.run_id}
             style={{
+              boxSizing: "border-box",
               width: STRIP_CELL,
               height: STRIP_CELL,
               borderRadius: 2,
