@@ -1,18 +1,31 @@
 # Reference
 
-The behavioural contract for defrost. Every command, flag, config key, and
-ingestion schema is documented here. If the binary disagrees with this
-section, that is a bug.
+The behavioural contract for defrost. Every command, flag, default,
+configuration option, on-disk path, and HTTP endpoint is documented
+here. If the binary disagrees with this section, that is a bug.
 
-## Sections
+## CLI
 
-_To be written._ Planned reference pages:
+- **[`defrost exec`](./cli/exec.md)** — run a test command, capture
+  results as OTel, commit to the data branch.
+- **[`defrost history`](./cli/history.md)** — print recorded history for
+  a single test as NDJSON.
+- **[`defrost suppress`](./cli/suppress.md)** — manage the suppression
+  list (`add`, `remove`, `list`).
+- **[`defrost drop`](./cli/drop.md)** — destructively drop persisted
+  traces and/or metrics.
+- **[`defrost serve`](./cli/serve.md)** — serve the local dashboard.
 
-- **CLI** — one page per command (`defrost run`, `defrost serve`,
-  `defrost suppress`, `defrost drop`, `defrost history`).
-- **Configuration** — config file schema and environment variables.
-- **OTel ingestion** — accepted spans, attributes, and how they map to
-  defrost test/eval/metric records.
-- **`_defrost` branch layout** — the on-disk format of recorded runs.
+## Configuration
 
-Reference pages are the spec. New behaviour starts as a change here.
+- **[Configuration](./configuration.md)** — flags shared across all
+  commands and the environment variables defrost reads.
+
+## Storage and ingestion
+
+- **[Storage layout](./storage-layout.md)** — what defrost writes to the
+  data branch, file paths, formats, the `suppressions.json` schema.
+- **[OTel ingestion](./otel-ingestion.md)** — the OTLP receiver embedded
+  in `defrost exec`, accepted signals, span and attribute conventions.
+- **[Serve HTTP API](./serve-api.md)** — endpoints exposed by
+  `defrost serve` for the dashboard.

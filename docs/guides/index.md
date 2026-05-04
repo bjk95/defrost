@@ -1,20 +1,19 @@
 # Guides
 
-Task-oriented walkthroughs. Start with the Quickstart, then pick the guide
-that matches what you're trying to do.
+Task-oriented walkthroughs. Start with the Quickstart, then pick the
+guide that matches what you're trying to do.
 
-## Available guides
-
-_To be written._ Planned guides cover the existing features:
-
-- **Quickstart** — install defrost and record your first run.
-- **Recording test results** — wire defrost into your test runner (pytest,
-  Jest, go test).
-- **Recording evals** — push eval results from any language via OpenTelemetry.
-- **Suppressing known-failing tests** — keep CI green without skipping in
-  source.
-- **Running the dashboard** — `defrost serve` and what you can do with it.
-- **CI setup** — recording runs from GitHub Actions and other CI systems.
+- **[Quickstart](./quickstart.md)** — install defrost, record your
+  first run, see the result.
+- **[Recording test results](./recording-tests.md)** — wire defrost
+  into pytest, Jest, Vitest, or `go test`.
+- **[Recording evals](./recording-evals.md)** — push eval metrics from
+  any language via OpenTelemetry.
+- **[Suppressing known-failing tests](./suppressing-tests.md)** — keep
+  CI green without skipping in source.
+- **[Running the dashboard](./dashboard.md)** — `defrost serve` and
+  what you can do with it.
+- **[CI setup](./ci-setup.md)** — recording runs from GitHub Actions.
 
 If you need exact behaviour rather than walkthroughs, see the
 [reference](../reference/).
