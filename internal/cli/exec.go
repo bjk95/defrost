@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/collector/pdata/plog"
@@ -109,10 +111,31 @@ func execWith(a runner.Adapter, c ExecCmd, root RootOpts, out *cliout.Printer) i
 		lg.ResourceLogs().MoveAndAppendTo(receiverLogs.ResourceLogs())
 	}
 
-	pass, fail, skip := tallyResults(results)
-	if pass+fail+skip > 0 {
-		out.Stepf("%d passed   ✗ %d failed   ⊘ %d skipped", pass, fail, skip)
+	// Load the suppression set BEFORE the summary so suppressed
+	// failures are reported in their own column rather than mislabeled
+	// as "failed". A read failure (no origin, transient git error)
+	// degrades to suppSet=nil — the summary will then show the raw
+	// failure count and the exit code is preserved later.
+	var suppSet map[string]struct{}
+	if hasUnSuppressibleFailures(results) {
+		var err error
+		suppSet, err = loadSuppressionSet(pOpts)
+		if err != nil {
+			out.Warnf("suppression read failed: %v", err)
+			suppSet = nil
+		}
 	}
+
+	pass, fail, skip, suppressed := tallyResults(results, suppSet)
+	if pass+fail+skip+suppressed > 0 {
+		out.Stepf("%s passed   %s %s failed   %s %s skipped   %s %s suppressed",
+			out.Bold(out.Green(strconv.Itoa(pass))),
+			out.Red("✗"), out.Bold(out.Red(strconv.Itoa(fail))),
+			out.Yellow("⊘"), out.Bold(out.Dim(strconv.Itoa(skip))),
+			out.Dim("✱"), out.Bold(out.Dim(strconv.Itoa(suppressed))),
+		)
+	}
+	printFailedTests(out, results, suppSet)
 
 	if persistEnabled && !persistFailed {
 		// Add the synthetic root span and run-duration metric, then
@@ -152,7 +175,7 @@ func execWith(a runner.Adapter, c ExecCmd, root RootOpts, out *cliout.Printer) i
 	// happened, the test command's signal is what matters. The user's
 	// terminal got a clear warning above; suppression rewriting still
 	// applies. See docs/guides/troubleshooting/persist-failed.md.
-	code = maybeRewriteExitCode(code, results, pOpts, out)
+	code = maybeRewriteExitCode(code, results, suppSet, out)
 	return code
 }
 
@@ -293,7 +316,12 @@ func marshalLogs(ld plog.Logs) ([]byte, error) {
 	return plogotlp.NewExportRequestFromLogs(ld).MarshalProto()
 }
 
-func tallyResults(td ptrace.Traces) (pass, fail, skip int) {
+// tallyResults counts results by category. A failing test that is on
+// the suppression list (and not a file-level error) is counted as
+// suppressed rather than failed, so the summary the user sees matches
+// the eventual exit-code rewrite. suppSet may be nil — in that case
+// nothing is reclassified.
+func tallyResults(td ptrace.Traces, suppSet map[string]struct{}) (pass, fail, skip, suppressed int) {
 	rs := td.ResourceSpans()
 	for i := 0; i < rs.Len(); i++ {
 		ss := rs.At(i).ScopeSpans()
@@ -311,10 +339,16 @@ func tallyResults(td ptrace.Traces) (pass, fail, skip int) {
 				switch v.AsString() {
 				case "passed":
 					pass++
-				case "failed", "aborted":
-					fail++
 				case "skipped":
 					skip++
+				case "failed", "aborted":
+					if !isFileError(span.Name()) && suppSet != nil {
+						if _, ok := suppSet[span.Name()]; ok {
+							suppressed++
+							continue
+						}
+					}
+					fail++
 				}
 			}
 		}
@@ -322,10 +356,11 @@ func tallyResults(td ptrace.Traces) (pass, fail, skip int) {
 	return
 }
 
-// maybeRewriteExitCode rewrites a non-zero exit to 0 when every failing
-// test (excluding file-level errors, which we never suppress) is on
-// the suppression list.
-func maybeRewriteExitCode(code int, td ptrace.Traces, pOpts persist.Options, out *cliout.Printer) int {
+// maybeRewriteExitCode returns 0 if every failing test is on the
+// suppression list, else preserves code. suppSet may be nil — that
+// signals the suppression read failed earlier and we can't make a
+// confident decision, so the original exit code stands.
+func maybeRewriteExitCode(code int, td ptrace.Traces, suppSet map[string]struct{}, out *cliout.Printer) int {
 	failing, hasFileError := failingAndFileError(td)
 	if len(failing) == 0 {
 		return code
@@ -334,31 +369,175 @@ func maybeRewriteExitCode(code int, td ptrace.Traces, pOpts persist.Options, out
 		out.Warnf("file-level error present; exit %d preserved", code)
 		return code
 	}
-	out.Infof("checking suppression list for %d failing test(s)", len(failing))
-	suppressed, err := persist.New(pOpts).GetSuppressions()
-	if err != nil {
-		out.Warnf("suppression read failed (exit code unchanged): %v", err)
+	if suppSet == nil {
+		// Read failed earlier — we already warned the user; preserve
+		// the exit code rather than guessing.
 		return code
 	}
-	suppSet := make(map[string]struct{}, len(suppressed))
-	for _, s := range suppressed {
-		suppSet[s] = struct{}{}
-	}
-	allSuppressed := true
 	for _, id := range failing {
-		if _, ok := suppSet[id]; ok {
-			out.Infof("  %s in suppression list -> ignoring", id)
-		} else {
-			out.Infof("  %s not in suppression list -> failing build", id)
-			allSuppressed = false
+		if _, ok := suppSet[id]; !ok {
+			return code
 		}
 	}
-	if !allSuppressed {
-		out.Warnf("not all failures suppressed; exit %d preserved", code)
-		return code
-	}
-	out.Passf("all %d failing test(s) suppressed; rewriting exit %d → 0", len(failing), code)
+	out.Infof("all %d failing test(s) suppressed; rewriting exit %d → 0", len(failing), code)
 	return 0
+}
+
+// loadSuppressionSet reads the suppression list from the data branch
+// and returns it as a set. Caller decides what to do on error.
+func loadSuppressionSet(pOpts persist.Options) (map[string]struct{}, error) {
+	ids, err := persist.New(pOpts).GetSuppressions()
+	if err != nil {
+		return nil, err
+	}
+	set := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		set[id] = struct{}{}
+	}
+	return set, nil
+}
+
+// hasUnSuppressibleFailures reports whether any test in td is a
+// real (non-file-level) failure — i.e. the kind that suppression
+// could potentially mask. Used to short-circuit the suppression read
+// when it can't possibly affect the outcome.
+func hasUnSuppressibleFailures(td ptrace.Traces) bool {
+	rs := td.ResourceSpans()
+	for i := 0; i < rs.Len(); i++ {
+		ss := rs.At(i).ScopeSpans()
+		for j := 0; j < ss.Len(); j++ {
+			spans := ss.At(j).Spans()
+			for k := 0; k < spans.Len(); k++ {
+				s := spans.At(k)
+				if s.Name() == runner.RootSpanName {
+					continue
+				}
+				v, ok := s.Attributes().Get("test.case.result.status")
+				if !ok {
+					continue
+				}
+				status := v.AsString()
+				if (status == "failed" || status == "aborted") && !isFileError(s.Name()) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// printFailedTests appends a "Failures:" block under the result
+// summary listing each failed test ID (un-suppressed only). At -v
+// (Info verbosity) it also dumps the first few lines of each test's
+// captured failure output (from the test span's status.message
+// attribute, or the most recent event whose name is "exception").
+// File-level errors are excluded — they're printed separately by
+// the maybeRewriteExitCode flow when present.
+func printFailedTests(out *cliout.Printer, td ptrace.Traces, suppSet map[string]struct{}) {
+	type failedSpan struct {
+		name     string
+		duration time.Duration
+		message  string
+	}
+	var failures []failedSpan
+
+	rs := td.ResourceSpans()
+	for i := 0; i < rs.Len(); i++ {
+		ss := rs.At(i).ScopeSpans()
+		for j := 0; j < ss.Len(); j++ {
+			spans := ss.At(j).Spans()
+			for k := 0; k < spans.Len(); k++ {
+				s := spans.At(k)
+				if s.Name() == runner.RootSpanName {
+					continue
+				}
+				v, ok := s.Attributes().Get("test.case.result.status")
+				if !ok {
+					continue
+				}
+				status := v.AsString()
+				if status != "failed" && status != "aborted" {
+					continue
+				}
+				if isFileError(s.Name()) {
+					continue
+				}
+				if suppSet != nil {
+					if _, ok := suppSet[s.Name()]; ok {
+						continue
+					}
+				}
+				failures = append(failures, failedSpan{
+					name:     s.Name(),
+					duration: time.Duration(s.EndTimestamp() - s.StartTimestamp()),
+					message:  spanFailureMessage(s),
+				})
+			}
+		}
+	}
+
+	if len(failures) == 0 {
+		return
+	}
+	out.Failf("%s:", out.Bold("Failures"))
+	for _, f := range failures {
+		fmt.Fprintf(os.Stderr, "  %s  %s\n",
+			out.Bold(f.name),
+			out.Dim(fmt.Sprintf("(%s)", f.duration.Round(time.Millisecond))),
+		)
+		if out.Verbose() && f.message != "" {
+			for _, line := range failureMessageLines(f.message, 4) {
+				fmt.Fprintf(os.Stderr, "    %s\n", out.Dim(line))
+			}
+		}
+	}
+}
+
+// spanFailureMessage extracts the most informative failure message
+// from a failed test span. Tries in order:
+//  1. The span's Status.Message
+//  2. The most recent event whose name is "exception" (its
+//     "exception.message" attribute)
+//  3. Any attribute named "test.case.failure_message"
+//
+// Returns "" if nothing useful is found.
+func spanFailureMessage(s ptrace.Span) string {
+	if msg := s.Status().Message(); msg != "" {
+		return msg
+	}
+	events := s.Events()
+	for i := events.Len() - 1; i >= 0; i-- {
+		e := events.At(i)
+		if e.Name() == "exception" {
+			if v, ok := e.Attributes().Get("exception.message"); ok {
+				return v.AsString()
+			}
+		}
+	}
+	if v, ok := s.Attributes().Get("test.case.failure_message"); ok {
+		return v.AsString()
+	}
+	return ""
+}
+
+// failureMessageLines returns up to maxLines non-empty lines from
+// a failure message, trimmed of leading whitespace.
+func failureMessageLines(msg string, maxLines int) []string {
+	if msg == "" {
+		return nil
+	}
+	var lines []string
+	for _, raw := range strings.Split(msg, "\n") {
+		trimmed := strings.TrimSpace(raw)
+		if trimmed == "" {
+			continue
+		}
+		lines = append(lines, trimmed)
+		if len(lines) >= maxLines {
+			break
+		}
+	}
+	return lines
 }
 
 // failingAndFileError walks td and returns the IDs of failing test

@@ -83,6 +83,9 @@ func (p *Printer) Infof(format string, args ...any) { p.Info(fmt.Sprintf(format,
 // Debugf is Debug with formatting.
 func (p *Printer) Debugf(format string, args ...any) { p.Debug(fmt.Sprintf(format, args...)) }
 
+// Verbose reports whether the printer is at -v verbosity or above (verbosity >= 1).
+func (p *Printer) Verbose() bool { return p.verbosity >= 1 }
+
 // ShouldUseColor decides whether color output should be enabled.
 // Precedence (highest first):
 //  1. --no-color flag       → off
