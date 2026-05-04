@@ -19,12 +19,24 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Debug go env
+        # Temporary: surface the actual build error (job has been
+        # failing in 13s with no visible cause).
+        run: |
+          set -x
+          go version
+          go env GOPROXY GOSUMDB GOFLAGS GOMODCACHE GOOS GOARCH CGO_ENABLED
+          ls -la
+          head -30 go.mod
+
       - name: Build defrost-ci
         # CI workflows use defrost-ci (the slim binary): no DuckDB cgo,
         # no embedded web bundle. Same exec/history/suppress/drop
         # subcommands as the full binary; only serve differs (it's a
         # stub that prints the install hint).
-        run: go build -o defrost ./cmd/defrost-ci
+        run: |
+          set -x
+          go build -v -o defrost ./cmd/defrost-ci 2>&1 | tail -50
 
       - name: Configure git auth for defrost persist
         run: |
