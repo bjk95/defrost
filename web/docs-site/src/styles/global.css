@@ -1,0 +1,384 @@
+/*
+ * Starlight + Tailwind v4 integration following the official guide:
+ * https://starlight.astro.build/guides/css-and-tailwind/#tailwind-css
+ *
+ * Visual target: the Arcflo design system from the docs.html prototype —
+ * Vercel-inspired, monochrome, Geist + Geist Mono, hairline borders,
+ * tight type. Blue is defined but reserved for code-syntax highlighting
+ * and focus rings only — chrome (sidebar active state, links, tabs)
+ * uses the foreground gray, never blue.
+ */
+
+@layer base, starlight, theme, components, utilities;
+
+@import "@astrojs/starlight-tailwind";
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
+
+/* =========================================================================
+   Design tokens — mirrored from web/src/index.css and the design prototype's
+   tokens.css. Single source of truth so the docs site and dashboard render
+   in identical palettes.
+   ========================================================================= */
+:root {
+  --gray-0: oklch(1 0 0);
+  --gray-50: oklch(0.985 0 0);
+  --gray-100: oklch(0.97 0 0);
+  --gray-200: oklch(0.935 0 0);
+  --gray-300: oklch(0.88 0 0);
+  --gray-400: oklch(0.74 0 0);
+  --gray-500: oklch(0.62 0 0);
+  --gray-600: oklch(0.52 0 0);
+  --gray-700: oklch(0.38 0 0);
+  --gray-800: oklch(0.24 0 0);
+  --gray-900: oklch(0.16 0 0);
+  --gray-1000: oklch(0.09 0 0);
+
+  /* Blue exists in the token system for code keywords / focus rings.
+     Chrome must not use it — see accent overrides below. */
+  --blue-500: oklch(0.60 0.22 255);
+  --blue-600: oklch(0.54 0.22 258);
+
+  --success: oklch(0.62 0.17 150);
+  --warning: oklch(0.76 0.16 75);
+  --danger: oklch(0.58 0.24 27);
+
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+
+  --shadow-sm: 0 1px 2px 0 oklch(0 0 0 / 0.05);
+  --shadow-md: 0 2px 4px -1px oklch(0 0 0 / 0.06), 0 1px 2px -1px oklch(0 0 0 / 0.04);
+  --shadow-lg: 0 8px 24px -6px oklch(0 0 0 / 0.08), 0 2px 4px -2px oklch(0 0 0 / 0.04);
+}
+
+/* =========================================================================
+   Light theme. Accent collapses onto the foreground color so active sidebar
+   items render as a near-black pill on near-white — the Vercel-docs look
+   from the prototype's Sidebar component (border-left + bg-muted).
+   ========================================================================= */
+:root[data-theme="light"] {
+  --sl-color-white: var(--gray-900);
+  --sl-color-gray-1: var(--gray-800);
+  --sl-color-gray-2: var(--gray-700);
+  --sl-color-gray-3: var(--gray-500);
+  --sl-color-gray-4: var(--gray-400);
+  --sl-color-gray-5: var(--gray-300);
+  --sl-color-gray-6: var(--gray-200);
+  --sl-color-gray-7: var(--gray-100);
+  --sl-color-black: var(--gray-0);
+
+  --sl-color-accent-low: var(--gray-100);
+  --sl-color-accent: var(--gray-900);
+  --sl-color-accent-high: var(--gray-1000);
+
+  --sl-color-text: var(--gray-900);
+  --sl-color-text-accent: var(--gray-900);
+  --sl-color-text-invert: var(--gray-0);
+  --sl-color-bg: var(--gray-0);
+  --sl-color-bg-nav: var(--gray-0);
+  --sl-color-bg-sidebar: var(--gray-0);
+  --sl-color-bg-inline-code: var(--gray-100);
+  --sl-color-bg-accent: var(--gray-900);
+  --sl-color-hairline-light: var(--gray-200);
+  --sl-color-hairline: var(--gray-200);
+  --sl-color-hairline-shade: var(--gray-300);
+}
+
+:root[data-theme="dark"] {
+  --sl-color-white: var(--gray-0);
+  --sl-color-gray-1: var(--gray-50);
+  --sl-color-gray-2: var(--gray-200);
+  --sl-color-gray-3: var(--gray-400);
+  --sl-color-gray-4: var(--gray-500);
+  --sl-color-gray-5: var(--gray-700);
+  --sl-color-gray-6: var(--gray-800);
+  --sl-color-gray-7: var(--gray-900);
+  --sl-color-black: var(--gray-1000);
+
+  --sl-color-accent-low: var(--gray-800);
+  --sl-color-accent: var(--gray-50);
+  --sl-color-accent-high: var(--gray-0);
+
+  --sl-color-text: var(--gray-50);
+  --sl-color-text-accent: var(--gray-50);
+  --sl-color-text-invert: var(--gray-900);
+  --sl-color-bg: var(--gray-1000);
+  --sl-color-bg-nav: var(--gray-1000);
+  --sl-color-bg-sidebar: var(--gray-1000);
+  --sl-color-bg-inline-code: var(--gray-800);
+  --sl-color-bg-accent: var(--gray-50);
+  --sl-color-hairline-light: oklch(1 0 0 / 0.08);
+  --sl-color-hairline: oklch(1 0 0 / 0.1);
+  --sl-color-hairline-shade: oklch(1 0 0 / 0.15);
+}
+
+/* =========================================================================
+   Typography — Geist + Geist Mono, with the dashboard's feature flags.
+   ========================================================================= */
+:root {
+  --sl-font: 'Geist Variable', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --sl-font-mono: 'Geist Mono Variable', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  --sl-text-h1: 36px;
+  --sl-text-h2: 22px;
+  --sl-text-h3: 16px;
+  --sl-text-h4: 14px;
+}
+
+html {
+  font-feature-settings: 'ss01', 'cv11', 'tnum';
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* =========================================================================
+   Component-level visual matches to the design prototype.
+   ========================================================================= */
+@layer components {
+  /* ----- Headings ---------------------------------------------------------
+     Matches docs.jsx <H depth={n}>:
+       H1 36px / -0.025em / line-height 1.15
+       H2 22px / -0.015em / line-height 1.25 / border-top section divider
+       H3 16px / -0.01em
+     Starlight emits headings inside .sl-markdown-content; we restyle them
+     in place so any markdown page picks them up automatically.
+     ---------------------------------------------------------------------- */
+  .sl-markdown-content :is(h1, h2, h3, h4, h5, h6) {
+    font-weight: 600;
+    color: var(--sl-color-white);
+  }
+  .sl-markdown-content h1 {
+    font-size: 36px;
+    line-height: 1.15;
+    letter-spacing: -0.025em;
+    margin-bottom: 12px;
+  }
+  .sl-markdown-content h2 {
+    font-size: 22px;
+    line-height: 1.25;
+    letter-spacing: -0.015em;
+    margin-top: 56px;
+    padding-top: 24px;
+    border-top: 1px solid var(--sl-color-hairline);
+    margin-bottom: 12px;
+  }
+  .sl-markdown-content h3 {
+    font-size: 16px;
+    line-height: 1.3;
+    letter-spacing: -0.01em;
+    margin-top: 32px;
+    margin-bottom: 12px;
+  }
+  .sl-markdown-content h4 {
+    font-size: 14px;
+    margin-top: 24px;
+    margin-bottom: 8px;
+  }
+
+  /* Body paragraphs: 14px / 1.7, max-width 70ch (matches design's <P>) */
+  .sl-markdown-content p {
+    font-size: 14px;
+    line-height: 1.7;
+    max-width: 70ch;
+  }
+  .sl-markdown-content :is(ul, ol) {
+    font-size: 14px;
+    line-height: 1.7;
+    max-width: 70ch;
+  }
+
+  /* ----- Inline code ------------------------------------------------------
+     Bordered, gray-100 (or gray-800 in dark) bg, --radius-xs.
+     Matches design's <Code> primitive.
+     ---------------------------------------------------------------------- */
+  .sl-markdown-content :not(pre) > code {
+    font-family: var(--sl-font-mono);
+    font-size: 0.88em;
+    background: var(--sl-color-bg-inline-code);
+    border: 1px solid var(--sl-color-hairline);
+    border-radius: var(--radius-xs);
+    padding: 1px 5px;
+    color: var(--sl-color-white);
+  }
+
+  /* ----- Sidebar ----------------------------------------------------------
+     Matches design's <Sidebar>: 5px 8px padding, 6px radius, active state
+     uses bg-muted + 2px left border in fg color (the "active rail" pattern).
+     ---------------------------------------------------------------------- */
+  .sidebar-content a,
+  .sidebar-content summary {
+    border-radius: var(--radius-sm);
+    padding: 5px 8px;
+    border-left: 2px solid transparent;
+    color: var(--sl-color-gray-3);
+    font-weight: 400;
+    transition: background-color 120ms cubic-bezier(0.16, 1, 0.3, 1),
+                color 120ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .sidebar-content a:hover {
+    color: var(--sl-color-white);
+    background: var(--sl-color-gray-7);
+  }
+  .sidebar-content a[aria-current="page"] {
+    background: var(--sl-color-gray-7);
+    color: var(--sl-color-white);
+    font-weight: 500;
+    border-left: 2px solid var(--sl-color-white);
+    padding-left: 10px;
+  }
+
+  /* Group label "eyebrow" — small, uppercase, mono-ish */
+  .sidebar-content .large {
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--sl-color-gray-3);
+  }
+
+  /* ----- Right-hand TOC ---------------------------------------------------
+     Matches design's <TableOfContents>: hairline left border that turns to
+     a fg-color rule on the active item.
+     ---------------------------------------------------------------------- */
+  starlight-toc nav ul a,
+  mobile-starlight-toc nav ul a {
+    border-radius: 0;
+    padding: 3px 0 3px 12px;
+    border-left: 1px solid var(--sl-color-hairline);
+    color: var(--sl-color-gray-3);
+    font-size: 12px;
+    line-height: 1.5;
+  }
+  starlight-toc nav ul a[aria-current="true"],
+  mobile-starlight-toc nav ul a[aria-current="true"] {
+    border-left-color: var(--sl-color-white);
+    color: var(--sl-color-white);
+    font-weight: 500;
+  }
+  starlight-toc nav h2,
+  mobile-starlight-toc nav h2 {
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--sl-color-gray-3);
+  }
+
+  /* ----- Asides / callouts ------------------------------------------------
+     Matches design's <Callout>: bordered rounded box, colored icon + label,
+     8px radius. We tighten Starlight's default left-stripe to a uniform
+     1px border + colored title text.
+     ---------------------------------------------------------------------- */
+  .starlight-aside {
+    border-radius: var(--radius-md);
+    border-width: 1px;
+    border-left-width: 1px;
+    padding: 12px 16px;
+    font-size: 13.5px;
+    line-height: 1.6;
+  }
+  .starlight-aside--note {
+    background: var(--sl-color-gray-7);
+    border-color: var(--sl-color-hairline);
+  }
+  .starlight-aside--tip {
+    background: color-mix(in oklch, var(--success) 8%, var(--sl-color-bg));
+    border-color: color-mix(in oklch, var(--success) 22%, var(--sl-color-hairline));
+  }
+  .starlight-aside--caution {
+    background: color-mix(in oklch, var(--warning) 8%, var(--sl-color-bg));
+    border-color: color-mix(in oklch, var(--warning) 25%, var(--sl-color-hairline));
+  }
+  .starlight-aside--danger {
+    background: color-mix(in oklch, var(--danger) 6%, var(--sl-color-bg));
+    border-color: color-mix(in oklch, var(--danger) 22%, var(--sl-color-hairline));
+  }
+
+  /* ----- Code blocks (Expressive Code) -----------------------------------
+     The Astro config pins a single dark theme. Here we tighten the chrome:
+     no hard border, our radius, mono font already inherited from the
+     styleOverrides. Inline code lives in the rule above.
+     ---------------------------------------------------------------------- */
+  .expressive-code .frame {
+    border-radius: var(--radius-md);
+    border: 1px solid var(--sl-color-hairline);
+    box-shadow: var(--shadow-sm);
+  }
+  .expressive-code .frame.has-title:not(.is-terminal) .header {
+    border-top-left-radius: var(--radius-md);
+    border-top-right-radius: var(--radius-md);
+  }
+
+  /* ----- Tables (reference docs) -----------------------------------------
+     Tighter borders, mono header row in the design's eyebrow style.
+     ---------------------------------------------------------------------- */
+  .sl-markdown-content table {
+    width: 100%;
+    border: 1px solid var(--sl-color-hairline);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+    border-collapse: separate;
+    border-spacing: 0;
+    font-size: 13px;
+    line-height: 1.55;
+  }
+  .sl-markdown-content thead tr {
+    background: var(--sl-color-gray-7);
+  }
+  .sl-markdown-content th {
+    padding: 8px 12px;
+    text-align: left;
+    font-family: var(--sl-font-mono);
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--sl-color-gray-3);
+    border-bottom: 1px solid var(--sl-color-hairline);
+  }
+  .sl-markdown-content td {
+    padding: 12px;
+    border-top: 1px solid var(--sl-color-hairline);
+    vertical-align: top;
+  }
+  .sl-markdown-content tbody tr:first-child td {
+    border-top: none;
+  }
+
+  /* ----- Search trigger and dialog ---------------------------------------
+     Pagefind input uses --radius-sm to match the chrome.
+     ---------------------------------------------------------------------- */
+  button[data-open-modal],
+  [data-open-modal] kbd {
+    border-radius: var(--radius-sm);
+  }
+  dialog[data-pagefind-ui] .pagefind-ui__search-input,
+  dialog[data-pagefind-ui] .pagefind-ui__result {
+    border-radius: var(--radius-sm);
+  }
+
+  /* ----- Pager (next/prev at page bottom) --------------------------------
+     Matches design's <Pager>: rounded card with uppercase eyebrow + title.
+     ---------------------------------------------------------------------- */
+  .sl-markdown-content + footer .pagination-links a,
+  footer.sl-flex .pagination-links a,
+  a[rel="prev"], a[rel="next"] {
+    border-radius: var(--radius-lg);
+    padding: 16px 18px;
+    border: 1px solid var(--sl-color-hairline);
+    background: var(--sl-color-bg);
+  }
+
+  /* ----- Top header polish -----------------------------------------------
+     Translucent backdrop-blur background, subtle bottom hairline. */
+  header.header {
+    background: color-mix(in oklch, var(--sl-color-bg) 80%, transparent);
+    backdrop-filter: saturate(180%) blur(8px);
+    -webkit-backdrop-filter: saturate(180%) blur(8px);
+    border-bottom: 1px solid var(--sl-color-hairline);
+  }
+}

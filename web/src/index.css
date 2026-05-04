@@ -1,6 +1,12 @@
 @import "@fontsource-variable/geist";
 @import "@fontsource-variable/geist-mono";
+@import "tailwindcss";
 
+/*
+ * Existing design tokens. The full app — including new shadcn components —
+ * reads colors, fonts, radii, and shadows from these variables. Updating
+ * the palette is a single-file change.
+ */
 :root {
   --gray-0: oklch(1 0 0);
   --gray-50: oklch(0.985 0 0);
@@ -77,6 +83,67 @@
   --fg-inverse: var(--gray-1000);
   --border: oklch(1 0 0 / 0.1);
   --border-strong: oklch(1 0 0 / 0.15);
+}
+
+/*
+ * Tailwind v4 theme. Every utility is rooted in the design tokens above
+ * so visual output is identical to the legacy stylesheet — utilities are
+ * just a different way to apply the same colors and sizes.
+ *
+ * shadcn looks for tokens named --color-background, --color-foreground,
+ * --color-primary, etc. We point those at the corresponding house tokens.
+ */
+@theme {
+  --color-background: var(--bg);
+  --color-foreground: var(--fg);
+  --color-card: var(--bg);
+  --color-card-foreground: var(--fg);
+  --color-popover: var(--bg);
+  --color-popover-foreground: var(--fg);
+  --color-primary: var(--accent);
+  --color-primary-foreground: var(--accent-fg);
+  --color-secondary: var(--bg-muted);
+  --color-secondary-foreground: var(--fg);
+  --color-muted: var(--bg-muted);
+  --color-muted-foreground: var(--fg-muted);
+  --color-accent: var(--bg-muted);
+  --color-accent-foreground: var(--fg);
+  --color-destructive: var(--danger);
+  --color-destructive-foreground: var(--gray-0);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-border: var(--border);
+  --color-input: var(--border);
+  --color-ring: var(--blue-500);
+
+  --color-bg: var(--bg);
+  --color-bg-subtle: var(--bg-subtle);
+  --color-bg-muted: var(--bg-muted);
+  --color-bg-inverse: var(--bg-inverse);
+  --color-fg: var(--fg);
+  --color-fg-muted: var(--fg-muted);
+  --color-fg-subtle: var(--fg-subtle);
+  --color-fg-inverse: var(--fg-inverse);
+  --color-border-strong: var(--border-strong);
+
+  --color-terminal-bg: var(--terminal-bg);
+  --color-terminal-fg: var(--terminal-fg);
+  --color-terminal-dim: var(--terminal-dim);
+
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+
+  --radius-xs: var(--radius-xs);
+  --radius-sm: var(--radius-sm);
+  --radius-md: var(--radius-md);
+  --radius-lg: var(--radius-lg);
+  --radius-xl: var(--radius-xl);
+  --radius-full: var(--radius-full);
+
+  --shadow-xs: var(--shadow-xs);
+  --shadow-sm: var(--shadow-sm);
+  --shadow-md: var(--shadow-md);
+  --shadow-lg: var(--shadow-lg);
 }
 
 * { box-sizing: border-box; }
