@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
-	"path/filepath"
 	"sort"
 )
 
@@ -21,15 +21,16 @@ type suppressionsDoc struct {
 
 const suppressionsSchema = 1
 
-// readSuppressionsFile returns the suppression list at dir/suppressions.json.
-// An absent file is not an error: it returns an empty slice. A present-but-
-// malformed file IS an error — defrost must not silently treat corruption as
-// "no suppressions" (which would un-suppress everything).
-func readSuppressionsFile(dir string) ([]string, error) {
-	path := filepath.Join(dir, suppressionsFile)
+// readSuppressions reads <repoDir>/.defrost/suppressions.json. An
+// absent file is not an error — it returns an empty slice. A
+// present-but-malformed file IS an error: defrost must not silently
+// treat corruption as "no suppressions" (which would un-suppress
+// everything).
+func readSuppressions(opts Options) ([]string, error) {
+	path := LocalSuppressionsPath(opts)
 	b, err := os.ReadFile(path)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
+		if errors.Is(err, fs.ErrNotExist) {
 			return []string{}, nil
 		}
 		return nil, err
@@ -41,189 +42,63 @@ func readSuppressionsFile(dir string) ([]string, error) {
 	return doc.TestIDs, nil
 }
 
-// writeSuppressionsFile sorts and dedupes ids, then writes the JSON
-// document to dir/suppressions.json with two-space indent and a trailing
-// newline. Sorting on every write keeps diffs minimal regardless of input
-// order.
-func writeSuppressionsFile(dir string, ids []string) error {
+// writeSuppressions sorts and dedupes ids, then writes the JSON
+// document with two-space indent and a trailing newline. Sorting on
+// every write keeps diffs minimal regardless of input order.
+//
+// Suppressions live in the user's working tree at
+// <repoDir>/.defrost/suppressions.json. The user is responsible for
+// `git add` + `git commit` afterwards as part of their normal
+// workflow — we deliberately don't auto-commit so suppression
+// changes are reviewable in PRs.
+func writeSuppressions(opts Options, ids []string) error {
+	if err := EnsureLocalDir(opts); err != nil {
+		return err
+	}
 	doc := suppressionsDoc{Schema: suppressionsSchema, TestIDs: sortAndDedupe(ids)}
 	b, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal suppressions: %w", err)
 	}
-	path := filepath.Join(dir, suppressionsFile)
-	return os.WriteFile(path, append(b, '\n'), 0o644)
+	return os.WriteFile(LocalSuppressionsPath(opts), append(b, '\n'), 0o644)
 }
 
-func (b *fileBackend) GetSuppressions() ([]string, error) {
-	if _, err := os.Stat(b.dir); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return []string{}, nil
-		}
-		return nil, err
-	}
-	return readSuppressionsFile(b.dir)
-}
+// Both backends share the same suppressions implementation: read/
+// write <repoDir>/.defrost/suppressions.json. There's no git here.
+//
+// Was this on the data branch in a prior iteration? Yes. Why move it?
+// Three reasons: (1) suppressions are project-scoped knowledge that
+// belongs in the same review process as the code itself; (2) reads are
+// hot-path (every `defrost exec` checks the list to decide exit-code
+// rewrite) and a clone-per-read is wasteful; (3) the gitBackend's
+// commit/push/retry machinery for suppressions was the most complex
+// code in this package for a feature with no concurrency requirement.
+
+func (b *fileBackend) GetSuppressions() ([]string, error) { return readSuppressions(b.opts) }
 
 func (b *fileBackend) UpdateSuppressions(mutate func([]string) []string, _ string) error {
-	if err := os.MkdirAll(b.dir, 0o755); err != nil {
-		return err
-	}
-	cur, err := readSuppressionsFile(b.dir)
-	if err != nil {
-		return err
-	}
-	return writeSuppressionsFile(b.dir, mutate(cur))
+	return updateSuppressions(b.opts, mutate)
 }
 
-func (b *gitBackend) GetSuppressions() ([]string, error) {
-	branch := b.opts.DataBranch
-	if branch == "" {
-		branch = DefaultDataBranch
-	}
+func (b *gitBackend) GetSuppressions() ([]string, error) { return readSuppressions(b.opts) }
 
-	remoteURL, err := resolveTargetURL(b.opts)
-	if err != nil {
-		return nil, err
-	}
-
-	exists, err := branchExistsOnRemote(remoteURL, branch)
-	if err != nil {
-		return nil, err
-	}
-	if !exists {
-		return []string{}, nil
-	}
-
-	workDir, err := os.MkdirTemp("", "defrost-suppress-read-")
-	if err != nil {
-		return nil, fmt.Errorf("mktemp: %w", err)
-	}
-	defer os.RemoveAll(workDir)
-	_ = os.Remove(workDir) // clone wants the path missing
-
-	if _, err := runGit("", "clone", "--quiet", "--depth=1", "--single-branch", "--branch", branch, remoteURL, workDir); err != nil {
-		return nil, fmt.Errorf("clone data branch: %w", err)
-	}
-	return readSuppressionsFile(workDir)
+func (b *gitBackend) UpdateSuppressions(mutate func([]string) []string, _ string) error {
+	return updateSuppressions(b.opts, mutate)
 }
 
-func (b *gitBackend) UpdateSuppressions(mutate func([]string) []string, msg string) error {
-	branch := b.opts.DataBranch
-	if branch == "" {
-		branch = DefaultDataBranch
-	}
-
-	remoteURL, err := resolveTargetURL(b.opts)
+// updateSuppressions reads the current list, applies mutate, and
+// writes the result. No-ops are skipped (no file write when the
+// list is unchanged).
+func updateSuppressions(opts Options, mutate func([]string) []string) error {
+	cur, err := readSuppressions(opts)
 	if err != nil {
 		return err
 	}
-
-	workDir, err := os.MkdirTemp("", "defrost-suppress-write-")
-	if err != nil {
-		return fmt.Errorf("mktemp: %w", err)
-	}
-	defer os.RemoveAll(workDir)
-
-	branchExisted, err := openOrInitDataRepo(workDir, remoteURL, branch)
-	if err != nil {
-		return err
-	}
-	if !branchExisted {
-		if err := writeSeed(workDir); err != nil {
-			return err
-		}
-	}
-
-	return updateSuppressionsInWorkDir(workDir, branch, mutate, msg)
-}
-
-// updateSuppressionsInWorkDir handles the apply/commit/push/retry cycle
-// against a workdir that already holds a checkout of the data branch.
-// Split out from UpdateSuppressions so tests can pre-stage a workdir whose
-// clone predates a competing push and exercise the retry path directly.
-func updateSuppressionsInWorkDir(workDir, branch string, mutate func([]string) []string, msg string) error {
-	apply := func() (changed bool, err error) {
-		cur, err := readSuppressionsFile(workDir)
-		if err != nil {
-			return false, err
-		}
-		next := sortAndDedupe(mutate(cur))
-		// cur is already canonical because we always write sorted+deduped
-		// (or it's [] for an absent file). Compare lists, not file bytes —
-		// otherwise a no-op mutation on a fresh branch (where prevBytes is
-		// empty but newBytes is the empty-list JSON) would falsely report
-		// "changed" and create the data branch for a no-op operation.
-		if stringSlicesEqual(cur, next) {
-			return false, nil
-		}
-		if err := writeSuppressionsFile(workDir, next); err != nil {
-			return false, err
-		}
-		return true, nil
-	}
-
-	changed, err := apply()
-	if err != nil {
-		return err
-	}
-	if !changed {
-		// Genuine no-op (e.g. add of an existing ID, or remove of a
-		// missing ID). Skip commit + push so we don't pollute history
-		// or create an empty branch on the remote.
+	next := sortAndDedupe(mutate(cur))
+	if stringSlicesEqual(cur, next) {
 		return nil
 	}
-
-	if err := commitAll(workDir, msg); err != nil {
-		return err
-	}
-
-	// Retry-on-conflict: discard the local commit, fetch the remote tip,
-	// hard-reset to it, re-apply the mutation closure, and re-commit. This
-	// works for suppressions.json (single canonical file, NOT covered by
-	// the merge=union driver in .gitattributes) — a three-way merge of
-	// JSON would corrupt the file, so we replay the user's intent against
-	// the latest tree instead. Two concurrent add calls for different IDs
-	// both land in the final list this way.
-	var lastErr error
-	for attempt := 1; attempt <= maxPushAttempts; attempt++ {
-		err := pushBranch(workDir, branch)
-		if err == nil {
-			return nil
-		}
-		lastErr = err
-		if !isNonFastForward(err) {
-			return err
-		}
-		// Non-fast-forward at this point means another writer raced us:
-		// either updating an existing branch (branchExisted=true) OR
-		// creating it for the first time between our existence check and
-		// our push (branchExisted=false). Both cases recover the same
-		// way — fetch the winner's tip, reset hard, replay.
-		refspec := fmt.Sprintf("+refs/heads/%s:refs/remotes/origin/%s", branch, branch)
-		if _, err := runGit(workDir, "fetch", "--quiet", "origin", refspec); err != nil {
-			return fmt.Errorf("fetch after push conflict (attempt %d): %w", attempt, err)
-		}
-		if _, err := runGit(workDir, "reset", "--hard", "refs/remotes/origin/"+branch); err != nil {
-			return fmt.Errorf("reset to remote tip (attempt %d): %w", attempt, err)
-		}
-		changed, err := apply()
-		if err != nil {
-			return err
-		}
-		// If the rebased tip already reflects the user's intent (e.g. two
-		// concurrent `add X` calls where the winner already added X), the
-		// replay is a no-op. Calling commitAll here would fail with
-		// "nothing to commit" — instead, treat the desired state as
-		// already present remotely and return success.
-		if !changed {
-			return nil
-		}
-		if err := commitAll(workDir, msg); err != nil {
-			return err
-		}
-	}
-	return fmt.Errorf("push failed after %d retries: %w", maxPushAttempts, lastErr)
+	return writeSuppressions(opts, next)
 }
 
 func stringSlicesEqual(a, b []string) bool {

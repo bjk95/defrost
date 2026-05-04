@@ -60,7 +60,6 @@ type Options struct {
 	Dev        bool
 }
 
-const DevDir = ".defrost-dev"
 
 // Run is the bundle of pre-serialized canonical OTLP bytes that one
 // `defrost exec` invocation flushes to disk. Any of TraceBytes,
@@ -133,10 +132,12 @@ type Backend interface {
 }
 
 // New returns the Backend implied by opts. Dev mode selects the local
-// scratch backend; otherwise the git-data-branch backend is used.
+// file backend (no remote pushes); otherwise the git-data-branch
+// backend is used. Both backends share the same on-disk layout under
+// <repoDir>/.defrost/.
 func New(opts Options) Backend {
 	if opts.Dev {
-		return &fileBackend{dir: filepath.Join(opts.RepoDir, DevDir)}
+		return &fileBackend{opts: opts, dir: LocalDataDir(opts)}
 	}
 	return &gitBackend{opts: opts}
 }
@@ -334,12 +335,12 @@ func (b *gitBackend) CloneForRead() (Snapshot, error) {
 		return Snapshot{}, nil
 	}
 
+	if err := EnsureLocalDir(b.opts); err != nil {
+		return Snapshot{}, err
+	}
 	workDir, err := b.dataCacheDir()
 	if err != nil {
 		return Snapshot{}, err
-	}
-	if err := os.MkdirAll(filepath.Dir(workDir), 0o755); err != nil {
-		return Snapshot{}, fmt.Errorf("mkdir cache dir: %w", err)
 	}
 
 	// Cold path: no working tree yet. Full shallow clone into the
@@ -418,11 +419,17 @@ func (b *gitBackend) refreshWorktree(dir, branch string) (bool, error) {
 }
 
 // fileBackend writes spans/metrics/logs to a plain directory; no git operations.
-type fileBackend struct{ dir string }
+type fileBackend struct {
+	opts Options
+	dir  string
+}
 
 func (b *fileBackend) InsertNewRun(run Run) error {
 	if !run.hasAny() {
 		return nil
+	}
+	if err := EnsureLocalDir(b.opts); err != nil {
+		return err
 	}
 	if err := os.MkdirAll(b.dir, 0o755); err != nil {
 		return err

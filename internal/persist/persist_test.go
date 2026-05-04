@@ -3,7 +3,6 @@ package persist
 import (
 	"os"
 	"os/exec"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -36,7 +35,7 @@ func TestFileBackend_InsertNewRun_RoundTrip(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("InsertNewRun: %v", err)
 	}
-	files, err := ListSignalFiles(filepath.Join(dir, DevDir), "traces")
+	files, err := ListSignalFiles(LocalDataDir(Options{RepoDir: dir, Dev: true}), "traces")
 	if err != nil {
 		t.Fatalf("ListSignalFiles: %v", err)
 	}
@@ -62,8 +61,8 @@ func TestFileBackend_InsertNewRun_SkipsEmpty(t *testing.T) {
 	if err := be.InsertNewRun(Run{}); err != nil {
 		t.Fatalf("InsertNewRun(empty): %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, DevDir)); !os.IsNotExist(err) {
-		t.Errorf("expected dev dir absent for empty run, got err=%v", err)
+	if _, err := os.Stat(LocalDataDir(Options{RepoDir: dir, Dev: true})); !os.IsNotExist(err) {
+		t.Errorf("expected data dir absent for empty run, got err=%v", err)
 	}
 }
 

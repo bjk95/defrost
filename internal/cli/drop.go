@@ -82,7 +82,7 @@ func nothingToDropMessage(plan persist.DropPlan) string {
 
 func dropLocation(plan persist.DropPlan) string {
 	if plan.Dev {
-		return ".defrost-dev/"
+		return ".defrost/data/"
 	}
 	if plan.OriginURL != "" {
 		return fmt.Sprintf("branch %s (origin: %s)", plan.Branch, sanitizeOriginURL(plan.OriginURL))

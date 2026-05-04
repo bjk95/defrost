@@ -25,7 +25,6 @@ func TestGitBackend_CloneForRead_PersistentWorktree(t *testing.T) {
 
 	bare := setupBareRemote(t)
 	cwd := setupRepoWithOrigin(t, bare)
-	cacheRoot := setupCacheRedirect(t)
 
 	be := New(Options{RepoDir: cwd}).(*gitBackend)
 
@@ -37,9 +36,9 @@ func TestGitBackend_CloneForRead_PersistentWorktree(t *testing.T) {
 	if snap1.Dir == "" {
 		t.Fatal("expected snap1.Dir to be set, got empty")
 	}
-	expectedDir := filepath.Join(cacheRoot, "defrost")
-	if !filepathHasPrefix(snap1.Dir, expectedDir) {
-		t.Errorf("snap1.Dir = %q; expected to be under %q", snap1.Dir, expectedDir)
+	expectedDir := filepath.Join(cwd, ".defrost", "data")
+	if snap1.Dir != expectedDir {
+		t.Errorf("snap1.Dir = %q; expected exactly %q", snap1.Dir, expectedDir)
 	}
 	if snap1.SHA == "" {
 		t.Error("snap1.SHA empty; expected commit SHA")
@@ -110,7 +109,6 @@ func TestGitBackend_RemoteHeadSHA_MatchesCloneSHA(t *testing.T) {
 	}
 	bare := setupBareRemote(t)
 	cwd := setupRepoWithOrigin(t, bare)
-	setupCacheRedirect(t)
 	be := New(Options{RepoDir: cwd}).(*gitBackend)
 
 	remoteSHA, err := be.RemoteHeadSHA()
@@ -137,7 +135,6 @@ func TestGitBackend_RemoteHeadSHA_NoBranch(t *testing.T) {
 	}
 	bare := emptyBareRemote(t) // bare repo with no branches
 	cwd := setupRepoWithOriginNoData(t, bare)
-	setupCacheRedirect(t)
 	be := New(Options{RepoDir: cwd}).(*gitBackend)
 
 	remoteSHA, err := be.RemoteHeadSHA()
@@ -152,12 +149,6 @@ func TestGitBackend_RemoteHeadSHA_NoBranch(t *testing.T) {
 // --- helpers ---
 
 func branchOf(b *gitBackend) string { return b.dataBranch() }
-
-func filepathHasPrefix(p, prefix string) bool {
-	pa, _ := filepath.Abs(p)
-	pra, _ := filepath.Abs(prefix)
-	return len(pa) >= len(pra) && pa[:len(pra)] == pra
-}
 
 // setupBareRemote builds a bare repo at $TMP/remote.git with one
 // commit on the default _defrost data branch. Returns the bare path.
@@ -209,14 +200,6 @@ func setupRepoWithOrigin(t *testing.T, originURL string) string {
 func setupRepoWithOriginNoData(t *testing.T, originURL string) string {
 	t.Helper()
 	return setupRepoWithOrigin(t, originURL)
-}
-
-func setupCacheRedirect(t *testing.T) string {
-	t.Helper()
-	root := filepath.Join(t.TempDir(), "xdg-cache")
-	t.Setenv("XDG_CACHE_HOME", root)
-	t.Setenv("HOME", filepath.Dir(root)) // macOS UserCacheDir falls back here
-	return root
 }
 
 func configBot(t *testing.T, dir string) {

@@ -1,5 +1,7 @@
-# Defrost dev-mode scratch directory (see `defrost exec --dev`)
-.defrost-dev/
+# Defrost's per-repo home is committed at .defrost/ (suppressions,
+# config) but its inner data/ + cache.duckdb are local-only and
+# gitignored via <repo>/.defrost/.gitignore on first init. We don't
+# need a top-level entry — the nested gitignore handles it.
 
 # Build artefacts. Anchor with a leading slash so the patterns only
 # match files at the repo root — bare 'defrost' or 'defrost-ci' would

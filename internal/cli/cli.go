@@ -37,7 +37,7 @@ type ExecCmd struct {
 	RepoDir    string   `name:"repo-dir" default:"." help:"Path to the git repo to persist into."`
 	DataBranch string   `name:"data-branch" default:"_defrost" help:"Branch name where results are stored."`
 	NoPersist  bool     `name:"no-persist" help:"Run tests without persisting results."`
-	Dev        bool     `name:"dev" short:"d" help:"Dev mode: write results to <repo-dir>/.defrost-dev (gitignored scratch dir) instead of committing/pushing. For developing defrost itself."`
+	Dev        bool     `name:"dev" short:"d" help:"Dev mode: write run results locally only (no push to the data branch). Files still land at <repo-dir>/.defrost/data/. For developing defrost itself."`
 }
 
 // HistoryCmd is the `defrost history` subcommand.
@@ -45,7 +45,7 @@ type HistoryCmd struct {
 	Test       string `arg:"" name:"test" help:"Full test name (package + test, e.g. github.com/x/p/TestA)."`
 	RepoDir    string `name:"repo-dir" default:"." help:"Path to the git repo."`
 	DataBranch string `name:"data-branch" default:"_defrost" help:"Branch name to read from."`
-	Dev        bool   `name:"dev" short:"d" help:"Dev mode: read the local scratch dir instead of the data branch."`
+	Dev        bool   `name:"dev" short:"d" help:"Dev mode: read only from the local <repo-dir>/.defrost/data/ tree; no remote operations."`
 }
 
 // SuppressAddCmd is `defrost suppress add`.
@@ -53,7 +53,7 @@ type SuppressAddCmd struct {
 	Tests      []string `arg:"" name:"tests" help:"One or more test IDs to suppress (same form as 'defrost history'). All IDs land in a single commit on the data branch."`
 	RepoDir    string   `name:"repo-dir" default:"." help:"Path to the git repo."`
 	DataBranch string   `name:"data-branch" default:"_defrost" help:"Branch name where suppressions are stored."`
-	Dev        bool     `name:"dev" short:"d" help:"Dev mode: read/write the local scratch dir instead of the data branch."`
+	Dev        bool     `name:"dev" short:"d" help:"Dev mode: read/write only the local <repo-dir>/.defrost/ tree; no remote operations."`
 }
 
 // SuppressRemoveCmd is `defrost suppress remove`.
@@ -61,14 +61,14 @@ type SuppressRemoveCmd struct {
 	Test       string `arg:"" name:"test" help:"Full test ID to remove from the suppression list."`
 	RepoDir    string `name:"repo-dir" default:"." help:"Path to the git repo."`
 	DataBranch string `name:"data-branch" default:"_defrost" help:"Branch name where suppressions are stored."`
-	Dev        bool   `name:"dev" short:"d" help:"Dev mode: read/write the local scratch dir instead of the data branch."`
+	Dev        bool   `name:"dev" short:"d" help:"Dev mode: read/write only the local <repo-dir>/.defrost/ tree; no remote operations."`
 }
 
 // SuppressListCmd is `defrost suppress list`.
 type SuppressListCmd struct {
 	RepoDir    string `name:"repo-dir" default:"." help:"Path to the git repo."`
 	DataBranch string `name:"data-branch" default:"_defrost" help:"Branch name to read from."`
-	Dev        bool   `name:"dev" short:"d" help:"Dev mode: read the local scratch dir instead of the data branch."`
+	Dev        bool   `name:"dev" short:"d" help:"Dev mode: read only from the local <repo-dir>/.defrost/data/ tree; no remote operations."`
 }
 
 // DropHistoryCmd is `defrost drop history`.
@@ -79,7 +79,7 @@ type DropHistoryCmd struct {
 	Yes         bool   `name:"yes" short:"y" help:"Skip the confirmation prompt."`
 	RepoDir     string `name:"repo-dir" default:"." help:"Path to the git repo."`
 	DataBranch  string `name:"data-branch" default:"_defrost" help:"Branch name to rewrite."`
-	Dev         bool   `name:"dev" short:"d" help:"Dev mode: drop from the local scratch dir instead of the data branch."`
+	Dev         bool   `name:"dev" short:"d" help:"Dev mode: drop only the local <repo-dir>/.defrost/data/ tree; no remote operations."`
 }
 
 // ServeCmd is `defrost serve`. The handler differs between full and
@@ -88,7 +88,7 @@ type ServeCmd struct {
 	Port       int    `name:"port" default:"6969" help:"Port to bind on 127.0.0.1."`
 	RepoDir    string `name:"repo-dir" default:"." help:"Path to the git repo."`
 	DataBranch string `name:"data-branch" default:"_defrost" help:"Branch name to read from."`
-	Dev        bool   `name:"dev" short:"d" help:"Dev mode: read the local scratch dir instead of the data branch."`
+	Dev        bool   `name:"dev" short:"d" help:"Dev mode: read only from the local <repo-dir>/.defrost/data/ tree; no remote operations."`
 }
 
 // DefrostVersion is the value stamped into the run's

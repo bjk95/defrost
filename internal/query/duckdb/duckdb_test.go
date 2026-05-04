@@ -21,7 +21,6 @@ func TestHydrate_ShortCircuitWhenSHAUnchanged(t *testing.T) {
 	}
 	bare := setupBareRemote(t)
 	cwd := setupRepoWithOrigin(t, bare)
-	setupCacheRedirect(t)
 
 	q, err := New(persist.Options{RepoDir: cwd})
 	if err != nil {
@@ -94,7 +93,6 @@ func TestHydrate_WipesDerivedStateOnForceReset(t *testing.T) {
 	}
 	bare := setupBareRemote(t)
 	cwd := setupRepoWithOrigin(t, bare)
-	setupCacheRedirect(t)
 
 	q, err := New(persist.Options{RepoDir: cwd})
 	if err != nil {
@@ -177,14 +175,6 @@ func setupRepoWithOrigin(t *testing.T, originURL string) string {
 	mustGit(t, dir, "commit", "--allow-empty", "-q", "-m", "init")
 	mustGit(t, dir, "remote", "add", "origin", originURL)
 	return dir
-}
-
-func setupCacheRedirect(t *testing.T) string {
-	t.Helper()
-	root := filepath.Join(t.TempDir(), "xdg-cache")
-	t.Setenv("XDG_CACHE_HOME", root)
-	t.Setenv("HOME", filepath.Dir(root))
-	return root
 }
 
 func configBot(t *testing.T, dir string) {
