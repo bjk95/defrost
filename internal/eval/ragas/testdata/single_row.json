@@ -1,0 +1,9 @@
+[
+  {
+    "question": "What is the capital of France?",
+    "answer": "Paris.",
+    "contexts": ["France's capital is Paris."],
+    "ground_truth": "Paris",
+    "faithfulness": 0.95
+  }
+]
